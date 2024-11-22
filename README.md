@@ -45,13 +45,13 @@ Make umbra_build
 ## Usage
 
 The static library will be available after build in `lib`. In order for an application to use umbra, the secure boot must be loaded first on the device.
-This can be achieved by flashing the binary beforehand, or by using a loader. It is possible to use GDB (ensure to have a backend opened)
+Second, the host application must include the `lib/libumbra.a` and using the umbra-defined linker script files.
+An example of it is included in `host/bare_metal_arm`.
+Once both host and secure boot are built, flash the device using:
 ```
-make program_elf_boot
+make program_target
 ```
-an application must include the `lib/libumbra.a` and using the umbra-defined linker script files.
-An example of it is included in `host/bare_metal_arm`. Once the example is compiled,
-you can run
+At this point it is possible to run the loaded elf using
 ```
-make program_elf_host
+make run_elf
 ```

@@ -6,7 +6,7 @@ int main(){
 
     
     fibonacci();
-    umbra_tee_create();
+    //umbra_tee_create();
     while(1);
 
     return 0;

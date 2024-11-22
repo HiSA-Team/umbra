@@ -33,7 +33,7 @@ echo -e "${BOLD}Checking for dependencies${VANILLA}"
 
 # Required dependencies (modify these accordingly to your locations)
 export CARGO=cargo
-export GCC_PREFIX=/opt/gcc-arm-none-eabi/bin/arm-none-eabi-
+export GCC_PREFIX=arm-none-eabi-
 export CC=${GCC_PREFIX}gcc
 export LD=${GCC_PREFIX}ld
 export OBJDUMP=${GCC_PREFIX}objdump
