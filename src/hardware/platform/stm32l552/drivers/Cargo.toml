@@ -1,0 +1,8 @@
+[package]
+name = "drivers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+peripheral_regs = { path = "../../../common/peripheral_regs" }
+kernel = { path = "../../../../kernel" }

@@ -1,0 +1,15 @@
+[package]
+name = "boot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arm = { path = "../../../architecture/arm" }
+drivers = { path = "../drivers" }
+kernel = { path = "../../../../kernel"}
+
+
+[profile.release]
+debug = true # symbols are nice and they don't increase the size on Flash
+opt-level = 0
+#lto = true  better optimizations
