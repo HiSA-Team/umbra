@@ -119,7 +119,6 @@ kill_openocd:
 
 # Enable all security features on the target device
 prepare_target: enable_security erase_all
-	${FLASHER} ${CONNECT} ${LOAD} $(HOST_ELF)
 
 # Use GDB to program the secure boot (TODO: move this to a script)
 program_secure_boot:
@@ -176,4 +175,4 @@ run_host_symbols:
 # PHONY #
 #########
 
-.PHONY: all program_target
+.PHONY: all program_target prepare_target
