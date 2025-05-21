@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Author: Stefano Mercogliano <stefano.mercogliano@unina.it>
+#         Salvatore Bramante  <salvatore.bramante@imtlucca.it>
 # This file checks for existing dependencies and set up env. variables
 
 ###################
@@ -12,6 +13,28 @@ WARNING='\033[0;33m'
 FAILURE='\033[0;31m' 
 VANILLA='\033[0m'
 BOLD='\033[1m' 
+
+
+if [ -n "$ZSH_VERSION" ]; then
+    SHELL_TYPE="zsh"
+    # In ZSH, $0 works when sourced and ${0:A} gives the absolute path
+    if [[ $ZSH_EVAL_CONTEXT == *:file:* ]]; then
+        # Script is being sourced
+        SCRIPT_PATH=${${(%):-%x}:A}
+    else
+        # Script is being executed
+        SCRIPT_PATH=${0:A}
+    fi
+    ROOT_DIR=$(dirname "$SCRIPT_PATH")
+elif [ -n "$BASH_VERSION" ]; then
+    SHELL_TYPE="bash"
+    ROOT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
+else
+    echo -e "${FAILURE}Unsupported shell. Please use bash or zsh.${VANILLA}" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+echo -e "${SUCCESS}[shell_detection] Running in $SHELL_TYPE shell${VANILLA}"
 
 #############################################################
 #    ___                        _             _             #
@@ -33,14 +56,14 @@ echo -e "${BOLD}Checking for dependencies${VANILLA}"
 
 # Required dependencies (modify these accordingly to your locations)
 export CARGO=cargo
-export GCC_PREFIX=/opt/gcc-arm-none-eabi/bin/arm-none-eabi-
+export GCC_PREFIX=arm-none-eabi-
 export CC=${GCC_PREFIX}gcc
 export LD=${GCC_PREFIX}ld
 export OBJDUMP=${GCC_PREFIX}objdump
 export OBJCOPY=${GCC_PREFIX}objcopy
 export GDB=${GCC_PREFIX}gdb
 export GDBGUI=gdbgui
-export FLASHER=/home/stefano/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI
+export FLASHER=/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI
 export OPENOCD=openocd
 
 DEPENDENCIES=(
@@ -258,33 +281,39 @@ echo -e ""
 
 echo -e "${BOLD}Configuring paths${VANILLA}"
 
+# Real path is required to avoid problems with relative paths
+ORIGINAL_PATH="$PATH"
+
 # Configure platform target
-export ROOT_DIR=$( dirname $( realpath $BASH_SOURCE[0] ) )
-export LIB_DIR=${ROOT_DIR}/lib
-export HW_DIR=${ROOT_DIR}/src/hardware
-export KERNEL_DIR=${ROOT_DIR}/src/kernel
+# ROOT_DIR is now defined at the beginning of the script based on shell type
+export LIB_DIR="${ROOT_DIR}/lib"
+export HW_DIR="${ROOT_DIR}/src/hardware"
+export KERNEL_DIR="${ROOT_DIR}/src/kernel"
 
-export PLATFORM_DIR=${HW_DIR}/platform/${MCU}
-export DRIVER_DIR=${PLATFORM_DIR}/driver
-export SECBOOT_DIR=${PLATFORM_DIR}/boot
-export PLATFORM_LD_DIR=${PLATFORM_DIR}/linker
+export PLATFORM_DIR="${HW_DIR}/platform/${MCU}"
+export DRIVER_DIR="${PLATFORM_DIR}/driver"
+export SECBOOT_DIR="${PLATFORM_DIR}/boot"
+export PLATFORM_LD_DIR="${PLATFORM_DIR}/linker"
 
-PATHS=(
-    ${ROOT_DIR} \
-    ${LIB_DIR} \
-    ${HW_DIR} \
-    ${PLATFORM_DIR} \
-    ${DRIVER_DIR} \
-    ${SECBOOT_DIR} \
-    ${PLATFORM_LD_DIR} \
-    ${KERNEL_DIR} \
+export PATH="$ORIGINAL_PATH"
+
+CONFIG_PATHS=(
+    "${ROOT_DIR}" \
+    "${LIB_DIR}" \
+    "${HW_DIR}" \
+    "${PLATFORM_DIR}" \
+    "${DRIVER_DIR}" \
+    "${SECBOOT_DIR}" \
+    "${PLATFORM_LD_DIR}" \
+    "${KERNEL_DIR}" \
 )
 
-for path in "${PATHS[@]}"; do
+for path in "${CONFIG_PATHS[@]}"; do
     echo -e "${SUCCESS}[path_configuration] $path${VANILLA}"
 done
-echo -e ""
 
+export PATH="$ORIGINAL_PATH"
+echo -e ""
 #########################
 #    _  _        _      #
 #   | || |___ __| |_    #

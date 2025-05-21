@@ -38,8 +38,8 @@ global_asm!(
         .word _umb_MemManage_Handler    // Memory Management fault handler
         .word _umb_BusFault_Handler     // Bus Fault handler
         .word _umb_UsageFault_Handler   // Usage Fault handler
-        .word 0                         // Reserved
-        .word 0                         // Reserved
+        .word _umb_SecureFault_Handler  // Secure Fault handler
+        .word 0                         // Reserved                          
         .word 0                         // Reserved
         .word 0                         // Reserved
         .word _umb_SVC_Handler          // SVCall handler
@@ -58,12 +58,58 @@ global_asm!(
     _umb_Default_Handler:
         b .                             // Infinite loop (hangs here if an undefined interrupt occurs)
     
+
+    // HardFault handler    
+    _umb_HardFault_Handler:
+        // Capture the state of the CPU registers
+        mrs r0, msp
+        mrs r1, psp
+        mrs r2, control
+        // Store the values in memory or send them to a debugger
+        ldr r3, =0xDEADC0DE
+        b .  // Infinite loop (hangs here if a hard fault occurs)
+    
+    // MemManage handler
+    _umb_MemManage_Handler:
+        ldr r0, =0xDEADBEEF
+        // Leggi CFSR (Configurable Fault Status Register)
+        ldr r1, =0xE000ED28
+        ldr r2, [r1]
+        // Leggi MMFAR (MemManage Fault Address Register)
+        ldr r3, =0xE000ED34
+        ldr r4, [r3]
+        b .
+
+    // BusFault handler
+    _umb_BusFault_Handler:
+        ldr r0, =0xBAADF00D
+        // Leggi CFSR per BFSR (Bus Fault Status Register)
+        ldr r1, =0xE000ED28
+        ldr r2, [r1]
+        // Leggi BFAR (Bus Fault Address Register)
+        ldr r3, =0xE000ED38
+        ldr r4, [r3]
+        b .
+
+    // UsageFault handler
+    _umb_UsageFault_Handler:
+        ldr r0, =0xCAFEBABE
+        // Leggi CFSR per UFSR (Usage Fault Status Register)
+        ldr r1, =0xE000ED28
+        ldr r2, [r1]
+        b .
+
+     // SecureFault handler
+    _umb_SecureFault_Handler:
+        ldr r0, =0xDEADFA11  // Value to indicate a secure fault
+        ldr r1, =0xE000EDE4  // Secure Fault Status Register
+        ldr r2, [r1]         // Read Secure Fault Status Register
+        ldr r3, =0xE000EDE8  // Load Secure Fault Address Register
+        ldr r4, [r3]         // Read Secure Fault Address Register
+        b .
+
     // Basic Handlers (redirect to Default_Handler if not defined)
     _umb_NMI_Handler:          b _umb_Default_Handler
-    _umb_HardFault_Handler:    b _umb_Default_Handler
-    _umb_MemManage_Handler:    b _umb_Default_Handler
-    _umb_BusFault_Handler:     b _umb_Default_Handler
-    _umb_UsageFault_Handler:   b _umb_Default_Handler
     _umb_SVC_Handler:          b _umb_Default_Handler
     _umb_DebugMon_Handler:     b _umb_Default_Handler
     _umb_PendSV_Handler:       b _umb_Default_Handler

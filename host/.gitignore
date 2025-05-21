@@ -1,0 +1,4 @@
+# Ignore artifacts
+*/bin
+*/obj
+*/lib/*

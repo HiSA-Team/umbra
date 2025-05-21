@@ -30,22 +30,24 @@ LD_SCRIPT 	= linker/host.ld
 # Libraries #
 #############
 
-LIB_OBJ_LIST = lib/libumbra.a
+# Warning:
+# Currently libumbra is placed in the NSC, which cannot be programmed by the CLI
+# It is disabled for simlicity since we are not using it.
+LIB_OBJ_LIST = #${LIB_DIR}/libumbra.a
 LIB_INC_LIST =
 
 #############
 # Toolchain #
 #############
 
-CC_PREFIX 	= /opt/gcc-arm-none-eabi/bin/arm-none-eabi-
+CC_PREFIX 	= arm-none-eabi-
 CC 			= $(CC_PREFIX)gcc
 LD 			= $(CC_PREFIX)ld
 OBJDUMP 	= $(CC_PREFIX)objdump
 OBJCOPY 	= $(CC_PREFIX)objcopy
 
 CFLAGS 		= -O0 -march=armv8-m.main -g -c
-LDFLAGS 	= $(LIB_OBJ_LIST) -nostdlib -T$(LD_SCRIPT)
-LIB_DIR		= lib 
+LDFLAGS 	= $(LIB_OBJ_LIST) -nostdlib -T$(LD_SCRIPT) 
 
 ########
 # Misc #

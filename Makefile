@@ -1,5 +1,6 @@
 
 # Author: Stefano Mercogliano <stefano.mercogliano@unina.it>
+#		  Salvatore Bramante  <salvatore.bramante@imtlucca.it>
 # Description:
 #	this is umbra main makefile. It works in cooperation with settings.sh, which must be called as the first thing.
 #	depending on the target platform and the host, configured by settings.sh,
@@ -36,9 +37,6 @@ secureboot_check:
 secureboot_build:
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} build ${BOOT_ELF_MODE}
  
-secureboot_bin: 
-	@$(OBJCOPY) -O binary $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) $(BINPATH)/$(BOOT_ELF_NAME).bin
-	
 secureboot_clean:
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} clean 
 
@@ -73,6 +71,7 @@ UMBRA_LIB_PATH = ${KERNEL_DIR}/target/${TARGET_ARCH}/${UMBRA_COMPILE_MODE}
 
 umbra_build:
 	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} rustc ${UMBRA_LIB_MODE} --crate-type=staticlib 
+	@mkdir -p ${LIB_DIR}
 	@cp ${UMBRA_LIB_PATH}/libkernel.a ${LIB_DIR}/libumbra.a
 
 umbra_clean:
@@ -87,6 +86,10 @@ umbra_clean:
 #                |___/                                        	#
 #################################################################
 
+########
+# Misc #
+########
+
 # Configure the target system security features
 # Uses the flasher for stm32
 enable_security:
@@ -96,54 +99,80 @@ enable_security:
 erase_all:
 	${FLASHER} ${CONNECT} --erase all
 
+#################
+# Debug Backend #
+#################
+
 # Open the backend (fixed to openocd)
-openocd:
+run_openocd:
 	${OPENOCD} -f ${OPENOCD_CONFIG}
 
-# Program the secure boot first and the host then
-# A backend (such as openocd) must be opened before doing this
-program_elf: program_elf_boot program_elf_host
+run_openocd_async:
+	@${OPENOCD} -f ${OPENOCD_CONFIG} > /dev/null 2>&1 &
 
-program_elf_boot:
+kill_openocd:
+	@if pgrep -x openocd > /dev/null; then pkill -x openocd; fi
+
+######################
+# Programming Target #
+######################
+
+# Enable all security features on the target device
+prepare_target: enable_security erase_all
+
+# Use GDB to program the secure boot (TODO: move this to a script)
+program_secure_boot:
+# Connect to the backend
+	@echo "[PROGRAM] Running ${OPENOCD} in the background"
+	${MAKE} run_openocd_async
+# Prorgram through GDB
+	@echo "[PROGRAM] Programming secure boot from $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)"
 	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
 	-ex 'target extended-remote:3333' \
 	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
 	-ex 'set confirm off' \
 	-ex 'q'
+# Kill the backend
+	@echo "[PROGRAM] Killing ${OPENOCD}"
+	${MAKE} kill_openocd
+	@echo "[PROGRAM] Secure boot flashed onto the board"
 
-program_elf_host:
-	$(GDB) $(HOST_ELF) \
-	-ex 'target extended-remote:3333' \
-	-ex 'b main' \
-	-ex 'set confirm off' \
-	-ex 'r' \
-	-ex 'load $(HOST_ELF)' \
-	-ex 'r' \
-	-ex 'set confirm on'
+# Use board-specific flasher to program the host code
+program_host:
+	@echo "[PROGRAM] Programming host from $(HOST_ELF)"
+	${FLASHER} ${CONNECT} ${LOAD} $(HOST_ELF) --verify
+	@echo "[PROGRAM] Host flashed onto the board"
 
-##############
-# Deprecated #
-##############
+program_target:
+	${MAKE} prepare_target
+	${MAKE} program_secure_boot
+	${MAKE} program_host
 
-# Program the secure boot and just debug it
-program_elf_boot_stay: 
+
+##################
+# Running Target #
+##################
+
+# It is possible to run the elf including both symbols
+# Otherwise, just load symbols for either the secure boot or the host
+run_elf:
 	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
-	-ex 'target extended-remote:3333' \
-	-ex 'b secure_boot' \
 	-ex 'set confirm off' \
-	-ex 'r' \
-	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
-	-ex 'r' \
-	-ex 'set confirm on'
+	-ex 'add-symbol-file $(HOST_ELF) 0x08040000' \
+	-ex 'b main' \
+	-ex 'set confirm on' \
+	-ex 'target extended-remote:3333'
 
-# Program the system using the flasher (i.e. the flat binary)
-# We expect the user to use GDB as a loader, but it is possible to
-# load flat binaries using the platform flasher (if any)
-program_target: enable_security
-	${FLASHER} ${CONNECT} ${LOAD} $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME).bin ${TARGET_FLASH_START}
+run_secure_boot_symbols: 
+	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
+	-ex 'target extended-remote:3333' 
+
+run_host_symbols: 
+	$(GDB) $(HOST_ELF) \
+	-ex 'target extended-remote:3333' 
 
 #########
 # PHONY #
 #########
 
-.PHONY: all clean 
+.PHONY: all program_target prepare_target
