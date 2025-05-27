@@ -10,10 +10,10 @@
 **********************************************************************************************************/
 
 /* Including memory blocks definitions */
-INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_main/host/bare_metal_arm/linker/memory.ld
+INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_refactoring_flow/host/bare_metal_arm/linker/memory.ld
 
 /* Including umbra linker script */
-INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_main/linker/umbra.ld
+INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_refactoring_flow/linker/umbra.ld
 
 _umb_stack_size = 0x1000;
 _umb_estack = ORIGIN(_SECURE_KERNEL_DATA_MEMORY_) + LENGTH(_SECURE_KERNEL_DATA_MEMORY_) - 0x4;

@@ -1,4 +1,3 @@
-
 # Author: Stefano Mercogliano <stefano.mercogliano@unina.it>
 #		  Salvatore Bramante  <salvatore.bramante@imtlucca.it>
 # Description:
