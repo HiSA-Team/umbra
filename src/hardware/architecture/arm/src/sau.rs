@@ -5,7 +5,6 @@
 // Using Rust Naming conventions https://rust-lang.github.io/api-guidelines/naming.html
 
 // Crates
-use peripheral_regs::*;
 use kernel::common::memory_layout::MEMORY_BLOCK_SIZE;
 use kernel::common::memory_layout::MemoryBlockList;
 use kernel::common::memory_layout::MemoryBlockSecurityAttribute;
@@ -19,8 +18,8 @@ use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 //                         |_|                  //
 //////////////////////////////////////////////////
 
-const SAU_BASE_ADDR: u32 = 0xE000EDD0;
-type SauRegisters = u32;
+//const SAU_BASE_ADDR: u32 = 0xE000EDD0;
+//type SauRegisters = u32;
 
 //////////////////////////////////////////////
 //     ___             _            _       //
@@ -34,60 +33,60 @@ type SauRegisters = u32;
 // SAU Control Register //
 //////////////////////////
 
-const SAU_CTRL_REG          : u32 = 0x0;
+//const SAU_CTRL_REG          : u32 = 0x0;
 // Lower byte is for the field starting bit, upper byte is for the length
-const SAU_CTRL_ALLNS_FIELD  : u16 = 0x0101;
-const SAU_CTRL_ENABLE_FIELD : u16 = 0x0100;
+//const SAU_CTRL_ALLNS_FIELD  : u16 = 0x0101;
+//const SAU_CTRL_ENABLE_FIELD : u16 = 0x0100;
 
 ///////////////////////
 // SAU Type Register //
 ///////////////////////
 
-const SAU_TYPE_REG              : u32 = 0x4;
-const _SAU_TYPE_SREGION_FIELD    : u16 = 0x0800;
+// const SAU_TYPE_REG              : u32 = 0x4;
+// const _SAU_TYPE_SREGION_FIELD    : u16 = 0x0800;
 
 ///////////////////////////////
 // SAU Region Numer Register //
 ///////////////////////////////
 
-const SAU_RNR_REG           : u32 = 0x8;
-const _SAU_RNR_REGION_FIELD  : u16 = 0x0800;
+// const SAU_RNR_REG           : u32 = 0x8;
+// const _SAU_RNR_REGION_FIELD  : u16 = 0x0800;
 
 //////////////////////////////////////
 // SAU Rebion Base Address Register //
 //////////////////////////////////////
 
-const SAU_RBAR_REG          : u32 = 0xC;
-const _SAU_RBAR_BADDR_FIELD  : u16 = 0x1B05;
+// const SAU_RBAR_REG          : u32 = 0xC;
+// const _SAU_RBAR_BADDR_FIELD  : u16 = 0x1B05;
 
 //////////////////////////
 // SAU Control Register //
 //////////////////////////
 
-const SAU_RLAR_REG           : u32 = 0x10;
-const _SAU_RLAR_LADDR_FIELD   : u16 = 0x1B05;
-const _SAU_RLAR_NSC_FIELD     : u16 = 0x0101;
-const SAU_RLAR_ENABLE_FIELD  : u16 = 0x0100;
+// const SAU_RLAR_REG           : u32 = 0x10;
+// const _SAU_RLAR_LADDR_FIELD   : u16 = 0x1B05;
+// const _SAU_RLAR_NSC_FIELD     : u16 = 0x0101;
+// const SAU_RLAR_ENABLE_FIELD  : u16 = 0x0100;
 
 //////////////////////////
 // SAU Control Register //
 //////////////////////////
 
-const _SAU_SFSR_REG              : u32 = 0x14;
-const _SAU_SFSR_LSERR_FIELD      : u16 = 0x0107;
-const _SAU_SFSR_SFARVALID_FIELD  : u16 = 0x0106;
-const _SAU_SFSR_LSPERR_FIELD     : u16 = 0x0105;
-const _SAU_SFSR_INVTRAN_FIELD    : u16 = 0x0104;
-const _SAU_SFSR_AUVIOL_FIELD     : u16 = 0x0103;
-const _SAU_SFSR_INVER_FIELD      : u16 = 0x0102;
-const _SAU_SFSR_INVIS_FIELD      : u16 = 0x0101;
-const _SAU_SFSR_INVEP_FIELD      : u16 = 0x0100;
+// const _SAU_SFSR_REG              : u32 = 0x14;
+// const _SAU_SFSR_LSERR_FIELD      : u16 = 0x0107;
+// const _SAU_SFSR_SFARVALID_FIELD  : u16 = 0x0106;
+// const _SAU_SFSR_LSPERR_FIELD     : u16 = 0x0105;
+// const _SAU_SFSR_INVTRAN_FIELD    : u16 = 0x0104;
+// const _SAU_SFSR_AUVIOL_FIELD     : u16 = 0x0103;
+// const _SAU_SFSR_INVER_FIELD      : u16 = 0x0102;
+// const _SAU_SFSR_INVIS_FIELD      : u16 = 0x0101;
+// const _SAU_SFSR_INVEP_FIELD      : u16 = 0x0100;
 
 //////////////////////////
 // SAU Control Register //
 //////////////////////////
 
-const _SAU_SFAR_REG  : u32 = 0x18;
+// const _SAU_SFAR_REG  : u32 = 0x18;
 
 //////////////////////////////////////////////////////////////////////
 //    ___            _                   _        _   _             //
@@ -172,30 +171,29 @@ impl SauRegionConfig {
 ///////////////////////////
 
 pub struct SauDriver {
-    regs: &'static mut SauRegisters,
+
 }
 
 impl SauDriver {
 
-    // Constructor
     pub fn new() -> Self {
-        let regs = unsafe { &mut *(SAU_BASE_ADDR as *mut SauRegisters) };
-        Self { regs }
+        Self {}
     }
 
     // Initialize the SAU by cleaning all enable bits for SAU regions
     pub unsafe fn init(&mut self) {
         // By default, SAU regions are undefined at reset, we must clear them explicitly
-        let regs_base_address = self.regs as *const SauRegisters as *const u32;
-        let region_num : u8 = read_register(regs_base_address, SAU_TYPE_REG) as u8;
+        let dev = cortex_m::Peripherals::take().unwrap();
+        let sau = dev.SAU;
+        let region_num = (sau._type.read().0 & 0xFF) >> 0;
 
         for i in 0..region_num {
             // First, select the region
-            write_register(regs_base_address, SAU_RNR_REG, i as u32);
+            sau.rnr.write(cortex_m::peripheral::sau::Rnr(i));
             // Let's clear the region enable bit
-            clear_register_field(regs_base_address, SAU_RLAR_REG, SAU_RLAR_ENABLE_FIELD, 0x1);
+            sau.rlar.write(cortex_m::peripheral::sau::Rlar(0));
         }
-        write_register(regs_base_address, SAU_RNR_REG, 0 as u32);
+        sau.rnr.write(cortex_m::peripheral::sau::Rnr(0));
     }
 
     // Enable the SAU. By default, the whole memory map is IDAU defined (because of ALLNS)
@@ -203,17 +201,22 @@ impl SauDriver {
     // defined, and SAU is enabled, all CPU memory accesses are marked as secure.
     pub unsafe fn enable(&mut self) {
 
-        let regs_base_address = self.regs as *const SauRegisters as *const u32;
+        let dev = cortex_m::Peripherals::take().unwrap();
+        let sau = dev.SAU;
         // Clear the ALLNS field (the whole memory map is secure as long as the SAU is disabled)
-        clear_register_field(regs_base_address, SAU_CTRL_REG, SAU_CTRL_ALLNS_FIELD, 0x1);
+        //sau.ctrl.modify(|w| w.set_allns(false));
         // Enable the SAU; ALLNS field will be ignored thereafter
-        set_register_field(regs_base_address, SAU_CTRL_REG, SAU_CTRL_ENABLE_FIELD, 0x1); 
+        //sau.ctrl.modify(|w| w.set_allns(true));
+        let current = sau.ctrl.read().0;
+        let new_value = (current & !0x2) | 0x1;
+        sau.ctrl.write(cortex_m::peripheral::sau::Ctrl(new_value));
     }
 
     // Create a SAU region using a configuration.
     pub unsafe fn create_region(&mut self, config : &SauRegionConfig ) {
 
-        let regs_base_address = self.regs as *const SauRegisters as *const u32;
+        let dev = cortex_m::Peripherals::take().unwrap();
+        let sau = dev.SAU;
 
         // The limit address that is passed from the configuration is the actual desired limit.
         // However, SAU regions must be at least 32 bytes in size, since last 5 bits are reserved
@@ -221,22 +224,22 @@ impl SauDriver {
         let limit_addr : u32 = (config.limit_addr & 0xffffffe0) | (config.nsc << 1) as u32 | (config.en) as u32; 
 
         // Select the region number. If a region already exists at that rnum, override it
-        write_register(regs_base_address, SAU_RNR_REG, config.rnum as u32);
-        write_register(regs_base_address, SAU_RBAR_REG, config.base_addr); 
-        write_register(regs_base_address, SAU_RLAR_REG, limit_addr); 
+        sau.rnr.write(cortex_m::peripheral::sau::Rnr(config.rnum.into()));
+        sau.rbar.write(cortex_m::peripheral::sau::Rbar(config.base_addr));
+        sau.rlar.write(cortex_m::peripheral::sau::Rlar(limit_addr)); 
     }
 
     // Search for a free region
     // NB - IT ASSUMES A FREE REGION ALWAYS EXIST, TO REFACTOR
     pub unsafe fn get_free_region(&mut self) -> u8 {
-        let regs_base_address = self.regs as *const SauRegisters as *const u32;
-        let region_num : u8 = read_register(regs_base_address, SAU_TYPE_REG) as u8;
+        let dev = cortex_m::Peripherals::take().unwrap();
+        let sau = dev.SAU;
+        let region_num = sau._type.read().0;
 
         for i in 0..region_num {
             // First, select the region
-            write_register(regs_base_address, SAU_RNR_REG, i as u32);
-            // Let's read the region enable bit
-            if (read_register(regs_base_address, SAU_RLAR_REG) & 0x1) == 0 {
+            sau.rnr.write(cortex_m::peripheral::sau::Rnr(i));
+            if (sau.rlar.read().0 & 0x1) == 0{
                 return i as u8;
             }
         }

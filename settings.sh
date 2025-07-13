@@ -119,8 +119,8 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 # override CPU memory view. A boot code must enforce the correct memory view
 # by configuring all the secure memory controller hierarchy. 
 
-export MCU=stm32l552
-export OPENOCD_CONFIG=/usr/local/share/openocd/scripts/board/st_nucleo_l5.cfg
+export MCU=stm32l5x2
+export OPENOCD_CONFIG=/Users/salvatorebramante/OpenOCD/tcl/board/st_nucleo_l5.cfg
 export TARGET_FLASH_START=0x0C000000
 export TARGET_ARCH=thumbv8m.main-none-eabi
 
