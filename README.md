@@ -5,7 +5,6 @@ It provides APIs compliant with the TCG specification as a static library, enabl
 By leveraging Rust, Umbra minimizes the Trusted Computing Base (TCB) and enhances code safety.
 Currently, it supports Cortex-M33-based systems, including ST L552 and L562 microcontrollers.
 
-// Install dependencies
 ## Install Dependencies
 To build Umbra, rust is required
 ```
