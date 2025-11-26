@@ -120,7 +120,7 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 # by configuring all the secure memory controller hierarchy. 
 
 export MCU=stm32l552
-export OPENOCD_CONFIG=/Users/salvatorebramante/ChibiStudio/tools/openocd/scripts/board/st_nucleo_l5.cfg
+export OPENOCD_CONFIG=/Usersbramante/ChibiStudio/tools/openocd/scripts/board/st_nucleo_l5.cfg
 export TARGET_FLASH_START=0x0C000000
 export TARGET_ARCH=thumbv8m.main-none-eabi
 
@@ -294,10 +294,6 @@ export PLATFORM_DIR="${HW_DIR}/platform/${MCU}"
 export DRIVER_DIR="${PLATFORM_DIR}/driver"
 export SECBOOT_DIR="${PLATFORM_DIR}/boot"
 
-export PLATFORM_LD_DIR="${PLATFORM_DIR}/linker"
-export UMBRA_LD_DIR="${ROOT_DIR}/linker"
-export HOST_LD_DIR="${ROOT_DIR}/host/bare_metal_arm/linker"
-
 
 export PATH="$ORIGINAL_PATH"
 
@@ -308,9 +304,6 @@ CONFIG_PATHS=(
     "${PLATFORM_DIR}" \
     "${DRIVER_DIR}" \
     "${SECBOOT_DIR}" \
-    "${PLATFORM_LD_DIR}" \
-    "${HOST_LD_DIR}" \
-    "${UMBRA_LD_DIR}" \
     "${KERNEL_DIR}" \
 )
 
