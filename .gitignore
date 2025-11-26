@@ -26,3 +26,7 @@ deprecated
 # Ignore tmp files and topo
 tmp
 todo
+
+# Ignore builds for bare_metal_arm
+host/bare_metal_arm/bin/*
+host/bare_metal_arm/obj/*
