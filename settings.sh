@@ -120,7 +120,7 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 # by configuring all the secure memory controller hierarchy. 
 
 export MCU=stm32l552
-export OPENOCD_CONFIG=/Usersbramante/ChibiStudio/tools/openocd/scripts/board/st_nucleo_l5.cfg
+export OPENOCD_CONFIG=./openocd_scripts/stm32l5x.cfg
 export TARGET_FLASH_START=0x0C000000
 export TARGET_ARCH=thumbv8m.main-none-eabi
 
