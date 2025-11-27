@@ -113,6 +113,7 @@ program_elf_boot:
 
 program_elf_host:
 	$(GDB) $(HOST_ELF) \
+	-ex 'directory $(KERNEL_DIR)/src' \
 	-ex 'target extended-remote:3333' \
 	-ex 'b main' \
 	-ex 'set confirm off' \
