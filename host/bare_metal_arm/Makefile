@@ -30,7 +30,7 @@ LD_SCRIPTS = linker/memory.ld ../../linker/umbra.ld linker/host.ld
 # Libraries #
 #############
 
-LIB_OBJ_LIST = lib/libumbra.a
+LIB_OBJ_LIST = ../../lib/libumbra.a
 LIB_INC_LIST =
 
 #############

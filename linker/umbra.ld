@@ -22,7 +22,9 @@ SECTIONS
 
     .umbra_api_implementation :
     {
+        KEEP(*(.text.umbra_tee_create_imp))
         KEEP(*(.text.umbra_enclave_run_imp))
+        KEEP(*(.umbra_api_implementation))
     } > _SECURE_KERNEL_TEXT_MEMORY_
 
     /****************************************************

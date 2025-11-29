@@ -42,6 +42,9 @@ SECTIONS
     /* Let's use a region for host application */
     ._host_app _host_app_address : 
     {
+        _enclave_start = .;
+        KEEP(*(.app.enclave_header))
+        KEEP(*(.app.enclave_code))
         KEEP(*(.app.*))
     } > FLASH_BANK_1
 
