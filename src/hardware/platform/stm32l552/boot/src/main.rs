@@ -92,6 +92,12 @@ pub unsafe fn secure_boot() -> !{
     memory_block_list.set_memory_block_security(MemoryBlockSecurityAttribute::Untrusted);
     gtzc_driver.memory_security_guard_create(&memory_block_list);
 
+    // See memory.ld in host/
+    memory_block_list = MemoryBlockList::create_from_range(0x20030000,0x2003E000);
+    memory_block_list.set_memory_block_security(MemoryBlockSecurityAttribute::TrustedGateway);
+    gtzc_driver.memory_security_guard_create(&memory_block_list);
+
+
     ///////////////////////////////////
     // CONFIGURE NON-SECURE CALLABLE //
     ///////////////////////////////////

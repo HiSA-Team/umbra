@@ -76,7 +76,7 @@ unsafe fn dump_binary(src_addr: u32, dst_addr: u32, size: u32) {
 // Let's assume a fixed address, 0x20000000
 // This region must be defined as secure
 // NB see RM0438, it looks like 0x20000000 can't be secure
-const EFBC_BASE: u32 = 0x20028000;
+const EFBC_BASE: u32 = 0x20030200;
 const EFBC_SIZE: u32 = 0x8000;  // 32KB
 
 #[no_mangle]
@@ -119,9 +119,11 @@ pub fn umbra_enclave_run_imp() -> u32 {
     unsafe {
         // let enclave_fn: extern "C" fn() -> u32 = core::mem::transmute(entry_point | 0x1);
         // result = enclave_fn();
+        // Ensure Thumb state and branch in Secure world (use BLX, not BLXNS)
+        let entry_point_thumb: u32 = entry_point | 1;
         core::arch::asm!(
-            "blxns {0}",
-            in(reg) entry_point,
+            "blx {0}",
+            in(reg) entry_point_thumb,
             lateout("r0") result,
             clobber_abi("C")
         );
