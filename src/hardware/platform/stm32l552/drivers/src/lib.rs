@@ -25,5 +25,7 @@
 #![no_std]
 
 pub mod gtzc;
+pub mod uart;
+pub mod rcc;
 
 

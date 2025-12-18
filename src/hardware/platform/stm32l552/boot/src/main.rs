@@ -26,6 +26,7 @@ use core::arch::global_asm;
 use arm::startup;
 use arm::sau;
 use drivers::gtzc;
+use drivers::rcc;
 
 // Umbra Kernel-related crates
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
