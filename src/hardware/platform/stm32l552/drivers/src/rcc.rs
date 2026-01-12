@@ -5,6 +5,7 @@
 
 // Crates
 use peripheral_regs::*;
+use crate::pwr::Pwr;
 
 const RCC_BASE_ADDR: u32 = 0x50021000; // Secure
 type RccRegisters = u32;
@@ -61,56 +62,79 @@ const RCC_APB2ENR_BASE_OFFSET      : u32 = 0x060;
 //  |______|_| |_|\__,_|_| |_| |_|___/
 pub enum Bus {
     AHB1,
+    AHB2,
+    AHB3,
     APB1_1, // APB 1 has 2 registers
     APB1_2,
 }
 
 pub type Peripheral = (Bus, u8);
     
-    // AHB 1
 pub mod Peripherals {
     use super::{Peripheral, Bus};
-    pub const DMA1  : Peripheral = (Bus::AHB1, 0);
-    pub const DMA2  : Peripheral = (Bus::AHB1, 1);
-    pub const FLASH : Peripheral = (Bus::AHB1, 8);
-    pub const CRC   : Peripheral = (Bus::AHB1, 12);
-    pub const TSC   : Peripheral = (Bus::AHB1, 16);
-    pub const GTZC  : Peripheral = (Bus::AHB1, 22);
+
+    // AHB 1
+    pub const DMA1    : Peripheral = (Bus::AHB1, 0);
+    pub const DMA2    : Peripheral = (Bus::AHB1, 1);
+    pub const FLASH   : Peripheral = (Bus::AHB1, 8);
+    pub const CRC     : Peripheral = (Bus::AHB1, 12);
+    pub const TSC     : Peripheral = (Bus::AHB1, 16);
+    pub const GTZC    : Peripheral = (Bus::AHB1, 22);
+    
+    // AHB 2
+    pub const GPIOA   : Peripheral = (Bus::AHB2, 0);
+    pub const GPIOB   : Peripheral = (Bus::AHB2, 1);
+    pub const GPIOC   : Peripheral = (Bus::AHB2, 2);
+    pub const GPIOD   : Peripheral = (Bus::AHB2, 3);
+    pub const GPIOE   : Peripheral = (Bus::AHB2, 4);
+    pub const GPIOF   : Peripheral = (Bus::AHB2, 5);
+    pub const GPIOG   : Peripheral = (Bus::AHB2, 6);
+    pub const GPIOH   : Peripheral = (Bus::AHB2, 7);
+    pub const ADC     : Peripheral = (Bus::AHB2, 13);
+    pub const AES     : Peripheral = (Bus::AHB2, 16);
+    pub const HASH    : Peripheral = (Bus::AHB2, 17);
+    pub const RNG     : Peripheral = (Bus::AHB2, 18);
+    pub const PKA     : Peripheral = (Bus::AHB2, 19);
+    pub const OTFDEC  : Peripheral = (Bus::AHB2, 21);
+    pub const SDMMC1  : Peripheral = (Bus::AHB2, 22);
+    
+    // AHB 3
+    pub const FMC     : Peripheral = (Bus::AHB3, 0);
+    pub const OSPI1   : Peripheral = (Bus::AHB3, 8);
+    
+    // APB 1 Reg 1
+    pub const TIM2    : Peripheral = (Bus::APB1_1, 0);
+    pub const TIM3    : Peripheral = (Bus::APB1_1, 1);
+    pub const TIM4    : Peripheral = (Bus::APB1_1, 2);
+    pub const TIM5    : Peripheral = (Bus::APB1_1, 3);
+    pub const TIM6    : Peripheral = (Bus::APB1_1, 4);
+    pub const TIM7    : Peripheral = (Bus::APB1_1, 5);
+    pub const RTCAPB  : Peripheral = (Bus::APB1_1, 10);
+    pub const WWDG    : Peripheral = (Bus::APB1_1, 11);
+    pub const SPI2    : Peripheral = (Bus::APB1_1, 14);
+    pub const SPI3    : Peripheral = (Bus::APB1_1, 15);
+    pub const USART2  : Peripheral = (Bus::APB1_1, 17);
+    pub const USART3  : Peripheral = (Bus::APB1_1, 18);
+    pub const USART4  : Peripheral = (Bus::APB1_1, 19);
+    pub const USART5  : Peripheral = (Bus::APB1_1, 20);
+    pub const I2C1    : Peripheral = (Bus::APB1_1, 21);
+    pub const I2C2    : Peripheral = (Bus::APB1_1, 22);
+    pub const I2C3    : Peripheral = (Bus::APB1_1, 23);
+    pub const CRSEN   : Peripheral = (Bus::APB1_1, 24);
+    pub const PWR     : Peripheral = (Bus::APB1_1, 28);
+    pub const DAC1    : Peripheral = (Bus::APB1_1, 29);
+    pub const OPAMP   : Peripheral = (Bus::APB1_1, 30);
+    pub const LPTIM1  : Peripheral = (Bus::APB1_1, 31);
+
+    // APB 1 Reg 2
+    pub const LPUART1 : Peripheral = (Bus::APB1_2, 0);
+    pub const I2C4    : Peripheral = (Bus::APB1_2, 1);
+    pub const LPTIM2  : Peripheral = (Bus::APB1_2, 5);
+    pub const LPTIM3  : Peripheral = (Bus::APB1_2, 6);
+    pub const FDCAN1  : Peripheral = (Bus::APB1_2, 9);
+    pub const USBFS   : Peripheral = (Bus::APB1_2, 21);
+    pub const UCPD1   : Peripheral = (Bus::APB1_2, 23);
 }
-
-//     // APB 1 Reg 1
-//     TIM2    = (Bus::APB1_1, 0),
-//     TIM3    = (Bus::APB1_1, 1),
-//     TIM4    = (Bus::APB1_1, 2),
-//     TIM5    = (Bus::APB1_1, 3),
-//     TIM6    = (Bus::APB1_1, 4),
-//     TIM7    = (Bus::APB1_1, 5),
-//     RTCAPB  = (Bus::APB1_1, 10),
-//     WWDG    = (Bus::APB1_1, 11),
-//     SPI2    = (Bus::APB1_1, 14),
-//     SPI3    = (Bus::APB1_1, 15),
-//     USART2  = (Bus::APB1_1, 17),
-//     USART3  = (Bus::APB1_1, 18),
-//     USART4  = (Bus::APB1_1, 19),
-//     USART5  = (Bus::APB1_1, 20),
-//     I2C1    = (Bus::APB1_1, 21),
-//     I2C2    = (Bus::APB1_1, 22),
-//     I2C3    = (Bus::APB1_1, 23),
-//     CRSEN   = (Bus::APB1_1, 24),
-//     PWR     = (Bus::APB1_1, 28),
-//     DAC1    = (Bus::APB1_1, 29),
-//     OPAMP   = (Bus::APB1_1, 30),
-//     LPTIM1  = (Bus::APB1_1, 31),
-
-//     // APB 1 Reg 2
-//     LPUART  = (Bus::APB1_2, 0),
-//     I2C4    = (Bus::APB1_2, 1),
-//     LPTIM2  = (Bus::APB1_2, 5),
-//     LPTIM3  = (Bus::APB1_2, 6),
-//     FDCAN1  = (Bus::APB1_2, 9),
-//     USBFS   = (Bus::APB1_2, 21),
-//     UCPD1   = (Bus::APB1_2, 23),
-// }
 
 pub struct Rcc {
     regs: &'static mut RccRegisters, 
@@ -122,11 +146,44 @@ impl Rcc {
         Self { regs }
     }
 
-    pub fn enable_clock(self, peripheral: Peripheral) {
+    pub fn enable_clock(&self, peripheral: Peripheral) {
         match peripheral {
             (Bus::AHB1, bit)   => unsafe { set_register_bit(self.regs, RCC_AHB1ENR_BASE_OFFSET, bit);  }
+            (Bus::AHB2, bit)   => unsafe { set_register_bit(self.regs, RCC_AHB2ENR_BASE_OFFSET, bit); }
+            (Bus::AHB3, bit)   => unsafe { set_register_bit(self.regs, RCC_AHB3ENR_BASE_OFFSET, bit); }
             (Bus::APB1_1, bit) => unsafe { set_register_bit(self.regs, RCC_APB1ENR1_BASE_OFFSET, bit); }
             (Bus::APB1_2, bit) => unsafe { set_register_bit(self.regs, RCC_APB1ENR2_BASE_OFFSET, bit); }
         }
+    }
+    
+    pub fn enable_lse(&self)  {
+        Pwr::new().enable_to_backup_domain();
+        // LSCOEN LSCOSEL Enable and select the LSE
+        unsafe { set_register_bit(self.regs, RCC_BDCR_BASE_OFFSET, 24) };
+        unsafe { set_register_bit(self.regs, RCC_BDCR_BASE_OFFSET, 25) };
+        unsafe { set_register_bit(self.regs, RCC_BDCR_BASE_OFFSET, 0) };
+        loop {
+            let lse_ready = (unsafe { read_register(self.regs, RCC_BDCR_BASE_OFFSET) } >> 1) & 1;
+            if lse_ready == 1 { break };
+        }
+
+        // LSESYSEN Enable LSE
+        unsafe { set_register_bit(self.regs, RCC_BDCR_BASE_OFFSET, 7) };
+        loop {
+            let lse_ready = (unsafe { read_register(self.regs, RCC_BDCR_BASE_OFFSET) } >> 11) & 1;
+            if lse_ready == 1 { break };
+        }
+    }
+
+    pub fn select_lse_to_lpuart1(&self) {
+        let current_value = unsafe { read_register(self.regs, RCC_CCIPR1_BASE_OFFSET) };
+        let new_value = current_value | (3 << 10);
+        unsafe { write_register(self.regs, RCC_CCIPR1_BASE_OFFSET, new_value) };
+    }
+    
+    // This functions hould not be there
+    pub fn set_vtor_ns(vtor_ns: u32) {
+        let vtor_ns_addr = 0xE002ED08 as u32;
+        unsafe { write_register(vtor_ns_addr as *const u32, 0, vtor_ns); }
     }
 }

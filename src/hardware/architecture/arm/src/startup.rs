@@ -31,8 +31,8 @@ global_asm!(
     // to the reset handler
     .section ._umb_vectors, \"a\"    // Marked as 'a' for allocation in memory
     
-        .word _umb_estack               // Initial stack pointer
-        .word _umb_Reset_Handler        // Reset vector
+        .word _umb_estack+0x10000000               // Initial stack pointer
+        .word _umb_Reset_Handler+0x04000001          // Non-maskable interrupt handler
         .word _umb_NMI_Handler          // Non-maskable interrupt handler
         .word _umb_HardFault_Handler    // Hard Fault handler
         .word _umb_MemManage_Handler    // Memory Management fault handler

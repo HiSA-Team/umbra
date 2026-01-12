@@ -27,6 +27,9 @@ use arm::startup;
 use arm::sau;
 use drivers::gtzc;
 use drivers::rcc;
+use drivers::uart;
+use drivers::gpio;
+use drivers::dma;
 
 // Umbra Kernel-related crates
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
@@ -37,8 +40,22 @@ use kernel::common::memory_layout::MemoryBlockSecurityAttribute;
 #[allow(dead_code)]
 #[allow(unreachable_code)]
 #[allow(unused_assignments)]
-
 pub unsafe fn secure_boot() -> !{
+    // Enable GPIO
+    let rcc = rcc::Rcc::new();
+    rcc.enable_clock(rcc::Peripherals::GPIOB);
+    let gpiob = gpio::Gpio::new(gpio::Port::GpioB);
+    gpiob.set_mode(7, gpio::PinMode::Output);
+    let lpuart1 = uart::Uart::new_lpuart1_and_configure(9600);
+    lpuart1.write("Test from Rust\n");
+    gpiob.pin_set(7);
+    
+    loop {
+        gpiob.pin_reset(7);
+        lpuart1.write("Loop\n");
+        gpiob.pin_set(7);
+        break
+    }
 
     //////////////////////////////
     // INITIALIZE MEMORY GUARDS //
@@ -109,6 +126,40 @@ pub unsafe fn secure_boot() -> !{
     sau_driver.memory_security_guard_create(&memory_block_list);
 
     /////////////////////////////////////
+    // DMA Demo                        //
+    /////////////////////////////////////
+    rcc.enable_clock(rcc::Peripherals::DMA1);
+    rcc.enable_clock(rcc::Peripherals::DMA2);
+    dma::demo();
+
+    /////////////////////////////////////
+    // HASH HMAC TEST                  //
+    /////////////////////////////////////
+    // use drivers::hash::{Hash, Algorithm, DataType};
+    // let mut hash = Hash::new();
+    // let key = "test".as_bytes();
+    // let data = "ForzaNapoliSempre".as_bytes();
+    // let mut ctx = hash.start(Algorithm::SHA256, DataType::Width8, Some(key));
+    // hash.update(&mut ctx, data);
+    // let mut digest = [0u8; 32];
+    // hash.finish(ctx, &mut digest);
+    
+    // lpuart1.write("HMAC SHA256: ");
+    // for byte in digest.iter() {
+    //     let hex = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    //     lpuart1.write(hex[((byte >> 4) & 0xF) as usize]);
+    //     lpuart1.write(hex[(byte & 0xF) as usize]);
+    // }
+    // lpuart1.write("\n");
+
+
+    /////////////////////////////////////
+    // Configure VTOR and MSP_NS       //
+    /////////////////////////////////////
+
+    rcc::Rcc::set_vtor_ns(0x08040000);
+
+    /////////////////////////////////////
     // Jump to Non-Secure World        //
     /////////////////////////////////////
 
@@ -134,6 +185,8 @@ global_asm!(
     .extern _host_entry_point     
 
     trampoline_to_ns:
+        ldr r0, #0x20020000
+        msr MSP_NS, r0
         ldr r0, =_host_entry_point      // Load the address of ns_fn 
         movs r1, #1
         bics r0, r1                     // Clear bit 0 of address in r0 
