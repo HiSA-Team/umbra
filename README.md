@@ -48,9 +48,9 @@ Second, the host application must include the `lib/libumbra.a` and using the umb
 An example of it is included in `host/bare_metal_arm`.
 Once both host and secure boot are built, flash the device using:
 ```
-make program_target
+./rebuild_all.sh
 ```
 At this point it is possible to run the loaded elf using
 ```
-make run_elf
+./debug.sh
 ```
