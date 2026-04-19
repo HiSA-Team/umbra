@@ -24,6 +24,16 @@
 #![crate_type = "rlib"]
 #![no_std]
 
+pub mod cycles;
 pub mod gtzc;
+pub mod uart;
+pub mod rcc;
+pub mod gpio;
+pub mod pwr;
+pub mod dma;
+pub mod hash;
+pub mod aes;
+pub mod ofd;
 
-
+#[cfg(feature = "stm32l562")]
+pub mod ospi;

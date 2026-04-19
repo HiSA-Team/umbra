@@ -41,6 +41,10 @@ use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 //////////////////////////////////////////////////
 
 const GTZC_BASE_ADDR: u32 = 0x40032400;
+// Secure alias of GTZC1; MPCBB VCTR registers are secure-only, so writes
+// through the NS alias (0x40032400) from secure mode are silently ignored.
+// `mpcbb_set_slot_secure` uses this directly.
+const GTZC1_SEC_BASE_ADDR: u32 = 0x50032400;
 type GtzcRegisters = u32;
 
 //////////////////////////////////////////////
@@ -100,46 +104,15 @@ pub struct GtzcDriver {
 
 impl GtzcDriver {
 
-    // Constructor
+    // Constructor — uses the secure alias so MPCBB VCTR writes take effect.
     pub fn new() -> Self {
-        let regs = unsafe { &mut *(GTZC_BASE_ADDR as *mut GtzcRegisters) };
+        let regs = unsafe { &mut *(GTZC1_SEC_BASE_ADDR as *mut GtzcRegisters) };
         Self { regs }
     }
 
     // The MPCBB sees memory as organized in blocks.
     // A block is 256 Bytes in size, A superblock is 256x32 = 8KB
     // SRAM1 is made of 192/8=24 super blocks, while SRAM2 has 8 superblocks
-
-    // Currently unused, therefore commented
-    /*pub unsafe fn set_memory_bank_security( &mut self, memory_bank_id : u8, secure_flag: u8 ) {
-
-        // Disclaimer: SRAM sizes are hardcoded atm, they shall be taken from the linker script symbol
-        let sram1_size : u32 = 24; 
-        let sram2_size : u32 = 8; 
-
-        let curr_bank_size = if memory_bank_id == 0 {sram1_size} else {sram2_size};
-
-        for i in 0..curr_bank_size {
-            self.set_memory_superblock_security(memory_bank_id, i as u8, secure_flag );
-        }
-    }
-
-    pub unsafe fn set_memory_superblock_security( &mut self, memory_bank_id : u8, super_block_id : u8, secure_flag: u8 ) {
-        
-        let regs_base_address = self.regs as *const GtzcRegisters as *const u32;
-
-        let mut block_reg_offset = GTZC_MPCBB_VCTR_Y_REG + (super_block_id as u32)*4;
-
-        if memory_bank_id == 0 {
-            block_reg_offset += GTZC_MPCBB1_BASE_OFFSET;
-        } else {
-            block_reg_offset += GTZC_MPCBB2_BASE_OFFSET;
-        }
-
-        let secure_data = if secure_flag == 0 {0x00000000} else {0xffffffff};
-        write_register(regs_base_address, block_reg_offset, secure_data);
-
-    }*/
 
     // This function sets block X in superblock Y security attribute
     pub unsafe fn set_memory_block_security( &mut self, memory_bank_id : u8, super_block_id : u8, block_id : u8, secure_flag: u8 ) {
@@ -164,6 +137,45 @@ impl GtzcDriver {
 
     }
 
+}
+
+/// Flip a single 256 B SRAM slot's MPCBB security attribute without owning a
+/// `GtzcDriver`. Callable from the MemManage/SecureFault dispatch path where
+/// no driver handle is available.
+///
+/// `addr` may be either the NS alias (`0x200xxxxx`) or the secure alias
+/// (`0x300xxxxx`); bits [17:13] (superblock) and [12:8] (block) are identical
+/// across the two aliases. Only SRAM1 bank is implemented — EFBC lives there.
+///
+/// The hardware half of the `UmbraIntegrityFixValidator.pv`
+/// ESS-miss path: when the Validator installs a block, the caller flips the
+/// corresponding slot back to Secure; when eviction (or boot-time preload cap)
+/// marks a slot unloaded, the caller flips it to NS so a subsequent secure
+/// instruction fetch into it raises SecureFault INVEP.
+pub unsafe fn mpcbb_set_slot_secure(addr: u32, secure: bool) {
+    let normalized = addr & 0xEFFF_FFFF;
+    let upper = (normalized >> 13) & 0x1f;
+    let lower = (normalized >> 8) & 0x1f;
+
+    // Bank 1 (SRAM1, 24 superblocks) uses MPCBB1; bank 2 (SRAM2, 8 superblocks)
+    // uses MPCBB2 and its superblock index is `upper & 0x7`.
+    let (super_block_id, bank_offset) = if (upper >> 3) != 0x3 {
+        (upper as u8, GTZC_MPCBB1_BASE_OFFSET)
+    } else {
+        ((upper & 0x7) as u8, GTZC_MPCBB2_BASE_OFFSET)
+    };
+    let block_id = lower as u8;
+
+    let mut block_reg_offset = GTZC_MPCBB_VCTR_Y_REG + (super_block_id as u32) * 4;
+    block_reg_offset += bank_offset;
+
+    let regs_base_address = GTZC1_SEC_BASE_ADDR as *const u32;
+    let block_bitmask = 1 << block_id;
+    if secure {
+        set_register_field(regs_base_address, block_reg_offset, 0x1f00, block_bitmask);
+    } else {
+        clear_register_field(regs_base_address, block_reg_offset, 0x1f00, block_bitmask);
+    }
 }
 
 

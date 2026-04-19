@@ -33,11 +33,15 @@ BOOT_ELF_NAME = boot
 secureboot_check: 
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} check 
 
-secureboot_build:
-	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} build ${BOOT_ELF_MODE}
+key_gen:
+	@python3 tools/gen_key.py
+
+secureboot_build: key_gen
+	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} build ${BOOT_ELF_MODE} ${BOOT_FEATURES}
  
 secureboot_bin: 
 	@$(OBJCOPY) -O binary $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) $(BINPATH)/$(BOOT_ELF_NAME).bin
+	@$(OBJCOPY) --extract-symbol $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) $(LIB_DIR)/libumbra.a
 	
 secureboot_clean:
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} clean 
@@ -113,7 +117,14 @@ program_elf_boot:
 
 program_elf_host:
 	$(GDB) $(HOST_ELF) \
+	-ex 'directory host/bare_metal_arm/src' \
+	-ex 'directory host/bare_metal_arm/app' \
+	-ex 'directory $(KERNEL_DIR)/src' \
+	-ex 'directory $(SECBOOT_DIR)/src' \
+	-ex 'directory $(PLATFORM_DIR)/drivers/src' \
+	-ex 'directory $(HW_DIR)/architecture/arm/src' \
 	-ex 'target extended-remote:3333' \
+	-ex 'add-symbol-file $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) 0x08000000' \
 	-ex 'b main' \
 	-ex 'set confirm off' \
 	-ex 'r' \
@@ -142,8 +153,18 @@ program_elf_boot_stay:
 program_target: enable_security
 	${FLASHER} ${CONNECT} ${LOAD} $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME).bin ${TARGET_FLASH_START}
 
+# Permanent path used to program the plaintext enclave
+# blob into external OCTOSPI flash at 0x90000000 via STM32CubeProgrammer
+# --extload. The L562 target then uses the HAL target-as-oracle cipher pass
+# (OTFDEC ENC-mode + OCTOSPI PP) to overwrite it with the real ciphertext
+# in place on first boot. There is no offline encryptor.
+program_enclaves_extload:
+	$(MAKE) -C host/bare_metal_arm enclaves_plain.bin
+	$(FLASHER) $(CONNECT) --extload $(EXTLOAD_STLDR) \
+		--download host/bare_metal_arm/enclaves_plain.bin 0x90000000 -v
+
 #########
 # PHONY #
 #########
 
-.PHONY: all clean 
+.PHONY: all clean program_enclaves_extload

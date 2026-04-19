@@ -1,0 +1,42 @@
+
+   ___       ___       ___       ___       ___   
+  /\__\     /\__\     /\  \     /\  \     /\  \  
+ /:/ _/_   /::L_L_   /::\  \   /::\  \   /::\  \ 
+/:/_/\__\ /:/L:\__\ /::\:\__\ /::\:\__\ /::\:\__\
+\:\/:/  / \/_/:/  / \:\::/  / \;:::/  / \/\::/  /
+ \::/  /    /:/  /   \::/  /   |:\/__/    /:/  / 
+  \/__/     \/__/     \/__/     \|__|     \/__/  
+
+[UMBRASecureBoot] Secure Boot started
+[UMBRASecureBoot] Stack Info:
+  _umb_stack_size: 0x00004000 //ALLOW_DRIFT
+  Current Secure Stack Usage: 0xF00021F8 (SP: 0x3003BE04) //ALLOW_DRIFT
+  Remaining Secure Stack: 0x10001E08 //ALLOW_DRIFT
+[UMBRASecureBoot] TEST HAL
+[UMBRASecureBoot] TEST GPIO Active High
+[UMBRASecureBoot] SAU started
+[UMBRASecureBoot] GTZC started
+[UMBRASecureBoot] SHCSR before: 0x00000000 //ALLOW_DRIFT
+[UMBRASecureBoot] SHCSR after:  0x000F0000 //ALLOW_DRIFT
+[UMBRASecureBoot] MPU started
+	[UMBRASecureBoot] MPU Region 0 Configured: 0x20008000 (RW Priv)
+	[UMBRASecureBoot] Untrusted Memory Block Range: 0x08040000 - 0x08080000
+	[UMBRASecureBoot] Trusted Memory Block Range: 0x20020000 - 0x2003E000
+	[UMBRASecureBoot] Trusted Gateway Memory Block Range:0x08030000 - 0x0803ffe0
+[UMBRASecureBoot] TEST DMA
+	[UMBRASecureBoot] Untrusted Peripheral Range: 0x40000000 - 0x50000000
+[UMBRASecureBoot] TEST HASH
+	[HMAC] SHA256: f5e6d6015105a108e1b30921318b8555fe0636d1136c956c9d80b3a775cc48ad
+[UMBRASecureBoot] TEST AES
+	[AES] Does AES-128 SW Test.. 
+	[AES] Encrypted: 3ad77bb40d7a3660a89ecaf32466ef97
+	[AES] Encryption MATCH
+	[AES] Decryption MATCH
+[UMBRASecureBoot] Kernel Initialized
+[UMBRASecureBoot] SysTick configured (disabled)
+[UMBRASecureBoot] Jumping to Non-Secure World
+[USER] Hello Non-Secure World!
+[UMBRASecureBoot] chained-measurement OK
+[USER] Enclave 0 created
+[USER] Enclave terminated
+[USER] All enclaves done

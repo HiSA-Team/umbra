@@ -11,8 +11,10 @@
 //////////////////////////////////////////////////////////////////
 //                                                              //
 // Author: Stefano Mercogliano <stefano.mercogliano@unina.it>   //
+//         Salvatore Bramante <salvatore.bramante@imtlucca.it>  //
 //                                                              //
-// Description (TBD)
+// Description:                                                 //
+//      ARM Drivers for Cortex-M33                              //
 //                                                              //
 //////////////////////////////////////////////////////////////////
 
@@ -22,4 +24,5 @@
 
 pub mod startup;
 pub mod sau;
+pub mod mpu;
 

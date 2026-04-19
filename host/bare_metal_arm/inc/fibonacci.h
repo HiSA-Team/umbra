@@ -1,2 +1,2 @@
 
-void fibonacci();
+int fibonacci();

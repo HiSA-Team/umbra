@@ -1,6 +1,6 @@
 [target.thumbv8m.main-none-eabi]
 rustflags = [
-  "-C", "linker=/opt/gcc-arm-none-eabi/bin/arm-none-eabi-ld",
+  "-C", "linker=arm-none-eabi-ld",
   "-C", "link-arg=-T../../linker/umbra.ld",
   "-C", "code-model=small",
   "-C", "embed-bitcode=no"

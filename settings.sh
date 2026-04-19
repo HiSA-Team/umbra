@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Author: Stefano Mercogliano <stefano.mercogliano@unina.it>
+#         Salvatore Bramante  <salvatore.bramante@imtlucca.it>
 # This file checks for existing dependencies and set up env. variables
 
 ###################
@@ -12,6 +13,28 @@ WARNING='\033[0;33m'
 FAILURE='\033[0;31m' 
 VANILLA='\033[0m'
 BOLD='\033[1m' 
+
+
+if [ -n "$ZSH_VERSION" ]; then
+    SHELL_TYPE="zsh"
+    # In ZSH, $0 works when sourced and ${0:A} gives the absolute path
+    if [[ $ZSH_EVAL_CONTEXT == *:file:* ]]; then
+        # Script is being sourced
+        SCRIPT_PATH=${${(%):-%x}:A}
+    else
+        # Script is being executed
+        SCRIPT_PATH=${0:A}
+    fi
+    ROOT_DIR=$(dirname "$SCRIPT_PATH")
+elif [ -n "$BASH_VERSION" ]; then
+    SHELL_TYPE="bash"
+    ROOT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
+else
+    echo -e "${FAILURE}Unsupported shell. Please use bash or zsh.${VANILLA}" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+echo -e "${SUCCESS}[shell_detection] Running in $SHELL_TYPE shell${VANILLA}"
 
 #############################################################
 #    ___                        _             _             #
@@ -33,15 +56,16 @@ echo -e "${BOLD}Checking for dependencies${VANILLA}"
 
 # Required dependencies (modify these accordingly to your locations)
 export CARGO=cargo
-export GCC_PREFIX=/opt/gcc-arm-none-eabi/bin/arm-none-eabi-
+export GCC_PREFIX=arm-none-eabi-
 export CC=${GCC_PREFIX}gcc
 export LD=${GCC_PREFIX}ld
 export OBJDUMP=${GCC_PREFIX}objdump
 export OBJCOPY=${GCC_PREFIX}objcopy
 export GDB=${GCC_PREFIX}gdb
 export GDBGUI=gdbgui
-export FLASHER=/home/stefano/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI
+export FLASHER=/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI
 export OPENOCD=openocd
+export AR=${GCC_PREFIX}ar
 
 DEPENDENCIES=(
     ${CARGO} 
@@ -96,10 +120,54 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 # override CPU memory view. A boot code must enforce the correct memory view
 # by configuring all the secure memory controller hierarchy. 
 
-export MCU=stm32l552
-export OPENOCD_CONFIG=/usr/local/share/openocd/scripts/board/st_nucleo_l5.cfg
+# Select the target MCU variant here
+# Options: stm32l552, stm32l562
+export MCU_VARIANT=stm32l552
+
+# Enable the EFB crypto benchmark (set to 1 to build with the
+# `benchmark` feature; any other value disables it). When enabled, the
+# secure boot halts after printing BENCH\t* rows on UART instead of
+# transferring control to the non-secure world.
+export UMBRA_BENCHMARK=0
+
+if [ "$MCU_VARIANT" = "stm32l552" ]; then
+    export MCU=stm32l552
+    export BOOT_FEATURES=""
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32L552 (No HW AES)${VANILLA}"
+elif [ "$MCU_VARIANT" = "stm32l562" ]; then
+    # We reuse the stm32l552 platform directory but enable 562 features
+    export MCU=stm32l552
+    export BOOT_FEATURES="--features stm32l562"
+    export EXTLOAD_STLDR="${EXTLOAD_STLDR:-/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin/ExternalLoader/MX25LM51245G_STM32L562E-DK.stldr}"
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32L562 (HW AES Enabled)${VANILLA}"
+else
+    echo -e "${FAILURE}[mcu_selection] Unknown MCU_VARIANT: $MCU_VARIANT${VANILLA}"
+    return 1
+fi
+
+# Append the benchmark feature if requested. Merges correctly with an
+# empty BOOT_FEATURES (L552) and with an existing --features flag (L562).
+if [ "$UMBRA_BENCHMARK" = "1" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features benchmark"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},benchmark"
+    fi
+    echo -e "${SUCCESS}[benchmark] CHES26 EFB crypto benchmark ENABLED${VANILLA}"
+fi
+
+export OPENOCD_CONFIG=./openocd_scripts/stm32l5x.cfg
 export TARGET_FLASH_START=0x0C000000
 export TARGET_ARCH=thumbv8m.main-none-eabi
+
+# T3 smoke-test harness (tools/smoke_test.sh)
+export UMBRA_UART=/dev/tty.usbmodem211203
+export UMBRA_OOCD_CFG=${OPENOCD_CONFIG}
+
+# Enclave deploy tool (tools/protect_enclave.py): must match the kernel's
+# `chained_measurement` feature state. 1 = chained layout (288B blocks, final
+# HMAC-chain in header), 0 = legacy per-block HMAC layout (320B blocks).
+export UMBRA_CHAINED=1
 
 # ST-LINK command line interface (CLI):
 # (https://www.st.com/resource/en/user_manual/um2237-stm32cubeprogrammer-software-description-stmicroelectronics.pdf)
@@ -244,7 +312,6 @@ export OPTION_BYTES="\
 # STM32L562E    (TBD)
 # Vesuvius      (TBD)
 
-echo -e "${SUCCESS}[mcu_selection]  Selected $MCU${VANILLA}"
 echo -e "${SUCCESS}[arch_selection] Selected $TARGET_ARCH${VANILLA}"
 echo -e ""
 
@@ -258,33 +325,38 @@ echo -e ""
 
 echo -e "${BOLD}Configuring paths${VANILLA}"
 
+# Real path is required to avoid problems with relative paths
+ORIGINAL_PATH="$PATH"
+
 # Configure platform target
-export ROOT_DIR=$( dirname $( realpath $BASH_SOURCE[0] ) )
-export LIB_DIR=${ROOT_DIR}/lib
-export HW_DIR=${ROOT_DIR}/src/hardware
-export KERNEL_DIR=${ROOT_DIR}/src/kernel
+# ROOT_DIR is now defined at the beginning of the script based on shell type
+export LIB_DIR="${ROOT_DIR}/lib"
+export HW_DIR="${ROOT_DIR}/src/hardware"
+export KERNEL_DIR="${ROOT_DIR}/src/kernel"
 
-export PLATFORM_DIR=${HW_DIR}/platform/${MCU}
-export DRIVER_DIR=${PLATFORM_DIR}/driver
-export SECBOOT_DIR=${PLATFORM_DIR}/boot
-export PLATFORM_LD_DIR=${PLATFORM_DIR}/linker
+export PLATFORM_DIR="${HW_DIR}/platform/${MCU}"
+export DRIVER_DIR="${PLATFORM_DIR}/driver"
+export SECBOOT_DIR="${PLATFORM_DIR}/boot"
 
-PATHS=(
-    ${ROOT_DIR} \
-    ${LIB_DIR} \
-    ${HW_DIR} \
-    ${PLATFORM_DIR} \
-    ${DRIVER_DIR} \
-    ${SECBOOT_DIR} \
-    ${PLATFORM_LD_DIR} \
-    ${KERNEL_DIR} \
+
+export PATH="$ORIGINAL_PATH"
+
+CONFIG_PATHS=(
+    "${ROOT_DIR}" \
+    "${LIB_DIR}" \
+    "${HW_DIR}" \
+    "${PLATFORM_DIR}" \
+    "${DRIVER_DIR}" \
+    "${SECBOOT_DIR}" \
+    "${KERNEL_DIR}" \
 )
 
-for path in "${PATHS[@]}"; do
+for path in "${CONFIG_PATHS[@]}"; do
     echo -e "${SUCCESS}[path_configuration] $path${VANILLA}"
 done
-echo -e ""
 
+export PATH="$ORIGINAL_PATH"
+echo -e ""
 #########################
 #    _  _        _      #
 #   | || |___ __| |_    #

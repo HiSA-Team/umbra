@@ -8,4 +8,7 @@ pub mod memory_protection_server;
 pub mod umbra_nsc_api;
 pub mod panic;
 
+pub mod key_storage_server;
+
 pub use crate::umbra_nsc_api::umbra_tee_create;
+pub use crate::umbra_nsc_api::umbra_enclave_run;
