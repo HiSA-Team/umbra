@@ -24,16 +24,15 @@ APP_DIR		= app
 INC_DIR 	= inc 
 STARTUP_DIR = src
 
-LD_SCRIPT 	= linker/host.ld 
+LD_SCRIPTS = linker/memory.ld ../../linker/umbra.ld linker/host.ld 
 
 #############
 # Libraries #
 #############
 
-# Warning:
-# Currently libumbra is placed in the NSC, which cannot be programmed by the CLI
-# It is disabled for simlicity since we are not using it.
-LIB_OBJ_LIST = #${LIB_DIR}/libumbra.a
+# Warning: libumbra.a contains veneer code with unresolved _imp references.
+# The Host should NOT link it. Symbol addresses are provided via host.ld.
+LIB_OBJ_LIST = #../../lib/libumbra.a
 LIB_INC_LIST =
 
 #############
@@ -46,14 +45,22 @@ LD 			= $(CC_PREFIX)ld
 OBJDUMP 	= $(CC_PREFIX)objdump
 OBJCOPY 	= $(CC_PREFIX)objcopy
 
-CFLAGS 		= -O0 -march=armv8-m.main -g -c
-LDFLAGS 	= $(LIB_OBJ_LIST) -nostdlib -T$(LD_SCRIPT) 
+CFLAGS 		= -O0 -march=armv8-m.main -g -c -save-temps=obj -fverbose-asm -Wa,-L
+LDFLAGS 	= $(LIB_OBJ_LIST) -nostdlib $(addprefix -T,$(LD_SCRIPTS)) --discard-none
+LIB_DIR		= lib 
 
 ########
 # Misc #
 ########
 
-SRCS 	= $(wildcard src/*.c) $(wildcard app/*.c)
+SRCS_AUTO = $(wildcard src/*.c) $(wildcard app/*.c)
+# Force app/fibonacci.c to the front of the link order. The `.app.enclave_code`
+# section is concatenated in link order, and its byte at offset 0 is the
+# enclave entry point (see `entry_point: ess_addr` in umbra_tee_create_imp).
+# If counter.c sorts first alphabetically, counter_main becomes the entry and
+# fibonacci/helpers end up dead code — which silently defeats the runtime
+# ESS-miss fault test (tools/smoke_test_fault_runtime.sh UMBRA_ATTACK=hmac).
+SRCS 	= app/fibonacci.c $(filter-out app/fibonacci.c,$(SRCS_AUTO))
 OBJS 	= $(addprefix $(OBJ_DIR)/, $(notdir $(SRCS:.c=.o)))
 
 RM      = rm -rf 					# Remove recursively command
@@ -89,9 +96,32 @@ bin/$(PROGRAM_NAME).elf: $(OBJS) obj/startup.o
 	$(MKDIR)
 	$(LD) -o $@ $^ $(LDFLAGS)
 
+ifeq ($(MCU_VARIANT),stm32l562)
+PROTECT_ENCLAVE_FLAGS := --hmac-over-plaintext
+else
+PROTECT_ENCLAVE_FLAGS :=
+endif
+
 bin/$(PROGRAM_NAME).bin: bin/$(PROGRAM_NAME).elf
 	@echo "\n[BIN]	Creating bin file"
+	@python3 ../../tools/protect_enclave.py $(PROTECT_ENCLAVE_FLAGS) bin/$(PROGRAM_NAME).elf src/main.c ../../tools/master_key.bin obj
 	$(OBJCOPY) -O binary bin/$(PROGRAM_NAME).elf bin/$(PROGRAM_NAME).bin
+
+ifeq ($(MCU_VARIANT),stm32l562)
+# Extract the post-protect_enclave.py enclave blob
+# (header + code) as a flat binary suitable for CubeProgrammer --extload
+# into OCTOSPI at 0x90000000. Section names are ._enclave_header /
+# ._enclave_code (the leading underscore comes from the host linker script).
+# This plaintext blob is flashed as-is; the L562 target uses the HAL
+# target-as-oracle pattern (OTFDEC ENC-mode + OCTOSPI PP) to overwrite it
+# with the real ciphertext in place on first boot. There is no offline
+# encryptor.
+enclaves_plain.bin: bin/$(PROGRAM_NAME).bin
+	$(OBJCOPY) -O binary \
+		--only-section=._enclave_header \
+		--only-section=._enclave_code \
+		bin/$(PROGRAM_NAME).elf $@
+endif
 
 
 debug: 

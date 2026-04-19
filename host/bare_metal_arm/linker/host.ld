@@ -8,15 +8,11 @@
 *   
 **********************************************************************************************************/
 
-/* Including memory blocks definitions */
-INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_main/host/bare_metal_arm/linker/memory.ld
-
-/* Including umbra linker script */
-INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_main/linker/umbra.ld
-
 /*******************
 *   Host Sections  *
 ********************/
+
+ENTRY(_host_Reset_Handler)
 
 _host_stack_size = 0x1000;
 _host_estack = ORIGIN(SRAM_0) + LENGTH(SRAM_0) - 0x4;
@@ -46,10 +42,55 @@ SECTIONS
     } > FLASH_BANK_1
 
     /* Let's use a region for host application */
-    ._host_app _host_app_address : 
+    /* Enclave Header */
+    ._enclave_header _host_app_address :
     {
-        KEEP(*(.app.*))
+        _enclave_start = .;
+        KEEP(*(.app.enclave_header))
     } > FLASH_BANK_1
+
+    /* Enclave Code */
+    ._enclave_code :
+    {
+        _enclave_code_start = .;
+        KEEP(*(.app.enclave_code))
+        KEEP(*(.app.*))
+        . = _enclave_code_start + 0x400; /* Reserve 1024 bytes */
+    } > FLASH_BANK_1
+
+    .rodata :
+    {
+        *(.rodata*)
+    } > FLASH_BANK_1
+
+    .data :
+    {
+        _sdata = .;
+        *(.data*)
+        _edata = .;
+    } > SRAM_0 AT > FLASH_BANK_1
+
+    _sidata = LOADADDR(.data);
+
+    .bss :
+    {
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        _ebss = .;
+    } > SRAM_0
 
 }
 
+
+
+/* Provide addresses for Secure Gateway (NSC) veneers in the Secure Boot binary */
+/* These are the SG entry points in _NSC_TEXT_MEMORY_, not the _imp implementations */
+/* Addresses from 'nm boot | grep umbra_' after building secureboot */
+/* TODO: Update these addresses after each secure rebuild, or use import lib mechanism */
+PROVIDE(umbra_tee_create = 0x0803c001);   /* Thumb mode address of umbra_tee_create veneer */
+PROVIDE(umbra_enclave_run = 0x0803c011);  /* Thumb mode address of umbra_enclave_run veneer */
+PROVIDE(umbra_debug_print = 0x0803c021);  /* Thumb mode address of umbra_debug_print veneer */
+PROVIDE(umbra_enclave_enter = 0x0803c031);  /* Thumb mode address of umbra_enclave_enter veneer */
+PROVIDE(umbra_enclave_exit = 0x0803c041);   /* Thumb mode address of umbra_enclave_exit veneer */
+PROVIDE(umbra_enclave_status = 0x0803c051); /* Thumb mode address of umbra_enclave_status veneer */

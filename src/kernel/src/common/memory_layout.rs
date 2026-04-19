@@ -62,24 +62,10 @@ impl MemoryBlock {
         }
     }
 
-    // Constructor for custom values
-    pub fn create( 
-        block_base_address: u32,
-        block_access_attribute: MemoryBlockAccessAttribute,
-        block_security_attribute: MemoryBlockSecurityAttribute
-    ) -> Self {
-
-        Self {
-            block_base_address,
-            block_access_attribute,
-            block_security_attribute
-        }
-    }
-
     ///////////////////////
     // Getters & Setters //
     ///////////////////////
-    
+
     // Getter for block_base_address
     pub fn get_block_base_address(&self) -> u32 {
         self.block_base_address
@@ -125,26 +111,6 @@ pub struct MemoryBlockList {
 }
 
 impl MemoryBlockList {
-    // Constructor for default values
-    pub fn new() -> Self {
-        Self {
-            memory_block: MemoryBlock::new(),
-            memory_block_list_size: 0x0,
-        }
-    }
-
-    // Constructor for custom values
-    pub fn create( 
-        memory_block: MemoryBlock,
-        memory_block_list_size: u32
-    ) -> Self {
-
-        Self {
-            memory_block,
-            memory_block_list_size
-        }
-    }
-
     // Create a memory block list from a memory region
     pub fn create_from_range(
         base_addr: u32,
@@ -184,11 +150,6 @@ impl MemoryBlockList {
     // Getter for memory_block_list_size
     pub fn get_memory_block_list_size(&self) -> u32 {
         self.memory_block_list_size
-    }
-
-    // Setter for memory_block_list_size
-    pub fn set_memory_block_list_size(&mut self, size: u32) {
-        self.memory_block_list_size = size;
     }
 
     // Setter for memory_block_list attribute

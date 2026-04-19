@@ -7,3 +7,23 @@ lib/*
 
 # Ignore deprecated
 deprecated
+
+# Ignore tmp files and topo
+tmp
+todo
+
+# Ignore builds for bare_metal_arm
+host/bare_metal_arm/bin/*
+host/bare_metal_arm/obj/*
+
+# T3 smoke-test transient output (golden_uart.log is tracked)
+tools/last_uart.log
+tools/last_uart_fault.log
+
+# Local-only: docs (specs, plans, reports) and Claude Code scratch state
+docs/
+.claude/
+
+# OTFDEC key/nonce material (local-only, never committed)
+tools/otfdec_key.bin
+tools/otfdec_nonce.bin

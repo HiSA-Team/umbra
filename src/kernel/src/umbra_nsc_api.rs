@@ -3,14 +3,11 @@
 //                                                                                  //
 // Author: Stefano Mercogliano <stefano.mercogliano@unina.it>                       //
 // Description:                                                                     //
-//      TBD
+//      Non-Secure Callable (NSC) API veneers for Umbra TEE calls.                  //
 //                                                                                  //
 //////////////////////////////////////////////////////////////////////////////////////
 
 use core::arch::global_asm;
-use super::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
-use super::common::memory_layout::MemoryBlockList;
-use super::common::memory_layout::MemoryBlockSecurityAttribute;
 
 global_asm!(
     "
@@ -20,7 +17,7 @@ global_asm!(
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 extern "C" {
-    pub fn umbra_tee_create();
+    pub fn umbra_tee_create(base_addr: u32) -> u32;
 }
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 global_asm!(
@@ -30,8 +27,95 @@ global_asm!(
 
     umbra_tee_create:
         sg
+        push {{r4, lr}}
         bl umbra_tee_create_imp
+        pop {{r4, lr}}
+        bxns lr
+    "
+);
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+extern "C" {
+    pub fn umbra_enclave_run();
+    pub fn umbra_debug_print(str_ptr: *const u8);
+}
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+global_asm!(
+    "
+    .global umbra_enclave_run 
+    .extern umbra_enclave_run_imp    
 
+    umbra_enclave_run:
+        sg
+        push {{r4, lr}}
+        bl umbra_enclave_run_imp
+        pop {{r4, lr}}
+        bxns lr
+    "
+);
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+global_asm!(
+    "
+    .global umbra_debug_print
+    .extern umbra_debug_print_imp
+
+    umbra_debug_print:
+        sg
+        push {{r4, lr}}
+        bl umbra_debug_print_imp
+        pop {{r4, lr}}
+        bxns lr
+    "
+);
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+extern "C" {
+    pub fn umbra_enclave_enter(enclave_id: u32) -> u32;
+    pub fn umbra_enclave_exit(enclave_id: u32) -> u32;
+    pub fn umbra_enclave_status(enclave_id: u32) -> u32;
+}
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+global_asm!(
+    "
+    .global umbra_enclave_enter
+    .extern umbra_enclave_enter_imp
+
+    umbra_enclave_enter:
+        sg
+        push {{r4, lr}}
+        bl umbra_enclave_enter_imp
+        pop {{r4, lr}}
+        bxns lr
+    "
+);
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+global_asm!(
+    "
+    .global umbra_enclave_exit
+    .extern umbra_enclave_exit_imp
+
+    umbra_enclave_exit:
+        sg
+        push {{r4, lr}}
+        bl umbra_enclave_exit_imp
+        pop {{r4, lr}}
+        bxns lr
+    "
+);
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+global_asm!(
+    "
+    .global umbra_enclave_status
+    .extern umbra_enclave_status_imp
+
+    umbra_enclave_status:
+        sg
+        push {{r4, lr}}
+        bl umbra_enclave_status_imp
+        pop {{r4, lr}}
+        bxns lr
     "
 );
 
@@ -43,28 +127,15 @@ global_asm!(
     "
 );
 
-#[no_mangle]
-pub fn umbra_tee_create_imp(){
-
-    // Let's assume a fixed address, 0x20000000
-    // This region must be defined as secure
-    let mut base_addr: u32 = 0x20000000;
-    let size: u32 = 0x100;
-
-    // Define secure memory regions
-    //base_addr = base_addr + size;
-
-
-    // Copy the binary 
-
-    
-
-    //loop {}
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+extern "C" {
+    pub fn umbra_tee_create_imp(base_addr: u32) -> u32;
+    pub fn umbra_enclave_run_imp() -> u32;
+    pub fn umbra_debug_print_imp(str_ptr: *const u8);
+    pub fn umbra_enclave_enter_imp(enclave_id: u32) -> u32;
+    pub fn umbra_enclave_exit_imp(enclave_id: u32) -> u32;
+    pub fn umbra_enclave_status_imp(enclave_id: u32) -> u32;
 }
 
-
-
-
-
-
-
+// NOTE: Implementations have moved to boot crate.
+// The veneers above (umbra_tee_create/umbra_enclave_run) branch to these external symbols.

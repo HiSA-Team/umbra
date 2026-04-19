@@ -34,9 +34,16 @@ BOOT_ELF_NAME = boot
 secureboot_check: 
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} check 
 
-secureboot_build:
-	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} build ${BOOT_ELF_MODE}
+key_gen:
+	@python3 tools/gen_key.py
+
+secureboot_build: key_gen
+	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} build ${BOOT_ELF_MODE} ${BOOT_FEATURES}
  
+secureboot_bin: 
+	@$(OBJCOPY) -O binary $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) $(BINPATH)/$(BOOT_ELF_NAME).bin
+	@$(OBJCOPY) --extract-symbol $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) $(LIB_DIR)/libumbra.a
+	
 secureboot_clean:
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} clean 
 
@@ -132,47 +139,56 @@ program_secure_boot:
 	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
 	-ex 'set confirm off' \
 	-ex 'q'
-# Kill the backend
-	@echo "[PROGRAM] Killing ${OPENOCD}"
-	${MAKE} kill_openocd
-	@echo "[PROGRAM] Secure boot flashed onto the board"
 
-# Use board-specific flasher to program the host code
-program_host:
-	@echo "[PROGRAM] Programming host from $(HOST_ELF)"
-	${FLASHER} ${CONNECT} ${LOAD} $(HOST_ELF) --verify
-	@echo "[PROGRAM] Host flashed onto the board"
+program_elf_host:
+	$(GDB) $(HOST_ELF) \
+	-ex 'directory host/bare_metal_arm/src' \
+	-ex 'directory host/bare_metal_arm/app' \
+	-ex 'directory $(KERNEL_DIR)/src' \
+	-ex 'directory $(SECBOOT_DIR)/src' \
+	-ex 'directory $(PLATFORM_DIR)/drivers/src' \
+	-ex 'directory $(HW_DIR)/architecture/arm/src' \
+	-ex 'target extended-remote:3333' \
+	-ex 'add-symbol-file $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) 0x08000000' \
+	-ex 'b main' \
+	-ex 'set confirm off' \
+	-ex 'r' \
+	-ex 'load $(HOST_ELF)' \
+	-ex 'r' \
+	-ex 'set confirm on'
 
-program_target:
-	${MAKE} prepare_target
-	${MAKE} program_secure_boot
-	${MAKE} program_host
-
-
-##################
-# Running Target #
-##################
+##############
+# Deprecated #
+##############
 
 # It is possible to run the elf including both symbols
 # Otherwise, just load symbols for either the secure boot or the host
 run_elf:
 	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
 	-ex 'set confirm off' \
-	-ex 'add-symbol-file $(HOST_ELF) 0x08040000' \
-	-ex 'b main' \
-	-ex 'set confirm on' \
-	-ex 'target extended-remote:3333'
+	-ex 'r' \
+	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
+	-ex 'r' \
+	-ex 'set confirm on'
 
-run_secure_boot_symbols: 
-	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
-	-ex 'target extended-remote:3333' 
+# Program the system using the flasher (i.e. the flat binary)
+# We expect the user to use GDB as a loader, but it is possible to
+# load flat binaries using the platform flasher (if any)
+program_target: enable_security
+	${FLASHER} ${CONNECT} ${LOAD} $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME).bin ${TARGET_FLASH_START}
 
-run_host_symbols: 
-	$(GDB) $(HOST_ELF) \
-	-ex 'target extended-remote:3333' 
+# Permanent path used to program the plaintext enclave
+# blob into external OCTOSPI flash at 0x90000000 via STM32CubeProgrammer
+# --extload. The L562 target then uses the HAL target-as-oracle cipher pass
+# (OTFDEC ENC-mode + OCTOSPI PP) to overwrite it with the real ciphertext
+# in place on first boot. There is no offline encryptor.
+program_enclaves_extload:
+	$(MAKE) -C host/bare_metal_arm enclaves_plain.bin
+	$(FLASHER) $(CONNECT) --extload $(EXTLOAD_STLDR) \
+		--download host/bare_metal_arm/enclaves_plain.bin 0x90000000 -v
 
 #########
 # PHONY #
 #########
 
-.PHONY: all program_target prepare_target
+.PHONY: all clean program_enclaves_extload

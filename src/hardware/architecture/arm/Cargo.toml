@@ -4,7 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+peripheral_regs = { path = "../../common/peripheral_regs" }
 kernel = { path = "../../../kernel" }
-cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
-volatile-register = "0.2"
-stm32-metapac = { git = "https://github.com/embassy-rs/stm32-data-generated", features = ["stm32l562qe", "rt"] }

@@ -65,6 +65,7 @@ export GDB=${GCC_PREFIX}gdb
 export GDBGUI=gdbgui
 export FLASHER=/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI
 export OPENOCD=openocd
+export AR=${GCC_PREFIX}ar
 
 DEPENDENCIES=(
     ${CARGO} 
@@ -119,10 +120,54 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 # override CPU memory view. A boot code must enforce the correct memory view
 # by configuring all the secure memory controller hierarchy. 
 
-export MCU=stm32l552
-export OPENOCD_CONFIG=/usr/local/share/openocd/scripts/board/st_nucleo_l5.cfg
+# Select the target MCU variant here
+# Options: stm32l552, stm32l562
+export MCU_VARIANT=stm32l552
+
+# Enable the EFB crypto benchmark (set to 1 to build with the
+# `benchmark` feature; any other value disables it). When enabled, the
+# secure boot halts after printing BENCH\t* rows on UART instead of
+# transferring control to the non-secure world.
+export UMBRA_BENCHMARK=0
+
+if [ "$MCU_VARIANT" = "stm32l552" ]; then
+    export MCU=stm32l552
+    export BOOT_FEATURES=""
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32L552 (No HW AES)${VANILLA}"
+elif [ "$MCU_VARIANT" = "stm32l562" ]; then
+    # We reuse the stm32l552 platform directory but enable 562 features
+    export MCU=stm32l552
+    export BOOT_FEATURES="--features stm32l562"
+    export EXTLOAD_STLDR="${EXTLOAD_STLDR:-/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin/ExternalLoader/MX25LM51245G_STM32L562E-DK.stldr}"
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32L562 (HW AES Enabled)${VANILLA}"
+else
+    echo -e "${FAILURE}[mcu_selection] Unknown MCU_VARIANT: $MCU_VARIANT${VANILLA}"
+    return 1
+fi
+
+# Append the benchmark feature if requested. Merges correctly with an
+# empty BOOT_FEATURES (L552) and with an existing --features flag (L562).
+if [ "$UMBRA_BENCHMARK" = "1" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features benchmark"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},benchmark"
+    fi
+    echo -e "${SUCCESS}[benchmark] CHES26 EFB crypto benchmark ENABLED${VANILLA}"
+fi
+
+export OPENOCD_CONFIG=./openocd_scripts/stm32l5x.cfg
 export TARGET_FLASH_START=0x0C000000
 export TARGET_ARCH=thumbv8m.main-none-eabi
+
+# T3 smoke-test harness (tools/smoke_test.sh)
+export UMBRA_UART=/dev/tty.usbmodem211203
+export UMBRA_OOCD_CFG=${OPENOCD_CONFIG}
+
+# Enclave deploy tool (tools/protect_enclave.py): must match the kernel's
+# `chained_measurement` feature state. 1 = chained layout (288B blocks, final
+# HMAC-chain in header), 0 = legacy per-block HMAC layout (320B blocks).
+export UMBRA_CHAINED=1
 
 # ST-LINK command line interface (CLI):
 # (https://www.st.com/resource/en/user_manual/um2237-stm32cubeprogrammer-software-description-stmicroelectronics.pdf)
@@ -267,7 +312,6 @@ export OPTION_BYTES="\
 # STM32L562E    (TBD)
 # Vesuvius      (TBD)
 
-echo -e "${SUCCESS}[mcu_selection]  Selected $MCU${VANILLA}"
 echo -e "${SUCCESS}[arch_selection] Selected $TARGET_ARCH${VANILLA}"
 echo -e ""
 
@@ -293,7 +337,7 @@ export KERNEL_DIR="${ROOT_DIR}/src/kernel"
 export PLATFORM_DIR="${HW_DIR}/platform/${MCU}"
 export DRIVER_DIR="${PLATFORM_DIR}/driver"
 export SECBOOT_DIR="${PLATFORM_DIR}/boot"
-export PLATFORM_LD_DIR="${PLATFORM_DIR}/linker"
+
 
 export PATH="$ORIGINAL_PATH"
 
@@ -304,7 +348,6 @@ CONFIG_PATHS=(
     "${PLATFORM_DIR}" \
     "${DRIVER_DIR}" \
     "${SECBOOT_DIR}" \
-    "${PLATFORM_LD_DIR}" \
     "${KERNEL_DIR}" \
 )
 

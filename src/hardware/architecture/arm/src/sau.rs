@@ -1,6 +1,13 @@
 
+//////////////////////////////////////////////////////////////////////
+//                                                                  //
+// Author: Stefano Mercogliano <stefano.mercogliano@unina.it>       //
+//                                                                  //
+// Description:                                                     //
+//      ARM Secure Attribution Unit Driver for Cortex-M33           //
+//                                                                  //    
+//////////////////////////////////////////////////////////////////////
 
-// ARM Secure Attribution Unit
 
 // Using Rust Naming conventions https://rust-lang.github.io/api-guidelines/naming.html
 

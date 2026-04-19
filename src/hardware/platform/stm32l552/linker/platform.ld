@@ -9,14 +9,8 @@
 *
 **********************************************************************************************************/
 
-/* Including memory blocks definitions */
-INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_main/host/bare_metal_arm/linker/memory.ld
-
-/* Including umbra linker script */
-INCLUDE /home/stefano/Desktop/Work/Projects/umbra/b_main/linker/umbra.ld
-
-_umb_stack_size = 0x1000;
-_umb_estack = ORIGIN(_SECURE_KERNEL_DATA_MEMORY_) + LENGTH(_SECURE_KERNEL_DATA_MEMORY_) - 0x4;
+_umb_stack_size = 0x6000;
+_umb_estack = 0x2003DFFC;
 
 /* Define the sections */
 SECTIONS
@@ -67,5 +61,26 @@ SECTIONS
     {
         *(.rodata*)
     } > _SECURE_BOOT_TEXT_MEMORY_
+
+    .data :
+    {
+        . = ALIGN(4);
+        _sdata = .;
+        *(.data*)
+        . = ALIGN(4);
+        _edata = .;
+    } > _SECURE_KERNEL_DATA_MEMORY_ AT > _SECURE_BOOT_TEXT_MEMORY_
+    
+    _sidata = LOADADDR(.data);
+
+    .bss :
+    {
+        . = ALIGN(4);
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(4);
+        _ebss = .;
+    } > _SECURE_KERNEL_DATA_MEMORY_
 
 }
