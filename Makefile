@@ -78,7 +78,6 @@ UMBRA_LIB_PATH = ${KERNEL_DIR}/target/${TARGET_ARCH}/${UMBRA_COMPILE_MODE}
 
 umbra_build:
 	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} rustc ${UMBRA_LIB_MODE} --crate-type=staticlib 
-	@mkdir -p ${LIB_DIR}
 	@cp ${UMBRA_LIB_PATH}/libkernel.a ${LIB_DIR}/libumbra.a
 
 umbra_clean:
@@ -93,10 +92,6 @@ umbra_clean:
 #                |___/                                        	#
 #################################################################
 
-########
-# Misc #
-########
-
 # Configure the target system security features
 # Uses the flasher for stm32
 enable_security:
@@ -106,34 +101,15 @@ enable_security:
 erase_all:
 	${FLASHER} ${CONNECT} --erase all
 
-#################
-# Debug Backend #
-#################
-
 # Open the backend (fixed to openocd)
-run_openocd:
+openocd:
 	${OPENOCD} -f ${OPENOCD_CONFIG}
 
-run_openocd_async:
-	@${OPENOCD} -f ${OPENOCD_CONFIG} > /dev/null 2>&1 &
+# Program the secure boot first and the host then
+# A backend (such as openocd) must be opened before doing this
+program_elf: program_elf_boot program_elf_host
 
-kill_openocd:
-	@if pgrep -x openocd > /dev/null; then pkill -x openocd; fi
-
-######################
-# Programming Target #
-######################
-
-# Enable all security features on the target device
-prepare_target: enable_security erase_all
-
-# Use GDB to program the secure boot (TODO: move this to a script)
-program_secure_boot:
-# Connect to the backend
-	@echo "[PROGRAM] Running ${OPENOCD} in the background"
-	${MAKE} run_openocd_async
-# Prorgram through GDB
-	@echo "[PROGRAM] Programming secure boot from $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)"
+program_elf_boot:
 	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
 	-ex 'target extended-remote:3333' \
 	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
@@ -161,10 +137,11 @@ program_elf_host:
 # Deprecated #
 ##############
 
-# It is possible to run the elf including both symbols
-# Otherwise, just load symbols for either the secure boot or the host
-run_elf:
+# Program the secure boot and just debug it
+program_elf_boot_stay: 
 	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
+	-ex 'target extended-remote:3333' \
+	-ex 'b secure_boot' \
 	-ex 'set confirm off' \
 	-ex 'r' \
 	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
