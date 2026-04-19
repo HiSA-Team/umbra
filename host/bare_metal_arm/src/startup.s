@@ -76,13 +76,25 @@
         
         _host_Default_Handler:
             b .                         // Infinite loop (hangs here if an undefined interrupt occurs)
+
+        _host_HardFault_Handler:
+            ldr r0, =0xDEADC0DE  
+            b .
+    
+        _host_MemManage_Handler:
+            ldr r0, =0xDEADBEEF 
+            b .
+        
+        _host_BusFault_Handler:
+            ldr r0, =0xBAADF00D  
+            b .
+        
+        _host_UsageFault_Handler:
+            ldr r0, =0xCAFEBABE  
+            b .
     
         // Basic Handlers (redirect to Default_Handler if not defined)
         _host_NMI_Handler:          b _host_Default_Handler
-        _host_HardFault_Handler:    b _host_Default_Handler
-        _host_MemManage_Handler:    b _host_Default_Handler
-        _host_BusFault_Handler:     b _host_Default_Handler
-        _host_UsageFault_Handler:   b _host_Default_Handler
         _host_SVC_Handler:          b _host_Default_Handler
         _host_DebugMon_Handler:     b _host_Default_Handler
         _host_PendSV_Handler:       b _host_Default_Handler
