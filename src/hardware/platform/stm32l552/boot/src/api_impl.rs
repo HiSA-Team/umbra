@@ -172,6 +172,7 @@ pub extern "C" fn umbra_tee_create_imp(base_addr: u32) -> u32{
             umbra_debug_print_imp(b"[UMBRASecureBoot] chained-measurement FAIL\n\0".as_ptr());
             return 0xFFFFFFF6;
         }
+        #[cfg(feature = "boot_tests")]
         umbra_debug_print_imp(b"[UMBRASecureBoot] chained-measurement OK\n\0".as_ptr());
     }
 
@@ -465,48 +466,6 @@ pub extern "C" fn umbra_enclave_status_imp(enclave_id: u32) -> u32 {
     0xFF
 }
 
-
-#[no_mangle]
-#[link_section = ".umbra_api_implementation"]
-pub extern "C" fn umbra_enclave_run_imp() -> u32 {
-    
-    let kernel = unsafe {
-        match Kernel::get() {
-            Some(k) => k,
-            None => return 0xFFFFFFFE,
-        }
-    };
-    
-    let mut entry_point: u32 = 0;
-    let mut found = false;
-    
-    for slot in kernel.ess.loaded_enclaves.iter() {
-        if let Some(loaded) = slot {
-             entry_point = loaded.descriptor.entry_point; // Use entry_point from descriptor
-             found = true;
-             break;
-        }
-    }
-    
-    if !found {
-        return 0xFFFFFFF0; 
-    }
-
-    let result: u32;
-    unsafe {
-        // Ensure Thumb state
-        let entry_point_thumb: u32 = entry_point | 1;
-        core::arch::asm!(
-            "dsb",
-            "isb",
-            "blx {0}",
-            in(reg) entry_point_thumb,
-            lateout("r0") result,
-            clobber_abi("C")
-        );
-    }
-    return result;
-}
 
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]

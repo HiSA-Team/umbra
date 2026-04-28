@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # Runtime ESS-miss fault-injection harness
 #
 # Exercises three attack cases from UmbraIntegrityFixValidator.pv (L552) /
@@ -32,7 +32,7 @@
 
 set -uo pipefail
 
-UART="${UMBRA_UART:?Set UMBRA_UART to the target's serial device}"
+UART="${UMBRA_UART:?Set UMBRA_UART to the target serial device}"
 OOCD_HOST="${UMBRA_OOCD_HOST:-localhost}"
 OOCD_TELNET_PORT="${UMBRA_OOCD_TELNET_PORT:-4444}"
 OOCD_GDB_PORT="${UMBRA_OOCD_GDB_PORT:-3333}"

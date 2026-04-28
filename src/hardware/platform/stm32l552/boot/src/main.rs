@@ -26,8 +26,8 @@ use arm::mpu;
 use drivers::gtzc;
 use drivers::rcc;
 use drivers::uart;
-use drivers::uart::Uart;
 use drivers::gpio;
+#[cfg(feature = "boot_tests")]
 use drivers::aes::AesEngine;
 
 // Umbra Kernel-related crates
@@ -69,8 +69,9 @@ static mut CIPHERTEXT_BUF: [u8; OTFDEC_REGION_SIZE_BSS] = [0u8; OTFDEC_REGION_SI
 
 
 
+#[cfg(feature = "boot_tests")]
 #[inline(never)]
-fn print_hex(_uart: &Uart, val: u32) {
+fn print_hex(_uart: &uart::Uart, val: u32) {
     crate::raw_print::print_hex(val);
 }
 
@@ -101,7 +102,7 @@ pub unsafe fn secure_boot() -> !{
     
     // Initialize UART (LPUART1 for 552, USART1 for 562)
     let serial = uart::Uart::new_lpuart1_and_configure(9600);
-    
+
     serial.write("\n");
     serial.write("   ___       ___       ___       ___       ___   \n");
     serial.write("  /\\__\\     /\\__\\     /\\  \\     /\\  \\     /\\  \\  \n");
@@ -111,62 +112,65 @@ pub unsafe fn secure_boot() -> !{
     serial.write(" \\::/  /    /:/  /   \\::/  /   |:\\/__/    /:/  / \n");
     serial.write("  \\/__/     \\/__/     \\/__/     \\|__|     \\/__/  \n");
     serial.write("\n");
-    
 
     serial.write("[UMBRASecureBoot] Secure Boot started\n");
 
-    // Print Stack Sizes and Usage
-    let umb_stack_size_val = &_umb_stack_size as *const u32 as u32;
-    let umb_estack_val = &_umb_estack as *const u32 as u32;
-
-    // Calculate current stack usage (sp)
-    let sp: u32 = cortex_m::register::msp::read() as u32;
-    let used_stack = umb_estack_val - sp;
-    
-    // Attempting to print using simple hex loop to avoid trait issues if Uart doesn't implement it perfectly
-    serial.write("[UMBRASecureBoot] Stack Info:\n");
-    
-    serial.write("  _umb_stack_size: 0x");
-    print_hex(&serial, umb_stack_size_val);
-    serial.write("\n");
-
-    serial.write("  Current Secure Stack Usage: 0x");
-    print_hex(&serial, used_stack);
-    serial.write(" (SP: 0x");
-    print_hex(&serial, sp);
-    serial.write(")\n");
-    
-    let remaining_stack = umb_stack_size_val - used_stack;
-    serial.write("  Remaining Secure Stack: 0x");
-    print_hex(&serial, remaining_stack);
-    serial.write("\n");
-
-
-    serial.write("[UMBRASecureBoot] TEST HAL\n");
-
-    #[cfg(feature = "stm32l562")]
+    #[cfg(feature = "boot_tests")]
     {
-        gpio_led.pin_set(pin);
-        serial.write("[UMBRASecureBoot] TEST GPIO Active Low\n");
-        gpio_led.pin_reset(pin);
+        // Print Stack Sizes and Usage
+        let umb_stack_size_val = &_umb_stack_size as *const u32 as u32;
+        let umb_estack_val = &_umb_estack as *const u32 as u32;
+        let sp: u32 = cortex_m::register::msp::read() as u32;
+        let used_stack = umb_estack_val - sp;
+
+        serial.write("[UMBRASecureBoot] Stack Info:\n");
+        
+        serial.write("  _umb_stack_size: 0x");
+        print_hex(&serial, umb_stack_size_val);
+        serial.write("\n");
+
+        serial.write("  Current Secure Stack Usage: 0x");
+        print_hex(&serial, used_stack);
+        serial.write(" (SP: 0x");
+        print_hex(&serial, sp);
+        serial.write(")\n");
+        
+        let remaining_stack = umb_stack_size_val - used_stack;
+        serial.write("  Remaining Secure Stack: 0x");
+        print_hex(&serial, remaining_stack);
+        serial.write("\n");
     }
-    #[cfg(not(feature = "stm32l562"))]
+
+
+    #[cfg(feature = "boot_tests")]
     {
-        gpio_led.pin_reset(pin);
-        serial.write("[UMBRASecureBoot] TEST GPIO Active High\n");
-        gpio_led.pin_set(pin);
+        serial.write("[UMBRASecureBoot] TEST HAL\n");
+
+        #[cfg(feature = "stm32l562")]
+        {
+            gpio_led.pin_set(pin);
+            serial.write("[UMBRASecureBoot] TEST GPIO Active Low\n");
+            gpio_led.pin_reset(pin);
+        }
+        #[cfg(not(feature = "stm32l562"))]
+        {
+            gpio_led.pin_reset(pin);
+            serial.write("[UMBRASecureBoot] TEST GPIO Active High\n");
+            gpio_led.pin_set(pin);
+        }
     }
-    
 
     //////////////////////////////
     // INITIALIZE MEMORY GUARDS //
     //////////////////////////////
     
     let mut sau_driver : sau::SauDriver = sau::SauDriver::new();
+    #[cfg(feature = "boot_tests")]
     serial.write("[UMBRASecureBoot] SAU started\n");
 
     rcc.enable_clock(rcc::peripherals::GTZC);
     let mut gtzc_driver : gtzc::GtzcDriver = gtzc::GtzcDriver::new();
+    #[cfg(feature = "boot_tests")]
     serial.write("[UMBRASecureBoot] GTZC started\n");
 
     sau_driver.memory_security_guard_init();
@@ -181,17 +185,21 @@ pub unsafe fn secure_boot() -> !{
     {
         let shcsr = 0xE000ED24 as *mut u32;
         let before = core::ptr::read_volatile(shcsr);
-        serial.write("[UMBRASecureBoot] SHCSR before: 0x");
-        print_hex(&serial, before);
-        serial.write("\n");
+        #[cfg(feature = "boot_tests")]{
+            serial.write("[UMBRASecureBoot] SHCSR before: 0x");
+            print_hex(&serial, before);
+            serial.write("\n");
+        }
         // 16=MEMFAULTENA, 17=BUSFAULTENA, 18=USGFAULTENA, 19=SECUREFAULTENA.
         // Enabling BUS/USG prevents silent escalation so a misrouted fault
         // surfaces in its own handler instead of the HardFault sink.
         core::ptr::write_volatile(shcsr, before | (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19));
-        let after = core::ptr::read_volatile(shcsr);
-        serial.write("[UMBRASecureBoot] SHCSR after:  0x");
-        print_hex(&serial, after);
-        serial.write("\n");
+        #[cfg(feature = "boot_tests")]{
+            let after = core::ptr::read_volatile(shcsr);
+            serial.write("[UMBRASecureBoot] SHCSR after:  0x");
+            print_hex(&serial, after);
+            serial.write("\n");
+        }
     }
 
     // Ensure UsageFault is always enabled (needed for enclave
@@ -215,7 +223,9 @@ pub unsafe fn secure_boot() -> !{
     // AP bits permit the write.
     mpu_driver.set_mair(0, 0xFF);
     mpu_driver.enable();
-    serial.write("[UMBRASecureBoot] MPU started\n");
+    #[cfg(feature = "boot_tests")]{    
+        serial.write("[UMBRASecureBoot] MPU started\n");
+    }
 
     // MPU Test: Configure Region 0 for 0x20008000 - 0x2000803F as RW
     let mut region_config = mpu::MpuRegionConfig::new();
@@ -226,11 +236,14 @@ pub unsafe fn secure_boot() -> !{
     region_config.sh = mpu::MpuShareability::NonShareable;
     region_config.xn = mpu::MpuExecuteNever::ExecutionPermitted;
     region_config.enable = true;
-    
-    mpu_driver.configure_region(&region_config);
-    serial.write("\t[UMBRASecureBoot] MPU Region 0 Configured: 0x20008000 (RW Priv)\n");
-    
-    
+
+        mpu_driver.configure_region(&region_config);
+        #[cfg(feature = "boot_tests")]
+        {
+            serial.write("\t[UMBRASecureBoot] MPU Region 0 Configured: 0x20008000 (RW Priv)\n");
+        }
+
+
     //////////////////////////////////////////////////
     // CONFIGURE NON-SECURE CODE - FLASH CONTROLLER //
     //////////////////////////////////////////////////
@@ -247,7 +260,10 @@ pub unsafe fn secure_boot() -> !{
     let mut memory_block_list = MemoryBlockList::create_from_range(0x08040000,0x08080000);
     memory_block_list.set_memory_block_security(MemoryBlockSecurityAttribute::Untrusted);
     sau_driver.memory_security_guard_create(&memory_block_list);
-    serial.write("\t[UMBRASecureBoot] Untrusted Memory Block Range: 0x08040000 - 0x08080000\n");
+    #[cfg(feature = "boot_tests")]
+    {
+        serial.write("\t[UMBRASecureBoot] Untrusted Memory Block Range: 0x08040000 - 0x08080000\n");
+    }
 
     /////////////////////////////////////
     // CONFIGURE NON-SECURE DATA - SAU //
@@ -281,7 +297,10 @@ pub unsafe fn secure_boot() -> !{
     memory_block_list = MemoryBlockList::create_from_range(0x20030000,0x2003E000);
     memory_block_list.set_memory_block_security(MemoryBlockSecurityAttribute::Trusted);
     gtzc_driver.memory_security_guard_create(&memory_block_list);
-    serial.write("\t[UMBRASecureBoot] Trusted Memory Block Range: 0x20020000 - 0x2003E000\n");
+    #[cfg(feature = "boot_tests")]
+    {
+        serial.write("\t[UMBRASecureBoot] Trusted Memory Block Range: 0x20020000 - 0x2003E000\n");
+    }
 
 
 
@@ -293,14 +312,20 @@ pub unsafe fn secure_boot() -> !{
     memory_block_list = MemoryBlockList::create_from_range(0x08030000,0x0803ffe0);
     memory_block_list.set_memory_block_security(MemoryBlockSecurityAttribute::TrustedGateway);
     sau_driver.memory_security_guard_create(&memory_block_list);
-    serial.write("\t[UMBRASecureBoot] Trusted Gateway Memory Block Range:0x08030000 - 0x0803ffe0\n");
+    #[cfg(feature = "boot_tests")]
+    {
+        serial.write("\t[UMBRASecureBoot] Trusted Gateway Memory Block Range:0x08030000 - 0x0803ffe0\n");
+    }
 
     /////////////////////////////////////
     // DMA Demo                        //
     /////////////////////////////////////
     rcc.enable_clock(rcc::peripherals::DMA1);
     rcc.enable_clock(rcc::peripherals::DMA2);
-    serial.write("[UMBRASecureBoot] TEST DMA\n");
+    #[cfg(feature = "boot_tests")]
+    {
+        serial.write("[UMBRASecureBoot] TEST DMA\n");
+    }
     
     // Enable NVIC for DMA1 Channel 1 (IRQ 29)
     // Enable NVIC for DMA1 Channels 1-4 (IRQ 29, 30, 31, 32)
@@ -325,70 +350,79 @@ pub unsafe fn secure_boot() -> !{
     memory_block_list = MemoryBlockList::create_from_range(0x40000000, 0x50000000);
     memory_block_list.set_memory_block_security(MemoryBlockSecurityAttribute::Untrusted);
     sau_driver.memory_security_guard_create(&memory_block_list);
-    serial.write("\t[UMBRASecureBoot] Untrusted Peripheral Range: 0x40000000 - 0x50000000\n");
+    #[cfg(feature = "boot_tests")]
+    {
+        serial.write("\t[UMBRASecureBoot] Untrusted Peripheral Range: 0x40000000 - 0x50000000\n");
+    }
 
 
     /////////////////////////////////////
     // HASH HMAC TEST                  //
     /////////////////////////////////////
-    serial.write("[UMBRASecureBoot] TEST HASH\n");
+    #[cfg(feature = "boot_tests")]
+    {
+        serial.write("[UMBRASecureBoot] TEST HASH\n");
 
-    use drivers::hash::{Hash, Algorithm, DataType};
-    let mut hash = Hash::new();
-    let key = "test".as_bytes();
-    let data = "ForzaNapoliSempre".as_bytes();
-    let mut ctx = hash.start(Algorithm::SHA256, DataType::Width8, Some(key));
-    hash.update(&mut ctx, data);
-    let mut digest = [0u8; 32];
-    hash.finish(ctx, &mut digest);
+        use drivers::hash::{Hash, Algorithm, DataType};
+        let mut hash = Hash::new();
+        let key = "test".as_bytes();
+        let data = "ForzaNapoliSempre".as_bytes();
+        let mut ctx = hash.start(Algorithm::SHA256, DataType::Width8, Some(key));
+        hash.update(&mut ctx, data);
+        let mut digest = [0u8; 32];
+        hash.finish(ctx, &mut digest);
 
-    serial.write("\t[HMAC] SHA256: ");
-    crate::raw_print::print_hex_bytes(&digest);
-    serial.write("\n");
-    
+        serial.write("\t[HMAC] SHA256: ");
+        crate::raw_print::print_hex_bytes(&digest);
+        serial.write("\n");
+    }
+
     /////////////////////////////////////
     // AES TEST                        //
     /////////////////////////////////////
-    serial.write("[UMBRASecureBoot] TEST AES\n");
+    #[cfg(feature = "boot_tests")]
     {
-        #[cfg(feature = "stm32l562")]
-        use drivers::aes::AesHardware as AesImpl;
+        serial.write("[UMBRASecureBoot] TEST AES\n");
+        {
+            #[cfg(feature = "stm32l562")]
+            use drivers::aes::AesHardware as AesImpl;
         
-        #[cfg(not(feature = "stm32l562"))]
-        use drivers::aes::AesEmulated as AesImpl;
+            #[cfg(not(feature = "stm32l562"))]
+            use drivers::aes::AesEmulated as AesImpl;
         
-        let mut aes = AesImpl::new();
-        let key: [u8; 16] = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
-        let input: [u8; 16] = [0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a];
-        let expected_ciphertext: [u8; 16] = [0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97];
+            let mut aes = AesImpl::new();
+            let key: [u8; 16] = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
+            let input: [u8; 16] = [0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a];
+            let expected_ciphertext: [u8; 16] = [0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97];
         
-        let mut output: [u8; 16] = [0; 16];
-        let mut check_decrypt: [u8; 16] = [0; 16];
+            let mut output: [u8; 16] = [0; 16];
+            let mut check_decrypt: [u8; 16] = [0; 16];
 
-        #[cfg(feature = "stm32l562")]
-        serial.write("\t[AES] Does AES-128 HW Test.. \n");
-        #[cfg(not(feature = "stm32l562"))]
-        serial.write("\t[AES] Does AES-128 SW Test.. \n");
+            #[cfg(feature = "stm32l562")]
+            serial.write("\t[AES] Does AES-128 HW Test.. \n");
+            #[cfg(not(feature = "stm32l562"))]
+            serial.write("\t[AES] Does AES-128 SW Test.. \n");
 
-        aes.init(&key, None);
-        aes.encrypt_block(&input, &mut output);
+            aes.init(&key, None);
+            aes.encrypt_block(&input, &mut output);
         
-        serial.write("\t[AES] Encrypted: ");
-        crate::raw_print::print_hex_bytes(&output);
-        serial.write("\n");
+            serial.write("\t[AES] Encrypted: ");
+            crate::raw_print::print_hex_bytes(&output);
+            serial.write("\n");
 
-        if output == expected_ciphertext {
-            serial.write("\t[AES] Encryption MATCH\n");
-        } else {
-             serial.write("\t[AES] Encryption FAIL\n");
-        }
+            if output == expected_ciphertext {
+                serial.write("\t[AES] Encryption MATCH\n");
+            } else {
+                serial.write("\t[AES] Encryption FAIL\n");
+            }
 
-        aes.decrypt_block(&output, &mut check_decrypt);
+            aes.decrypt_block(&output, &mut check_decrypt);
         
-        if check_decrypt == input {
-             serial.write("\t[AES] Decryption MATCH\n");
-        } else {
-             serial.write("\t[AES] Decryption FAIL\n");
+            if check_decrypt == input {
+                serial.write("\t[AES] Decryption MATCH\n");
+            } else {
+                serial.write("\t[AES] Decryption FAIL\n");
+            }
         }
     }
 
@@ -439,9 +473,11 @@ pub unsafe fn secure_boot() -> !{
         ospi.init();
         match ospi.enable_memory_mapped_octa() {
             Ok(()) => {
+                #[cfg(feature = "boot_tests")]
                 serial.write("[UMBRASecureBoot] OCTOSPI memory-mapped OK\n");
             }
             Err(msg) => {
+                #[cfg(feature = "boot_tests")]
                 serial.write("[UMBRASecureBoot] OCTOSPI FAIL: ");
                 serial.write(msg);
                 serial.write("\n");
@@ -586,6 +622,7 @@ pub unsafe fn secure_boot() -> !{
         let syst_csr = 0xE000_E010 as *mut u32;
         core::ptr::write_volatile(syst_csr, 0x00); // Ensure disabled
     }
+    #[cfg(feature = "boot_tests")]
     serial.write("[UMBRASecureBoot] SysTick configured (disabled)\n");
 
     /////////////////////////////////////

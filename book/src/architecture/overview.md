@@ -16,7 +16,7 @@ Transitions between worlds are controlled by hardware:
 Umbra provides the Secure World runtime. It:
 
 1. **Boots first** — the vector table is in Secure flash; Umbra initializes SAU, GTZC, MPU, and peripherals before handing control to the Non-Secure host
-2. **Provides APIs** — 6 NSC veneers allow the host to create, enter, exit, and query enclaves
+2. **Provides APIs** — 5 NSC veneers allow the host to create, enter, exit, and query enclaves
 3. **Manages enclaves** — loads encrypted code from flash, validates integrity (HMAC), decrypts (AES), and installs into Secure SRAM
 4. **Enforces isolation** — MPU regions protect kernel memory from enclave code; MPCBB controls 256-byte block-level SRAM security
 

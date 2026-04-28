@@ -12,6 +12,7 @@ peripheral_regs = { path = "../../../common/peripheral_regs" }
 
 [features]
 default = ["chained_measurement", "ess_miss_recovery"]
+boot_tests = []
 stm32l562 = ["drivers/stm32l562"]
 chained_measurement = []
 ess_miss_recovery = []
