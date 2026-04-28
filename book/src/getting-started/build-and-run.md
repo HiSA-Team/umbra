@@ -10,6 +10,21 @@ source settings.sh
 
 The script auto-detects the target MCU (STM32L552 or STM32L562) and configures paths, flash addresses, and feature flags.
 
+## Select Host Application
+
+Umbra ships with two NS host examples. Select one before building:
+
+```bash
+# Bare-metal round-robin (default)
+source ./settings.sh
+
+# FreeRTOS RTOS demo
+export HOST_APP=freertos
+source ./settings.sh
+```
+
+See the [Host Examples](../examples/README.md) section for details on each.
+
 ## Build Everything
 
 ```bash
@@ -21,7 +36,7 @@ This performs a full clean build:
 1. Generates a fresh master key (`tools/master_key.bin`)
 2. Builds the Secure Boot ELF (`secureboot_build` + `secureboot_bin`)
 3. Builds the Umbra kernel static library (`lib/libumbra.a`)
-4. Builds the host application (C, linked against `libumbra.a`)
+4. Builds the selected host application (`HOST_APP`, default: `bare_metal`)
 5. Protects enclave binaries (encryption, HMAC signing via `tools/protect_enclave.py`)
 
 ## Flash and Run

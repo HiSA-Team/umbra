@@ -34,11 +34,13 @@ Umbra supports creating TEEs from a bare-metal host with:
 ```
 umbra/
   src/
-    kernel/          # Architecture-agnostic kernel (enclave management, key storage)
+    kernel/               # Architecture-agnostic kernel (enclave management, key storage)
     hardware/
       architecture/arm/   # ARM Cortex-M33 primitives (SAU, MPU, vector table)
       platform/stm32l552/ # STM32L5 platform (boot, drivers)
-  host/bare_metal_arm/    # Example non-secure host application
+  host/
+    bare_metal_arm/       # Bare-metal NS host (round-robin enclave scheduler)
+    freertos_arm/         # FreeRTOS NS host (RTOS coexistence demo)
   tools/                  # Enclave protection, key generation, smoke tests
   linker/                 # Kernel linker scripts
   book/                   # This documentation (mdBook)

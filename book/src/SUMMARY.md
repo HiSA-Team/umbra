@@ -10,6 +10,12 @@
 - [Build and Run](getting-started/build-and-run.md)
 - [Hardware Setup](getting-started/hardware-setup.md)
 
+# Host Examples
+
+- [Overview](examples/README.md)
+- [Bare-Metal](examples/bare-metal.md)
+- [FreeRTOS](examples/freertos.md)
+
 # Architecture
 
 - [Overview](architecture/overview.md)

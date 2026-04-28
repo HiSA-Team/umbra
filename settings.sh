@@ -367,8 +367,24 @@ echo -e ""
 
 echo -e "${BOLD}Configuring Host information${VANILLA}"
 
-# This should be a possible parameter in the future
-export HOST_ELF=${ROOT_DIR}/host/bare_metal_arm/bin/bare_metal_arm.elf
+# Host application selection
+# Options: bare_metal (default), freertos
+# Usage: export HOST_APP=freertos && source ./settings.sh
+export HOST_APP=${HOST_APP:-bare_metal}
 
+if [ "$HOST_APP" = "bare_metal" ]; then
+    export HOST_DIR=${ROOT_DIR}/host/bare_metal_arm
+    export HOST_NAME=bare_metal_arm
+elif [ "$HOST_APP" = "freertos" ]; then
+    export HOST_DIR=${ROOT_DIR}/host/freertos_arm
+    export HOST_NAME=freertos_arm
+else
+    echo -e "${FAILURE}[host_selection] Unknown HOST_APP: $HOST_APP${VANILLA}"
+    return 1
+fi
+
+export HOST_ELF=${HOST_DIR}/bin/${HOST_NAME}.elf
+
+echo -e "${SUCCESS}[host_selection] Selected host: $HOST_APP ($HOST_NAME)${VANILLA}"
 echo -e "${SUCCESS}[host_configuration] host elf is @ $HOST_ELF${VANILLA}"
 echo -e ""
