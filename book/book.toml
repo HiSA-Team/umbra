@@ -1,0 +1,9 @@
+[book]
+title = "Umbra Documentation"
+authors = ["HiSA Team"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/HiSA-Team/umbra"
+default-theme = "light"

@@ -1,7 +1,18 @@
+<p align="center">
+  <img src="assets/logo.svg" width="400" alt="Umbra Logo">
+</p>
+
+<p align="center">
+  <a href="https://github.com/HiSA-Team/umbra/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+  <img src="https://img.shields.io/badge/rust-nightly-orange.svg" alt="Rust">
+  <img src="https://img.shields.io/badge/platform-STM32L5-green.svg" alt="Platform">
+  <a href="https://hisa-team.github.io/umbra/"><img src="https://img.shields.io/badge/docs-mdBook-blue.svg" alt="Documentation"></a>
+</p>
+
 # Umbra: creating rust-based TEEs on Arm TrustZone-M
 
 Umbra is a lightweight Rust-based kernel designed to wrap binaries into runtime Trusted Execution Environments (TEEs) for TrustZone-M.
-It provides APIs compliant with the TCG specification as a static library, enabling integration with third-party software such as RTOSes or bare-metal applications to create TEEs dynamically or statically.
+It is distributed as a static library, enabling integration with third-party software such as RTOSes or bare-metal applications to create TEEs dynamically or statically.
 By leveraging Rust, Umbra minimizes the Trusted Computing Base (TCB) and enhances code safety.
 Currently, it supports Cortex-M33-based systems, including ST L552 and L562 microcontrollers.
 
