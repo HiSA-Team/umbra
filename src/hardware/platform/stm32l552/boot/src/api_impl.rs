@@ -335,7 +335,7 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
 
     ctx.status = EnclaveState::Running;
     // Drop the ctx reference so we can borrow kernel freely below.
-    drop(ctx);
+    let _ = ctx;
 
     kernel.current_enclave_id = Some(enclave_id);
 
@@ -511,27 +511,5 @@ pub extern "C" fn umbra_enclave_run_imp() -> u32 {
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]
 pub extern "C" fn umbra_debug_print_imp(str_ptr: *const u8) {
-    if str_ptr.is_null() { return; }
-
-    let uart_base = crate::handlers::RAW_UART_BASE as *mut u32;
-
-    let isr_ptr = unsafe { uart_base.add(0x1C / 4) }; 
-    let tdr_ptr = unsafe { uart_base.add(0x28 / 4) };
-
-    // Simple string loop
-    let mut curr = str_ptr;
-    unsafe {
-        while *curr != 0 {
-            // Wait for TXE (Bit 7)
-            loop {
-                let isr = isr_ptr.read_volatile();
-                if (isr & (1 << 7)) != 0 {
-                    break;
-                }
-            }
-            // Send char
-            tdr_ptr.write_volatile(*curr as u32);
-            curr = curr.add(1);
-        }
-    }
+    crate::raw_print::print_cstr(str_ptr);
 }

@@ -1,6 +1,7 @@
 // Author: Giovanni Spera  <giovanni.spera2011@libero.it>
 //
 // STM32L5xxxx DMA and DMAMUX Driver
+#![allow(dead_code)]
 // This driver implements an high level Diret Memory Access (DMA) and Diret Memory Access Multiplexer (DMAMUX) peripheral present on STM32L5xxxx.
 // Both DMA1 and DMA2 (on STM32L5xxxx) can be managed by this driver, or even a custom subset of channels.
 // Channels can be reserved for use outside of this driver.
@@ -8,8 +9,6 @@
 
 // Crates
 use peripheral_regs::*;
-use core::sync::atomic::AtomicU32;
-use core::sync::atomic::Ordering;
 
 const DMA1_BASE_ADDR: u32 = 0x50020000; // Secure
 const DMA2_BASE_ADDR: u32 = 0x50020400; // Secure
@@ -38,11 +37,11 @@ const NUM_OF_CHANNEL_IN_DMA: usize = 16usize;
 // Contrary to the Reference Manual channels go to 0 to 7, not 1 to 8
 const DMA_ISR_BASE_OFFSET      : DmaRegisters = 0x00;
 const DMA_IFCR_BASE_OFFSET     : DmaRegisters = 0x04;
-fn DMA_CCRx_BASE_OFFSET(x: u32)   -> DmaRegisters {0x08 + 0x14 * x }
-fn DMA_CNDTRx_BASE_OFFSET(x: u32) -> DmaRegisters {0x0C + 0x14 * x }
-fn DMA_CPARx_BASE_OFFSET(x: u32)  -> DmaRegisters {0x10 + 0x14 * x }
-fn DMA_CM0ARx_BASE_OFFSET(x: u32) -> DmaRegisters {0x14 + 0x14 * x }
-fn DMA_CM1ARx_BASE_OFFSET(x: u32) -> DmaRegisters {0x18 + 0x14 * x }
+fn dma_ccrx_offset(x: u32)   -> DmaRegisters {0x08 + 0x14 * x }
+fn dma_cndtrx_offset(x: u32) -> DmaRegisters {0x0C + 0x14 * x }
+fn dma_cparx_offset(x: u32)  -> DmaRegisters {0x10 + 0x14 * x }
+fn dma_cm0arx_offset(x: u32) -> DmaRegisters {0x14 + 0x14 * x }
+fn dma_cm1arx_offset(x: u32) -> DmaRegisters {0x18 + 0x14 * x }
 
 // Manages the state of a Request inside the queue.
 // While the Empty state is associated to the Queue slot more than the Request,
@@ -86,7 +85,7 @@ pub enum TransferSecurity {
 pub struct Request {
     // Private fields
     nonce: RequestNonce,
-    slotState: RequestSlotState,
+    slot_state: RequestSlotState,
     channel: Option<(u32, u32)>, // An optional tuple (dma instance, channel), where the transfer is ongoin
 
     // Configuration
@@ -124,7 +123,7 @@ pub struct Dma {
     requests: [Request; MAX_NUMBER_OF_REQUESTS],
 }
 
-static mut already_init: bool = false;
+static mut ALREADY_INIT: bool = false;
 
 impl Dma {
     const fn _new() -> Self {
@@ -146,11 +145,11 @@ impl Dma {
             // Guard intentionally disabled: the ESS-miss fault handler must
             // re-create a Dma instance after secure_boot() already initialised one.
             // A proper singleton / global-reuse pattern is future work.
-            if already_init && false {
+            if ALREADY_INIT && false {
                 return None
             }
 
-            already_init = true;
+            ALREADY_INIT = true;
         }
         
         Some(Self::_new())
@@ -168,11 +167,11 @@ impl Dma {
 
                 // Check for available request
                 // In order of priority
-                let maybeReq = self.pop_request();
+                let maybe_req = self.pop_request();
 
-                if let Some(requestNonce) = maybeReq {
+                if let Some(request_nonce) = maybe_req {
                     // Assign
-                    self.move_request_to_ch(requestNonce, dma_instance as u32, dma_ch as u32);
+                    self.move_request_to_ch(request_nonce, dma_instance as u32, dma_ch as u32);
                 } else {
                     // No request is ready
                     return;
@@ -188,14 +187,14 @@ impl Dma {
     pub fn enqueue(&mut self, request: &Request) -> Option<RequestNonce> {
         // Search for the first empty slot in the array
         for i in 0..MAX_NUMBER_OF_REQUESTS {
-            if self.requests[i].slotState != RequestSlotState::Empty {
+            if self.requests[i].slot_state != RequestSlotState::Empty {
                 continue
             }
 
             // Empty slot, note that the write is not atomic
             let nonce = self.new_nonce();
             self.requests[i] = *request;
-            self.requests[i].slotState = RequestSlotState::Ready;
+            self.requests[i].slot_state = RequestSlotState::Ready;
             self.requests[i].channel = None;
             self.requests[i].nonce = nonce;
             
@@ -232,7 +231,7 @@ impl Dma {
         let mut found = false;
 
         for i in 0..MAX_NUMBER_OF_REQUESTS {
-            if self.requests[i].slotState != RequestSlotState::Ready {
+            if self.requests[i].slot_state != RequestSlotState::Ready {
                 continue;
             }
             
@@ -270,7 +269,7 @@ impl Dma {
 
         unsafe {
             // 2. Disable Channel (Clear EN bit 0)
-            let ccr_addr = DMA_CCRx_BASE_OFFSET(channel_id);
+            let ccr_addr = dma_ccrx_offset(channel_id);
             let mut ccr_val = read_register(self.regs[dma_id as usize], ccr_addr);
             ccr_val &= !1; 
             write_register(self.regs[dma_id as usize], ccr_addr, ccr_val);
@@ -286,7 +285,7 @@ impl Dma {
     
     // Move the given Request to the specified DMA Channel. The channel is enabled and the transfer started.
     // The Request is updated accordingly.
-    fn move_request_to_ch(&mut self, requestNonce: RequestNonce, dma_id: u32, channel_id: u32) {
+    fn move_request_to_ch(&mut self, request_nonce: RequestNonce, dma_id: u32, channel_id: u32) {
         // DMAMUX is left at reset defaults (mem2mem does not need routing).
         // Check that the given DMA Channel is not reserved
         assert!(!self.is_channel_reserved(dma_id, channel_id));
@@ -294,10 +293,10 @@ impl Dma {
         let ccr = self.read_ccrx(dma_id, channel_id);
         assert!(ccr & 1 == 0); // The channel is not enabled
 
-        let index = self.get_request_index(requestNonce).unwrap();
+        let index = self.get_request_index(request_nonce).unwrap();
         
         self.requests[index as usize].channel =  Some((dma_id, channel_id));
-        self.requests[index as usize].slotState = RequestSlotState::Running;
+        self.requests[index as usize].slot_state = RequestSlotState::Running;
         let request = self.requests[index as usize];
 
         // Security and privilege bits persist from the previous configuration;
@@ -328,18 +327,18 @@ impl Dma {
             // Clear interrupts
             write_register(self.regs[dma_id as usize], DMA_IFCR_BASE_OFFSET, 0xF<<(4 * channel_id));
 
-            write_register(self.regs[dma_id as usize], DMA_CNDTRx_BASE_OFFSET(channel_id), request.count);
-            write_register(self.regs[dma_id as usize], DMA_CPARx_BASE_OFFSET(channel_id),  request.cpar);
-            write_register(self.regs[dma_id as usize], DMA_CM0ARx_BASE_OFFSET(channel_id), request.cm0ar);
-            write_register(self.regs[dma_id as usize], DMA_CM1ARx_BASE_OFFSET(channel_id), request.cm1ar);
-            write_register(self.regs[dma_id as usize], DMA_CCRx_BASE_OFFSET(channel_id), new_ccr);
+            write_register(self.regs[dma_id as usize], dma_cndtrx_offset(channel_id), request.count);
+            write_register(self.regs[dma_id as usize], dma_cparx_offset(channel_id),  request.cpar);
+            write_register(self.regs[dma_id as usize], dma_cm0arx_offset(channel_id), request.cm0ar);
+            write_register(self.regs[dma_id as usize], dma_cm1arx_offset(channel_id), request.cm1ar);
+            write_register(self.regs[dma_id as usize], dma_ccrx_offset(channel_id), new_ccr);
         }
     }
 
-    fn with_request<F>(&self, requestNonce: RequestNonce, f: F) -> bool
+    fn with_request<F>(&self, request_nonce: RequestNonce, f: F) -> bool
     where F: Fn(&Request) {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
-            if self.requests[i].nonce == requestNonce {
+            if self.requests[i].nonce == request_nonce {
                 f(&self.requests[i]);
                 return true
             }
@@ -348,10 +347,10 @@ impl Dma {
         false
     }
 
-    fn with_request_mut<F>(&mut self, requestNonce: RequestNonce, mut f: F) -> bool
+    fn with_request_mut<F>(&mut self, request_nonce: RequestNonce, mut f: F) -> bool
     where F: FnMut(&mut Request) {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
-            if self.requests[i].nonce == requestNonce {
+            if self.requests[i].nonce == request_nonce {
                 f(&mut self.requests[i]);
                 return true
             }
@@ -360,10 +359,10 @@ impl Dma {
         false
     }
 
-    fn with_request_mut_env<F>(&self, requestNonce: RequestNonce, mut f: F) -> bool
+    fn with_request_mut_env<F>(&self, request_nonce: RequestNonce, mut f: F) -> bool
     where F: FnMut(&Request) {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
-            if self.requests[i].nonce == requestNonce {
+            if self.requests[i].nonce == request_nonce {
                 f(&self.requests[i]);
                 return true
             }
@@ -386,10 +385,10 @@ impl Dma {
         self.reserved_chs[dma_id as usize] & (1<<channel_id) != 0
     }
     
-    fn is_request_done(&self, requestNonce: RequestNonce) -> bool {
+    fn is_request_done(&self, request_nonce: RequestNonce) -> bool {
         let mut done = false;
-        self.with_request_mut_env(requestNonce, |r| {
-            if r.slotState != RequestSlotState::Running {
+        self.with_request_mut_env(request_nonce, |r| {
+            if r.slot_state != RequestSlotState::Running {
                 return;
             }
             let (dma_id, dma_ch) = r.channel.unwrap();
@@ -405,10 +404,10 @@ impl Dma {
     }
     
     fn read_ccrx(&self, dma_id: u32, channel_id: u32) -> u32 {
-        unsafe { read_register(self.regs[dma_id as usize], DMA_CCRx_BASE_OFFSET(channel_id)) }
+        unsafe { read_register(self.regs[dma_id as usize], dma_ccrx_offset(channel_id)) }
     }
     fn read_cndtrx(&self, dma_id: u32, channel_id: u32) -> u32 {
-        unsafe { read_register(self.regs[dma_id as usize], DMA_CNDTRx_BASE_OFFSET(channel_id)) }
+        unsafe { read_register(self.regs[dma_id as usize], dma_cndtrx_offset(channel_id)) }
     }
 }
 
@@ -427,7 +426,7 @@ impl Request {
         Self {
             // Private fields
             nonce: Request::VOID_NONCE,
-            slotState: RequestSlotState::Empty,
+            slot_state: RequestSlotState::Empty,
             channel: None,
 
             count: 0,

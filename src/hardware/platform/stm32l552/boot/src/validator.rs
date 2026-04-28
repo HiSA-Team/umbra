@@ -19,12 +19,15 @@ pub const BLOCK_META_SIZE: usize = 32;
 
 pub struct ValidatedBlock {
     pub block_id: u32,
+    #[allow(dead_code)] // Populated by validator; will be used when install path reads from ValidatedBlock directly
     pub plaintext: [u8; CODE_BLOCK_SIZE],
+    #[allow(dead_code)] // Populated by validator; will be used when install path reads from ValidatedBlock directly
     pub metadata: [u8; BLOCK_META_SIZE],
     _seal: (),
 }
 
 #[derive(Debug, Copy, Clone)]
+#[allow(dead_code)] // DecryptFailed unused on L562 (OTFDEC handles decryption)
 pub enum ValidationError {
     HmacMismatch,
     DecryptFailed,
@@ -65,6 +68,7 @@ pub fn validate_block(
     //    is exactly the integrity guarantee the validator provides. Re-running
     //    AES-decrypt on plaintext would produce garbage (and silently — see the
     //    block-1 post-preempt MemManage investigation on 2026-04-13).
+    #[allow(unused_mut)] // mut needed on L552 for aes_decrypt, not on L562
     let mut plaintext = *ciphertext;
     #[cfg(not(feature = "stm32l562"))]
     {

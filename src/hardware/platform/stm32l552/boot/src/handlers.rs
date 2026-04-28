@@ -1,67 +1,6 @@
 
 use core::ptr;
-
-// Shared UART base address — single source of truth for raw-pointer UART
-// access in exception handlers and API implementations.
-#[cfg(feature = "stm32l562")]
-pub const RAW_UART_BASE: u32 = 0x40013800; // USART1
-#[cfg(not(feature = "stm32l562"))]
-pub const RAW_UART_BASE: u32 = 0x50008000; // LPUART1
-
-const RAW_UART_ISR_OFFSET: u32 = 0x1C;
-const RAW_UART_TDR_OFFSET: u32 = 0x28;
-
-// Helper function to print hex values to UART
-// We use raw pointer access to LPUART1/USART1 to avoid borrowing issues in exception handlers
-#[inline(never)]
-pub fn print_hex(val: u32) {
-    let hex = b"0123456789ABCDEF";
-    unsafe {
-        let uart_base = RAW_UART_BASE as *mut u32;
-        let tdr_ptr = uart_base.add(RAW_UART_TDR_OFFSET as usize / 4);
-        let isr_ptr = uart_base.add(RAW_UART_ISR_OFFSET as usize / 4);
-
-        for i in (0..8).rev() {
-            let nibble = (val >> (i * 4)) & 0xF;
-            let c = hex[nibble as usize];
-            while (isr_ptr.read_volatile() & (1 << 7)) == 0 {}
-            tdr_ptr.write_volatile(c as u32);
-        }
-    }
-}
-
-#[inline(never)]
-pub fn print_str(s: &str) {
-    unsafe {
-        let uart_base = RAW_UART_BASE as *mut u32;
-        let tdr_ptr = uart_base.add(RAW_UART_TDR_OFFSET as usize / 4);
-        let isr_ptr = uart_base.add(RAW_UART_ISR_OFFSET as usize / 4);
-
-        for byte in s.bytes() {
-            while (isr_ptr.read_volatile() & (1 << 7)) == 0 {}
-            tdr_ptr.write_volatile(byte as u32);
-        }
-    }
-}
-
-/// Print a byte slice as lowercase hex via the raw UART.
-#[inline(never)]
-pub fn print_hex_bytes(data: &[u8]) {
-    let hex = b"0123456789abcdef";
-    unsafe {
-        let uart_base = RAW_UART_BASE as *mut u32;
-        let tdr_ptr = uart_base.add(RAW_UART_TDR_OFFSET as usize / 4);
-        let isr_ptr = uart_base.add(RAW_UART_ISR_OFFSET as usize / 4);
-        for &byte in data {
-            let hi = hex[((byte >> 4) & 0xF) as usize];
-            let lo = hex[(byte & 0xF) as usize];
-            while (isr_ptr.read_volatile() & (1 << 7)) == 0 {}
-            tdr_ptr.write_volatile(hi as u32);
-            while (isr_ptr.read_volatile() & (1 << 7)) == 0 {}
-            tdr_ptr.write_volatile(lo as u32);
-        }
-    }
-}
+use crate::raw_print::{print_str, print_hex};
 
 // Common function to dump stack frame
 fn dump_stack_frame(sp: u32, exception_name: &str) {
@@ -225,7 +164,7 @@ pub unsafe extern "C" fn umbra_secure_fault_handler(sp: u32) {
     // address that is not SG. This is our ESS-miss signature.
     let is_invep = (sfsr_val & 0x01) != 0;
     if !is_invep {
-        return panic_dump(sp, sfsr_val, "SecureFault: non-INVEP");
+        panic_dump(sp, sfsr_val, "SecureFault: non-INVEP");
     }
 
     let frame = sp as *const u32;
@@ -236,18 +175,18 @@ pub unsafe extern "C" fn umbra_secure_fault_handler(sp: u32) {
     {
         let kernel = match crate::secure_kernel::Kernel::get() {
             Some(k) => k,
-            None    => return panic_dump(sp, sfsr_val, "SecureFault: no kernel"),
+            None    => panic_dump(sp, sfsr_val, "SecureFault: no kernel"),
         };
         let (enclave_id, block_idx) = match kernel.lookup_faulting_block(stacked_pc) {
             Some(pair) => pair,
-            None       => return panic_dump(sp, sfsr_val, "SecureFault: PC outside any enclave"),
+            None       => panic_dump(sp, sfsr_val, "SecureFault: PC outside any enclave"),
         };
         let mut dma = match drivers::dma::Dma::new() {
             Some(d) => d,
-            None    => return panic_dump(sp, sfsr_val, "SecureFault: DMA unavailable"),
+            None    => panic_dump(sp, sfsr_val, "SecureFault: DMA unavailable"),
         };
         if kernel.handle_ess_miss(enclave_id, block_idx, &mut dma, true).is_err() {
-            return panic_dump(sp, sfsr_val, "SecureFault: handle_ess_miss failed");
+            panic_dump(sp, sfsr_val, "SecureFault: handle_ess_miss failed");
         }
         // Clear the SFSR write-1-to-clear bits for the next fault.
         ptr::write_volatile(sfsr, sfsr_val);
@@ -308,7 +247,7 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
     let bfar_valid   = (bfsr & 0x80) != 0;  // bit 15 of CFSR
 
     if !is_ibuserr && !(is_preciserr && bfar_valid) {
-        return panic_dump(sp, cfsr_val, "BusFault: unrecoverable");
+        panic_dump(sp, cfsr_val, "BusFault: unrecoverable");
     }
 
     // For IBUSERR the faulting address is the stacked PC (instruction fetch).
@@ -328,18 +267,18 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
     {
         let kernel = match crate::secure_kernel::Kernel::get() {
             Some(k) => k,
-            None    => return panic_dump(sp, cfsr_val, "BusFault: no kernel"),
+            None    => panic_dump(sp, cfsr_val, "BusFault: no kernel"),
         };
         let (enclave_id, block_idx) = match kernel.lookup_faulting_block(fault_addr) {
             Some(pair) => pair,
-            None       => return panic_dump(sp, cfsr_val, "BusFault: addr outside any enclave"),
+            None       => panic_dump(sp, cfsr_val, "BusFault: addr outside any enclave"),
         };
         let mut dma = match drivers::dma::Dma::new() {
             Some(d) => d,
-            None    => return panic_dump(sp, cfsr_val, "BusFault: DMA unavailable"),
+            None    => panic_dump(sp, cfsr_val, "BusFault: DMA unavailable"),
         };
         if kernel.handle_ess_miss(enclave_id, block_idx, &mut dma, true).is_err() {
-            return panic_dump(sp, cfsr_val, "BusFault: handle_ess_miss failed");
+            panic_dump(sp, cfsr_val, "BusFault: handle_ess_miss failed");
         }
         ptr::write_volatile(cfsr, (bfsr as u32) << 8);
         return;
@@ -374,7 +313,7 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
 ///                         `umbra_enclave_enter_imp`.
 #[no_mangle]
 pub unsafe extern "C" fn umbra_usage_fault_dispatch(psp: u32) -> u32 {
-    use kernel::common::enclave::{EnclaveContext, EnclaveState};
+    use kernel::common::enclave::EnclaveState;
 
     let cfsr_ptr = 0xE000_ED28 as *mut u32;
     let cfsr_val = ptr::read_volatile(cfsr_ptr);
@@ -430,7 +369,7 @@ unsafe fn usage_fault_terminate(
     psp: u32,
     state: kernel::common::enclave::EnclaveState,
 ) -> u32 {
-    use kernel::common::enclave::{EnclaveContext, EnclaveState};
+    use kernel::common::enclave::EnclaveContext;
 
     // UFSR occupies CFSR bits [31:16]; clear every sub-type we might observe.
     let cfsr_ptr = 0xE000_ED28 as *mut u32;
@@ -466,14 +405,7 @@ pub extern "C" fn umbra_usage_fault_handler(sp: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn umbra_svc_handler(sp: u32) {
-    // SVC handler for synchronous calls. Currently prints debug output only.
-    // Assembly wrapper must return via bx lr for proper exception return.
-    print_str("\n[SVC] Handler Called\n");
-}
-
-#[no_mangle]
-pub extern "C" fn umbra_debug_mon_handler(sp: u32) {
+pub extern "C" fn umbra_debug_mon_handler(_sp: u32) {
     print_str("\n[DebugMon] Handler Called\n");
     loop {}
 }

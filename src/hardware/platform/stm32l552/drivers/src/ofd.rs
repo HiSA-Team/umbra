@@ -3,25 +3,41 @@
 // STM32L5xxxx OTFDEC Driver
 // On-The-Fly Decryption Engine for external memories.
 
+#[cfg(feature = "stm32l562")]
 use peripheral_regs::*;
+#[cfg(feature = "stm32l562")]
 use crate::rcc::{self, Rcc};
 
+#[cfg(feature = "stm32l562")]
 const OTFDEC_BASE_ADDR: u32 = 0x520C5000; // Secure Base Address (SVD: 0x420C5000 -> 0x520C5000)
 
+#[cfg(feature = "stm32l562")]
 const OTFDEC_CR_OFFSET:  u32 = 0x000;
+#[cfg(feature = "stm32l562")]
 const OTFDEC_ISR_OFFSET: u32 = 0x300;
+#[cfg(feature = "stm32l562")]
 const OTFDEC_ICR_OFFSET: u32 = 0x304;
 
 // Region 1 Offsets (Region 2, 3, 4 follow at +0x30 stride)
+#[cfg(feature = "stm32l562")]
 const REGION_STRIDE: u32 = 0x30;
+#[cfg(feature = "stm32l562")]
 const R1_CFGR_OFFSET: u32 = 0x20;
+#[cfg(feature = "stm32l562")]
 const R1_SADR_OFFSET: u32 = 0x24; // Start Address
+#[cfg(feature = "stm32l562")]
 const R1_EADR_OFFSET: u32 = 0x28; // End Address
+#[cfg(feature = "stm32l562")]
 const R1_NONCER0_OFFSET: u32 = 0x2C;
+#[cfg(feature = "stm32l562")]
 const R1_NONCER1_OFFSET: u32 = 0x30;
+#[cfg(feature = "stm32l562")]
 const R1_KEYR0_OFFSET: u32 = 0x34;
+#[cfg(feature = "stm32l562")]
 const R1_KEYR1_OFFSET: u32 = 0x38;
+#[cfg(feature = "stm32l562")]
 const R1_KEYR2_OFFSET: u32 = 0x3C;
+#[cfg(feature = "stm32l562")]
 const R1_KEYR3_OFFSET: u32 = 0x40;
 
 #[cfg(feature = "stm32l562")]
@@ -71,7 +87,7 @@ impl OfdDriver {
         let regs = OTFDEC_BASE_ADDR as *const u32;
         
         let rcc = Rcc::new();
-        rcc.enable_clock(rcc::Peripherals::OTFDEC);
+        rcc.enable_clock(rcc::peripherals::OTFDEC);
         
         Self { regs }
     }

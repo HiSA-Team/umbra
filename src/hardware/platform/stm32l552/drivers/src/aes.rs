@@ -3,23 +3,42 @@
 // STM32L5xxxx AES Driver
 // This driver supports AES 128/256 hardware engine and emulated software implementation.
 
+#[cfg(feature = "stm32l562")]
 use peripheral_regs::*;
+#[cfg(feature = "stm32l562")]
 use crate::rcc::{self, Rcc};
 
+#[cfg(feature = "stm32l562")]
 const AES_BASE_ADDR: u32 = 0x520C0000; // Secure AES base address for STM32L562
 
 // Registers
+#[cfg(feature = "stm32l562")]
 const AES_CR_BASE_OFFSET: u32 = 0x00;
+#[cfg(feature = "stm32l562")]
 const AES_SR_BASE_OFFSET: u32 = 0x04;
+#[cfg(feature = "stm32l562")]
 const AES_DINR_BASE_OFFSET: u32 = 0x08;
+#[cfg(feature = "stm32l562")]
 const AES_DOUTR_BASE_OFFSET: u32 = 0x0C;
+#[cfg(feature = "stm32l562")]
 const AES_KEYR0_BASE_OFFSET: u32 = 0x10;
+#[cfg(feature = "stm32l562")]
 const AES_KEYR1_BASE_OFFSET: u32 = 0x14;
+#[cfg(feature = "stm32l562")]
 const AES_KEYR2_BASE_OFFSET: u32 = 0x18;
+#[cfg(feature = "stm32l562")]
 const AES_KEYR3_BASE_OFFSET: u32 = 0x1C;
+#[cfg(feature = "stm32l562")]
+#[allow(dead_code)]
 const AES_IVR0_BASE_OFFSET: u32 = 0x20;
+#[cfg(feature = "stm32l562")]
+#[allow(dead_code)]
 const AES_IVR1_BASE_OFFSET: u32 = 0x24;
+#[cfg(feature = "stm32l562")]
+#[allow(dead_code)]
 const AES_IVR2_BASE_OFFSET: u32 = 0x28;
+#[cfg(feature = "stm32l562")]
+#[allow(dead_code)]
 const AES_IVR3_BASE_OFFSET: u32 = 0x2C;
 
 /// Common interface for AES engines (Hardware and Emulated)
@@ -49,7 +68,7 @@ impl AesHardware {
         
         // Enable clock
         let rcc = Rcc::new();
-        rcc.enable_clock(rcc::Peripherals::AES);
+        rcc.enable_clock(rcc::peripherals::AES);
         
         // Reset AES ??? (Optional, but good practice if RCC supports reset)
         
@@ -164,7 +183,7 @@ impl AesEngine for AesHardware {
             
             clear_register_bit(self.regs, AES_CR_BASE_OFFSET, 0); // Disable
             cr &= !(3 << 3); 
-            cr |= (3 << 3); // Set Mode 11 (Key Derivation + Decryption)
+            cr |= 3 << 3; // Set Mode 11 (Key Derivation + Decryption)
             write_register(self.regs, AES_CR_BASE_OFFSET, cr);
 
             // Reload original Encryption Key (Critical for Mode 11)

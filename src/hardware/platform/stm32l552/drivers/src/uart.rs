@@ -1,6 +1,7 @@
 // Author: Giovanni Spera  <giovanni.spera2011@libero.it>
 //
 // STM32L5xxxx UART Driver
+#![allow(dead_code)]
 // This driver supports for all the (LP)U(S)ART on the board.
 // While U(S)ART and LPUART are two different section in the reference manual (RM0438),
 // the registers are mostly the same.
@@ -15,6 +16,7 @@
 use peripheral_regs::*;
 use crate::rcc::Rcc;
 use crate::rcc;
+#[cfg(not(feature = "stm32l562"))]
 use crate::pwr::Pwr;
 use crate::gpio::Gpio;
 use crate::gpio;
@@ -60,8 +62,8 @@ impl Uart {
             let rcc = Rcc::new();
             
             // Enable Clocks
-            rcc.enable_clock(rcc::Peripherals::GPIOA);
-            rcc.enable_clock(rcc::Peripherals::USART1);
+            rcc.enable_clock(rcc::peripherals::GPIOA);
+            rcc.enable_clock(rcc::peripherals::USART1);
             
             // Configure GPIOA PA9(TX) PA10(RX) to AF7
             let gpio = Gpio::new(gpio::Port::GpioA);
@@ -90,8 +92,8 @@ impl Uart {
             let rcc = Rcc::new();
             
             // Initialize GPIOG
-            rcc.enable_clock(rcc::Peripherals::LPUART1);
-            rcc.enable_clock(rcc::Peripherals::GPIOG);
+            rcc.enable_clock(rcc::peripherals::LPUART1);
+            rcc.enable_clock(rcc::peripherals::GPIOG);
             
             // Configure GPIOG
             let gpio = Gpio::new(gpio::Port::GpioG);

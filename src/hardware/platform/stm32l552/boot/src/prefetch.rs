@@ -1,6 +1,3 @@
-use crate::secure_kernel::CODE_BLOCK_SIZE;
-use kernel::common::ess::MAX_REACHABLE;
-
 const QUEUE_SIZE: usize = 16;
 
 pub unsafe fn prefetch_reachables(enclave_id: u32) {

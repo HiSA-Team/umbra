@@ -122,7 +122,7 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 
 # Select the target MCU variant here
 # Options: stm32l552, stm32l562
-export MCU_VARIANT=stm32l552
+export MCU_VARIANT=stm32l562
 
 # Enable the EFB crypto benchmark (set to 1 to build with the
 # `benchmark` feature; any other value disables it). When enabled, the

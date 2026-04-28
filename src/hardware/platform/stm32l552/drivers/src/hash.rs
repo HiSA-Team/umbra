@@ -85,7 +85,7 @@ impl Hash {
         
         // Enable clock
         let rcc = Rcc::new();
-        rcc.enable_clock(rcc::Peripherals::HASH);
+        rcc.enable_clock(rcc::peripherals::HASH);
 
         // Reset
         unsafe { set_register_bit(regs as *mut u32 as *const u32, HASH_CR_BASE_OFFSET, 2); } // INIT bit

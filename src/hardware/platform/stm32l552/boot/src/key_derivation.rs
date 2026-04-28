@@ -15,6 +15,7 @@ use crate::master_key::MASTER_KEY;
 
 pub const ENC_KEY_LABEL:    &[u8] = b"umbra-enc-v1";
 pub const HMAC_KEY_LABEL:   &[u8] = b"umbra-hmac-v1";
+#[cfg(feature = "stm32l562")]
 pub const OTFDEC_KEY_LABEL: &[u8] = b"umbra-otfdec-v1";
 
 pub fn derive_enc_key(crypto: &mut dyn CryptoEngine) -> [u8; 32] {
@@ -32,6 +33,7 @@ pub fn derive_hmac_key(crypto: &mut dyn CryptoEngine) -> [u8; 32] {
 /// Derive 32 bytes of raw keying material for OTFDEC region 1 from
 /// `MASTER_KEY`. Caller slices: `[0..16] = key`, `[16..24] = nonce`,
 /// `[24..32]` discarded.
+#[cfg(feature = "stm32l562")]
 pub fn derive_otfdec_raw(crypto: &mut dyn CryptoEngine) -> [u8; 32] {
     let mut out = [0u8; 32];
     let _ = crypto.hmac(&MASTER_KEY, OTFDEC_KEY_LABEL, &mut out);

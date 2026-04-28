@@ -1,19 +1,13 @@
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
-use kernel::common::enclave::EnclaveDescriptor;
 use kernel::common::ess::EnclaveSwapSpace;
 use kernel::common::enclave::EnclaveContext;
-use kernel::key_storage_server::key_store::KeyStore;
 use kernel::key_storage_server::crypto::CryptoEngine;
 
-pub const MAX_ENCLAVES: usize = 8;
-
 pub struct Kernel {
+    #[allow(dead_code)] // Architectural: holds SAU/GTZC guard refs for potential runtime reconfiguration
     pub guards: &'static mut [&'static mut dyn MemorySecurityGuardTrait],
-    pub tees: [Option<EnclaveDescriptor>; MAX_ENCLAVES],
     pub ess: EnclaveSwapSpace,
-    pub key_store: KeyStore,
     pub crypto: Option<&'static mut dyn CryptoEngine>,
-    pub loader: Option<fn() -> u32>,
     /// Running HMAC-chain state for the currently-loading enclave. Seeded from
     /// `master_key::MASTER_KEY` in `begin_measurement()` and folded block-by-block
     /// in `load_and_verify_block()`. Compared against the enclave header's
@@ -34,10 +28,11 @@ static mut INSTANCE: Option<Kernel> = None;
 #[no_mangle]
 pub static mut CURRENT_ENCLAVE_CTX_PTR: *mut u8 = core::ptr::null_mut();
 
-use drivers::dma::{self, Dma, Request, TransferSecurity, TransferSize, TransferPriority};
+use drivers::dma::{Dma, Request, TransferSecurity, TransferSize, TransferPriority};
 use kernel::key_storage_server::key_generator::KeyGenerator;
+#[cfg(not(feature = "chained_measurement"))]
 use kernel::key_storage_server::key_store::Key;
-use kernel::common::enclave::{UmbraEnclaveHeader, UMBRA_HEADER_SIZE};
+use kernel::common::enclave::UMBRA_HEADER_SIZE;
 
 // --- CONSTANTS ---
 pub const CODE_BLOCK_SIZE: u32 = 256;
@@ -72,11 +67,8 @@ impl Kernel {
     pub fn new(guards: &'static mut [&'static mut dyn MemorySecurityGuardTrait], crypto: Option<&'static mut dyn CryptoEngine>) -> Self {
         Self {
             guards,
-            tees: [None; MAX_ENCLAVES],
             ess: EnclaveSwapSpace::new(),
-            key_store: KeyStore::new(),
             crypto,
-            loader: None,
             chain_state: [0u8; 32],
             enc_key: [0u8; 32],
             hmac_key: [0u8; 32],
@@ -113,8 +105,10 @@ impl Kernel {
         if diff == 0 { Ok(()) } else { Err(()) }
     }
 
+    #[allow(dead_code)] // Value matches assembly constant 39999 (SYSTICK_RELOAD-1) in startup.s _svc_enter
     pub const SYSTICK_RELOAD: u32 = 40_000; // ~10ms at 4MHz MSI
 
+    #[allow(dead_code)] // SysTick enabled by assembly in startup.s _svc_enter; this method exists for future Rust-side use
     pub unsafe fn enable_systick(&self) {
         let syst_rvr = 0xE000_E014 as *mut u32;
         let syst_cvr = 0xE000_E018 as *mut u32;
@@ -188,7 +182,8 @@ impl Kernel {
         core::ptr::write_volatile(mpu_rnr, 5);
         let saved_rlar = core::ptr::read_volatile(mpu_rlar);
         core::ptr::write_volatile(mpu_rlar, saved_rlar & !1u32);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         // Write UDF via the Secure alias.  The slot is still Secure in
         // MPCBB at this point; NS-alias writes to Secure slots are
@@ -207,17 +202,21 @@ impl Kernel {
             core::ptr::write_volatile(dccimvac, addr);
             addr += 32;
         }
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         core::ptr::write_volatile(mpu_rlar, saved_rlar);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         let iciallu = 0xE000EF50 as *mut u32;
         core::ptr::write_volatile(iciallu, 0);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         drivers::gtzc::mpcbb_set_slot_secure(slot_addr_ns, false);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         if let Some(enclave) = self.ess.loaded_enclaves.iter_mut()
             .flatten()
@@ -259,7 +258,8 @@ impl Kernel {
                 scratch_addr as *mut u8,
                 transfer_size as usize,
             );
-            core::arch::asm!("dsb", "isb");
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
         }
 
         #[cfg(not(feature = "stm32l562"))]
@@ -312,7 +312,7 @@ impl Kernel {
                 dma.enqueue(&request);
 
                 while !crate::is_dma_complete() {
-                    core::arch::asm!("wfi");
+                    cortex_m::asm::wfi();
                 }
             }
         }
@@ -324,7 +324,8 @@ impl Kernel {
             *dcimvac = addr;
             addr += 32;
         }
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         let scratch_ptr = scratch_addr as *const u8;
         let hmac_ptr = scratch_ptr;
@@ -384,28 +385,29 @@ impl Kernel {
         let metadata: &[u8; V_BLOCK_META_SIZE] = &*(meta_ptr as *const [u8; V_BLOCK_META_SIZE]);
         let ciphertext: &[u8; V_CODE_BLOCK_SIZE] = &*(ct_ptr as *const [u8; V_CODE_BLOCK_SIZE]);
 
-        // 5. Validator call — HMAC check only, plaintext ignored (DMA install below).
+        // 5. Validator call — HMAC + decrypt + block_id check.
         {
-            let crypto: &mut dyn CryptoEngine =
-                self.crypto.as_deref_mut().ok_or(0xFFFFFFF9u32)?;
-            let validated = validate_block(
-                crypto,
-                block_idx,
-                ciphertext,
-                metadata,
-                hmac_on_flash,
-                &self.hmac_key,
-                &self.enc_key,
-            ).map_err(|e| match e {
-                ValidationError::HmacMismatch      => 0xFFFFFFFCu32,
-                ValidationError::DecryptFailed     => 0xFFFFFFFBu32,
-                ValidationError::CryptoUnavailable => 0xFFFFFFF9u32,
-            })?;
+            let validated = self.crypto.as_deref_mut()
+                .ok_or(ValidationError::CryptoUnavailable)
+                .and_then(|crypto| validate_block(
+                    crypto,
+                    block_idx,
+                    ciphertext,
+                    metadata,
+                    hmac_on_flash,
+                    &self.hmac_key,
+                    &self.enc_key,
+                ))
+                .map_err(|e| match e {
+                    ValidationError::HmacMismatch      => 0xFFFFFFFCu32,
+                    ValidationError::DecryptFailed     => 0xFFFFFFFBu32,
+                    ValidationError::CryptoUnavailable => 0xFFFFFFF9u32,
+                })?;
 
             if validated.block_id != block_idx {
                 return Err(0xFFFFFFFDu32);
             }
-        } // crypto borrow released here
+        }
 
         // 7. Eviction check
         {
@@ -441,7 +443,8 @@ impl Kernel {
         core::ptr::write_volatile(mpu_rnr, 5);
         let saved_rlar = core::ptr::read_volatile(mpu_rlar);
         core::ptr::write_volatile(mpu_rlar, saved_rlar & !1u32);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         // DMA: scratch ciphertext → ESS (NS alias — block is still NS)
         {
@@ -477,12 +480,13 @@ impl Kernel {
                 *ccr3 = 0;
                 dma.enqueue(&install_req);
                 while !crate::is_dma_complete() {
-                    core::arch::asm!("wfi");
+                    cortex_m::asm::wfi();
                 }
             }
         }
 
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         // L552: decrypt in-place in ESS via Secure alias (CPU is Secure,
         // can access NS memory through the Secure alias).
@@ -498,11 +502,13 @@ impl Kernel {
 
         // MPCBB flip to Secure — AFTER data is installed and decrypted.
         drivers::gtzc::mpcbb_set_slot_secure(ess_target_addr, true);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         core::ptr::write_volatile(mpu_rnr, 5);
         core::ptr::write_volatile(mpu_rlar, saved_rlar);
-        core::arch::asm!("dsb", "isb");
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         // 10. Mark descriptor loaded + increment LFU counter.
         if let Some(slot) = self.ess.loaded_enclaves.iter_mut()
@@ -526,10 +532,12 @@ impl Kernel {
             let mut addr = ess_write_addr;
             let end_addr = ess_write_addr + V_CODE_BLOCK_SIZE as u32;
             while addr < end_addr { *dccimvac = addr; addr += 32; }
-            core::arch::asm!("dsb", "isb");
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
             let iciallu = 0xE000EF50 as *mut u32;
             *iciallu = 0;
-            core::arch::asm!("dsb", "isb");
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
         }
 
         Ok(())
@@ -540,7 +548,7 @@ impl Kernel {
     }
 
     pub unsafe fn get() -> Option<&'static mut Kernel> {
-        INSTANCE.as_mut()
+        (*(&raw mut INSTANCE)).as_mut()
     }
 
     // BFS-based Recursive Loader
@@ -641,10 +649,12 @@ impl Kernel {
                 *dcimvac = addr;
                 addr += 32;
             }
-            core::arch::asm!("dsb", "isb");
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
             let iciallu = 0xE000EF50 as *mut u32;
             *iciallu = 0;
-            core::arch::asm!("dsb", "isb");
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
 
             // Return pointer to the meta block copy inside verify_buf so the
             // BFS loop can walk reachability. verify_buf survives until the

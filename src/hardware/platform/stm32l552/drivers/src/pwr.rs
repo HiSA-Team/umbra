@@ -1,7 +1,8 @@
 // STM32L5xxxx PWR Driver
 // This driver implements the Power control (PWR) peripheral present on STM32L5xxxx.
-// 
+//
 // Implements a minimal subset of PWR features needed by the other drivers.
+#![allow(dead_code)]
 
 // Crates
 use peripheral_regs::*;
@@ -47,7 +48,7 @@ impl Pwr {
     
     pub fn enable_clock(&self) {
         let rcc = Rcc::new();
-        rcc.enable_clock(Peripherals::PWR);
+        rcc.enable_clock(peripherals::PWR);
     }
     
     pub fn enable_to_backup_domain(&self) {
