@@ -16,17 +16,6 @@
         pop {r4, lr}
         bxns lr
 
-    .global umbra_enclave_run
-    .extern umbra_enclave_run_imp
-
-    .thumb_func
-    umbra_enclave_run:
-        sg
-        push {r4, lr}
-        bl umbra_enclave_run_imp
-        pop {r4, lr}
-        bxns lr
-
     .global umbra_debug_print
     .extern umbra_debug_print_imp
 

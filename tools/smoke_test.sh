@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # T3 smoke-test harness.
 # Prereqs: `make openocd` running in another shell (telnet port 4444 reachable).
 #
@@ -22,7 +22,7 @@ set -uo pipefail
 # process input as raw bytes.
 export LC_ALL=C
 
-UART="${UMBRA_UART:?Set UMBRA_UART to the target's serial device}"
+UART="${UMBRA_UART:?Set UMBRA_UART to the target serial device}"
 OOCD_HOST="${UMBRA_OOCD_HOST:-localhost}"
 OOCD_TELNET_PORT="${UMBRA_OOCD_TELNET_PORT:-4444}"
 LOG="tools/last_uart.log"
@@ -73,14 +73,8 @@ fi
 # mask 0xHEX on lines whose content matches the drift-allowed patterns below.
 # Add more patterns here if other lines prove volatile.
 normalize() {
-    sed -E '
-        /_umb_stack_size:/           s/0x[0-9A-Fa-f]+/0xDRIFT/g
-        /Current Secure Stack Usage:/ s/0x[0-9A-Fa-f]+/0xDRIFT/g
-        /Remaining Secure Stack:/    s/0x[0-9A-Fa-f]+/0xDRIFT/g
-        /SHCSR before:/              s/0x[0-9A-Fa-f]+/0xDRIFT/g
-        /SHCSR after:/               s/0x[0-9A-Fa-f]+/0xDRIFT/g
-        s| //ALLOW_DRIFT$||
-    ' "$1" \
+    tr -d '\200-\377' < "$1" \
+    | sed -E -e '/_umb_stack_size:/s/0x[0-9A-Fa-f]+/0xDRIFT/g' -e '/Current Secure Stack Usage:/s/0x[0-9A-Fa-f]+/0xDRIFT/g' -e '/Remaining Secure Stack:/s/0x[0-9A-Fa-f]+/0xDRIFT/g' -e '/SHCSR before:/s/0x[0-9A-Fa-f]+/0xDRIFT/g' -e '/SHCSR after:/s/0x[0-9A-Fa-f]+/0xDRIFT/g' -e 's| //ALLOW_DRIFT$||' \
     | awk '/\[USER\] Enclave preempted/ { if (!seen_preempt) { print; seen_preempt=1 } next } { seen_preempt=0; print }' \
     | awk '{ lines[NR]=$0 } /[^ \t]/{last=NR} END{ for(i=1;i<=last;i++) print lines[i] }'
 }

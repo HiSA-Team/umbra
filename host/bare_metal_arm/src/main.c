@@ -29,7 +29,6 @@ const uint8_t enclave_header[48] = {
     0xCC, 0xC8, 0x30, 0x59, 0x03, 0xCC, 0xD9, 0x36};
 
 extern unsigned int umbra_tee_create(unsigned int base_addr);
-extern unsigned int umbra_enclave_run(void);
 extern void umbra_debug_print(const char *s);
 extern unsigned int umbra_enclave_enter(unsigned int enclave_id);
 extern unsigned int umbra_enclave_status(unsigned int enclave_id);

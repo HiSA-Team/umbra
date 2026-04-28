@@ -38,17 +38,15 @@ Connect to the ST-Link UART at **9600 baud**:
 
 ```
 [UMBRASecureBoot] Secure Boot started
-[UMBRASecureBoot] SAU started
-[UMBRASecureBoot] GTZC started
 [UMBRASecureBoot] Kernel Initialized
-[UMBRASecureBoot] SysTick configured (disabled)
 [UMBRASecureBoot] Jumping to Non-Secure World
 [USER] Hello Non-Secure World!
-[UMBRASecureBoot] chained-measurement OK
 [USER] Enclave created
 [USER] Enclave terminated! R0=0x72CA33A8
 [USER] All enclaves done
 ```
+
+Note: additional diagnostic output (stack info, SAU/GTZC/MPU status, HASH/AES tests) is available by building with the `boot_tests` feature enabled.
 
 ## Smoke Tests
 
