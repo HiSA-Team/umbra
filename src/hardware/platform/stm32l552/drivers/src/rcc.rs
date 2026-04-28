@@ -1,7 +1,8 @@
 // STM32L5xxxx RCC Driver
 // This driver implements the Reset and Clock Control (RCC) peripheral present on STM32L5xxxx.
-// 
+//
 // Implements a minimal subset of RCC features needed by the other drivers.
+#![allow(dead_code)]
 
 // Crates
 use peripheral_regs::*;
@@ -71,7 +72,7 @@ pub enum Bus {
 
 pub type Peripheral = (Bus, u8);
     
-pub mod Peripherals {
+pub mod peripherals {
     use super::{Peripheral, Bus};
 
     // AHB 1

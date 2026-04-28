@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 peripheral_regs = { path = "../../common/peripheral_regs" }
+cortex-m = "0.7"
 kernel = { path = "../../../kernel" }

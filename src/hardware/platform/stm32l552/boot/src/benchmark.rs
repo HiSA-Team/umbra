@@ -286,6 +286,6 @@ pub fn run_all(uart: &Uart) -> ! {
     print_done(uart);
 
     loop {
-        unsafe { core::arch::asm!("wfi"); }
+        cortex_m::asm::wfi();
     }
 }

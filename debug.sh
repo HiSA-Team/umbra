@@ -1,4 +1,5 @@
 #!/bin/bash
+source ./settings.sh
 
 if [ "$MCU_VARIANT" = "stm32l562" ]; then
     # Flash the plaintext enclave blob into OCTOSPI.

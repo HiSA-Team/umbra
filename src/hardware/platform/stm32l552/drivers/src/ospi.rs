@@ -54,7 +54,7 @@ pub struct OspiDriver {
 impl OspiDriver {
     pub fn new() -> Self {
         let rcc = Rcc::new();
-        rcc.enable_clock(rcc::Peripherals::OSPI1);
+        rcc.enable_clock(rcc::peripherals::OSPI1);
         rcc.select_ospi_clock_source_sysclk();
         rcc.reset_ospi();
         Self { regs: OCTOSPI1_BASE_ADDR as *const u32 }
@@ -68,9 +68,9 @@ impl OspiDriver {
     pub fn init(&self) {
         // --- 1. GPIO AF10 configuration for OCTOSPI1 on L562E-DK ---
         let rcc = Rcc::new();
-        rcc.enable_clock(rcc::Peripherals::GPIOA);
-        rcc.enable_clock(rcc::Peripherals::GPIOB);
-        rcc.enable_clock(rcc::Peripherals::GPIOC);
+        rcc.enable_clock(rcc::peripherals::GPIOA);
+        rcc.enable_clock(rcc::peripherals::GPIOB);
+        rcc.enable_clock(rcc::peripherals::GPIOC);
 
         let gpioa = Gpio::new(Port::GpioA);
         let gpiob = Gpio::new(Port::GpioB);

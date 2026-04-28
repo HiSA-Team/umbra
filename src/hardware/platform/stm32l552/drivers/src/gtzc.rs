@@ -1,5 +1,5 @@
 
-
+#![allow(dead_code)]
 // STM32L5xxx Global TrustZone Controller
 
 // Using Rust Naming conventions https://rust-lang.github.io/api-guidelines/naming.html

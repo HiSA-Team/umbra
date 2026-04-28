@@ -1,7 +1,8 @@
 // STM32L5xxxx GPIO Driver
 // This driver implements the General Purpose Input Output (GPIO) peripheral present on STM32L5xxxx.
-// 
+//
 // Implements a minimal subset of GPIO features needed by the other drivers.
+#![allow(dead_code)]
 
 // Crates
 use peripheral_regs::*;
@@ -75,14 +76,14 @@ impl Gpio {
         let rcc = Rcc::new();
 
         match self.port() {
-            Port::GpioA => rcc.enable_clock(rcc::Peripherals::GPIOA),
-            Port::GpioB => rcc.enable_clock(rcc::Peripherals::GPIOB),
-            Port::GpioC => rcc.enable_clock(rcc::Peripherals::GPIOC),
-            Port::GpioD => rcc.enable_clock(rcc::Peripherals::GPIOD),
-            Port::GpioE => rcc.enable_clock(rcc::Peripherals::GPIOE),
-            Port::GpioF => rcc.enable_clock(rcc::Peripherals::GPIOF),
-            Port::GpioG => rcc.enable_clock(rcc::Peripherals::GPIOG),
-            Port::GpioH => rcc.enable_clock(rcc::Peripherals::GPIOH),
+            Port::GpioA => rcc.enable_clock(rcc::peripherals::GPIOA),
+            Port::GpioB => rcc.enable_clock(rcc::peripherals::GPIOB),
+            Port::GpioC => rcc.enable_clock(rcc::peripherals::GPIOC),
+            Port::GpioD => rcc.enable_clock(rcc::peripherals::GPIOD),
+            Port::GpioE => rcc.enable_clock(rcc::peripherals::GPIOE),
+            Port::GpioF => rcc.enable_clock(rcc::peripherals::GPIOF),
+            Port::GpioG => rcc.enable_clock(rcc::peripherals::GPIOG),
+            Port::GpioH => rcc.enable_clock(rcc::peripherals::GPIOH),
         }
     }
 

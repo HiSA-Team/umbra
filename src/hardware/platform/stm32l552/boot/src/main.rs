@@ -18,7 +18,6 @@
 #![no_main]
 #![no_std]
 
-use core::arch::global_asm;
 // Local Modules
 
 // Platform-related crates
@@ -41,6 +40,7 @@ mod crypto_impl;
 mod secure_kernel;
 mod api_impl;
 
+mod raw_print;
 mod handlers;
 mod master_key;
 mod key_derivation;
@@ -71,7 +71,7 @@ static mut CIPHERTEXT_BUF: [u8; OTFDEC_REGION_SIZE_BSS] = [0u8; OTFDEC_REGION_SI
 
 #[inline(never)]
 fn print_hex(_uart: &Uart, val: u32) {
-    handlers::print_hex(val);
+    crate::raw_print::print_hex(val);
 }
 
 extern "C" {
@@ -90,10 +90,10 @@ pub unsafe fn secure_boot() -> !{
     // STM32L552 Nucleo: PB7 (Blue)
     // STM32L562 Discovery: PD3 (Red)
     #[cfg(feature = "stm32l562")]
-    let (periph, port, pin) = (rcc::Peripherals::GPIOD, gpio::Port::GpioD, 3);
+    let (periph, port, pin) = (rcc::peripherals::GPIOD, gpio::Port::GpioD, 3);
     
     #[cfg(not(feature = "stm32l562"))]
-    let (periph, port, pin) = (rcc::Peripherals::GPIOB, gpio::Port::GpioB, 7);
+    let (periph, port, pin) = (rcc::peripherals::GPIOB, gpio::Port::GpioB, 7);
 
     rcc.enable_clock(periph);
     let gpio_led = gpio::Gpio::new(port);
@@ -120,8 +120,7 @@ pub unsafe fn secure_boot() -> !{
     let umb_estack_val = &_umb_estack as *const u32 as u32;
 
     // Calculate current stack usage (sp)
-    let sp: u32;
-    core::arch::asm!("mov {}, sp", out(reg) sp);
+    let sp: u32 = cortex_m::register::msp::read() as u32;
     let used_stack = umb_estack_val - sp;
     
     // Attempting to print using simple hex loop to avoid trait issues if Uart doesn't implement it perfectly
@@ -166,7 +165,7 @@ pub unsafe fn secure_boot() -> !{
     let mut sau_driver : sau::SauDriver = sau::SauDriver::new();
     serial.write("[UMBRASecureBoot] SAU started\n");
 
-    rcc.enable_clock(rcc::Peripherals::GTZC);
+    rcc.enable_clock(rcc::peripherals::GTZC);
     let mut gtzc_driver : gtzc::GtzcDriver = gtzc::GtzcDriver::new();
     serial.write("[UMBRASecureBoot] GTZC started\n");
 
@@ -299,8 +298,8 @@ pub unsafe fn secure_boot() -> !{
     /////////////////////////////////////
     // DMA Demo                        //
     /////////////////////////////////////
-    rcc.enable_clock(rcc::Peripherals::DMA1);
-    rcc.enable_clock(rcc::Peripherals::DMA2);
+    rcc.enable_clock(rcc::peripherals::DMA1);
+    rcc.enable_clock(rcc::peripherals::DMA2);
     serial.write("[UMBRASecureBoot] TEST DMA\n");
     
     // Enable NVIC for DMA1 Channel 1 (IRQ 29)
@@ -311,10 +310,10 @@ pub unsafe fn secure_boot() -> !{
         // IRQ 29, 30, 31 in ISER0
         *nvic_iser0 |= (1 << 29) | (1 << 30) | (1 << 31);
         // IRQ 32 in ISER1 (Bit 0)
-        *nvic_iser1 |= (1 << 0);
-        
+        *nvic_iser1 |= 1 << 0;
+
         // Enable Global Interrupts
-        core::arch::asm!("cpsie i");
+        cortex_m::interrupt::enable();
     }
     
     /////////////////////////////////////
@@ -344,7 +343,7 @@ pub unsafe fn secure_boot() -> !{
     hash.finish(ctx, &mut digest);
 
     serial.write("\t[HMAC] SHA256: ");
-    handlers::print_hex_bytes(&digest);
+    crate::raw_print::print_hex_bytes(&digest);
     serial.write("\n");
     
     /////////////////////////////////////
@@ -375,7 +374,7 @@ pub unsafe fn secure_boot() -> !{
         aes.encrypt_block(&input, &mut output);
         
         serial.write("\t[AES] Encrypted: ");
-        handlers::print_hex_bytes(&output);
+        crate::raw_print::print_hex_bytes(&output);
         serial.write("\n");
 
         if output == expected_ciphertext {
@@ -410,8 +409,8 @@ pub unsafe fn secure_boot() -> !{
         
         GLOBAL_CRYPTO = Some(crypto_impl::UmbraCryptoEngine::new(hash_driver, aes_driver));
 
-        let crypto_engine = GLOBAL_CRYPTO.as_mut().unwrap();
-        let guards = &mut GLOBAL_GUARDS;
+        let crypto_engine = (*(&raw mut GLOBAL_CRYPTO)).as_mut().unwrap();
+        let guards = &mut *(&raw mut GLOBAL_GUARDS);
 
         let kernel = Kernel::new(guards, Some(crypto_engine));
         Kernel::init(kernel);
@@ -479,7 +478,7 @@ pub unsafe fn secure_boot() -> !{
         // Re-borrowing GLOBAL_CRYPTO here aliases the &mut held by Kernel, but
         // init_keys() has already returned and no NS code is running yet, so
         // the aliasing window is a single-threaded boot-time read.
-        let raw = key_derivation::derive_otfdec_raw(GLOBAL_CRYPTO.as_mut().unwrap());
+        let raw = key_derivation::derive_otfdec_raw((*(&raw mut GLOBAL_CRYPTO)).as_mut().unwrap());
         let mut otfdec_key = [0u8; 16];
         let mut otfdec_nonce = [0u8; 8];
         let mut i = 0;
@@ -518,12 +517,12 @@ pub unsafe fn secure_boot() -> !{
             for i in 0..OTFDEC_NUM_WORDS {
                 let mm_addr = (OCTOSPI_MEMMAP_BASE as usize) + i * 4;
                 let pt_word = core::ptr::read_unaligned(
-                    (PLAINTEXT_BUF.as_ptr() as usize + i * 4) as *const u32,
+                    ((&raw const PLAINTEXT_BUF).cast::<u8>() as usize + i * 4) as *const u32,
                 );
                 core::ptr::write_volatile(mm_addr as *mut u32, pt_word);
                 let ct_word = core::ptr::read_volatile(mm_addr as *const u32);
                 core::ptr::write_unaligned(
-                    (CIPHERTEXT_BUF.as_mut_ptr() as usize + i * 4) as *mut u32,
+                    ((&raw mut CIPHERTEXT_BUF).cast::<u8>() as usize + i * 4) as *mut u32,
                     ct_word,
                 );
             }
@@ -543,7 +542,7 @@ pub unsafe fn secure_boot() -> !{
             for p in 0..OTFDEC_NUM_PAGES {
                 let off = p * 256;
                 let slice = core::slice::from_raw_parts(
-                    CIPHERTEXT_BUF.as_ptr().add(off),
+                    (&raw const CIPHERTEXT_BUF).cast::<u8>().add(off),
                     256,
                 );
                 if ospi.page_program(off as u32, slice).is_err() { s2_fail(&serial); }
@@ -563,7 +562,7 @@ pub unsafe fn secure_boot() -> !{
                     ((OCTOSPI_MEMMAP_BASE as usize) + i * 4) as *const u32,
                 );
                 let want = core::ptr::read_unaligned(
-                    (PLAINTEXT_BUF.as_ptr() as usize + i * 4) as *const u32,
+                    ((&raw const PLAINTEXT_BUF).cast::<u8>() as usize + i * 4) as *const u32,
                 );
                 if got != want { verify_pass = false; break; }
             }
@@ -632,28 +631,9 @@ pub unsafe fn secure_boot() -> !{
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 extern "C" {
-    // The trampoline function is used to jump to the
-    // host entry point, which is defined in the linker
-    // script.
+    /// Trampoline to non-secure world. Assembly lives in asm/arm/trampoline.s.
     pub fn trampoline_to_ns();
 }
-#[cfg(all(target_arch = "arm", target_os = "none"))]
-global_asm!(
-    "
-    .section .text
-    .global trampoline_to_ns
-    .extern _host_entry_point     
-
-    trampoline_to_ns:
-        ldr r0, =0x20020000
-        msr MSP_NS, r0
-        ldr r0, =_host_entry_point      // Load the address of ns_fn 
-        movs r1, #1
-        bics r0, r1                     // Clear bit 0 of address in r0 
-        blxns r0                        // Branch to the non-secure function 
-
-    "
-);
 
 
 // Synchronization for DMA Tests
@@ -661,12 +641,12 @@ static mut DMA_COMPLETED: bool = false;
 
 #[no_mangle]
 pub extern "Rust" fn is_dma_complete() -> bool {
-    unsafe { core::ptr::read_volatile(&DMA_COMPLETED) }
+    unsafe { core::ptr::read_volatile(&raw const DMA_COMPLETED) }
 }
 
 #[no_mangle]
 pub extern "Rust" fn reset_dma_complete() {
-    unsafe { core::ptr::write_volatile(&mut DMA_COMPLETED, false); }
+    unsafe { core::ptr::write_volatile(&raw mut DMA_COMPLETED, false); }
 }
 
 #[no_mangle]
