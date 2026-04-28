@@ -118,8 +118,8 @@ program_elf_boot:
 
 program_elf_host:
 	$(GDB) $(HOST_ELF) \
-	-ex 'directory host/bare_metal_arm/src' \
-	-ex 'directory host/bare_metal_arm/app' \
+	-ex 'directory $(HOST_DIR)/src' \
+	-ex 'directory $(HOST_DIR)/app' \
 	-ex 'directory $(KERNEL_DIR)/src' \
 	-ex 'directory $(SECBOOT_DIR)/src' \
 	-ex 'directory $(PLATFORM_DIR)/drivers/src' \
@@ -160,9 +160,9 @@ program_target: enable_security
 # (OTFDEC ENC-mode + OCTOSPI PP) to overwrite it with the real ciphertext
 # in place on first boot. There is no offline encryptor.
 program_enclaves_extload:
-	$(MAKE) -C host/bare_metal_arm enclaves_plain.bin
+	$(MAKE) -C $(HOST_DIR) enclaves_plain.bin
 	$(FLASHER) $(CONNECT) --extload $(EXTLOAD_STLDR) \
-		--download host/bare_metal_arm/enclaves_plain.bin 0x90000000 -v
+		--download $(HOST_DIR)/enclaves_plain.bin 0x90000000 -v
 
 #########
 # PHONY #

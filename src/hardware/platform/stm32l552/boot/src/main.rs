@@ -629,7 +629,13 @@ pub unsafe fn secure_boot() -> !{
     // Configure VTOR and MSP_NS       //
     /////////////////////////////////////
 
-    rcc::Rcc::set_vtor_ns(0x08040000);
+    // Point VTOR_NS to SRAM (0x20000000) where the NS host copies its
+    // vector table during .data initialization.  The IDAU on STM32L5
+    // classifies 0x08040000 as Secure for data reads, so the hardware
+    // vector fetch fails if VTOR points to flash.  SRAM is genuinely NS.
+    // This is safe for hosts without an SRAM vector table: they never
+    // trigger NS exceptions, so the stale SRAM content is never fetched.
+    rcc::Rcc::set_vtor_ns(0x20000000);
 
     /////////////////////////////////////
     // Jump to Non-Secure World        //

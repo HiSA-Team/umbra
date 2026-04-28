@@ -5,6 +5,9 @@
 # Ignore build artifacts
 lib/*
 
+# Explicitly track FreeRTOS-Kernel submodule despite lib/* rule
+!host/freertos_arm/lib/FreeRTOS-Kernel
+
 # Ignore deprecated
 deprecated
 
@@ -15,6 +18,8 @@ todo
 # Ignore builds for bare_metal_arm
 host/bare_metal_arm/bin/*
 host/bare_metal_arm/obj/*
+host/freertos_arm/bin/*
+host/freertos_arm/obj/*
 
 # T3 smoke-test transient output (golden_uart.log is tracked)
 tools/last_uart.log
