@@ -1,0 +1,31 @@
+[package]
+name = "boot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7"
+arm = { path = "../../../architecture/arm" }
+drivers = { path = "../drivers" }
+kernel = { path = "../../../../kernel", default-features = false, features = ["platform-n657"] }
+peripheral_regs = { path = "../../../common/peripheral_regs" }
+
+[features]
+default = ["chained_measurement"]
+boot_tests = []
+chained_measurement = []
+# `ess_miss_recovery` is referenced via `#[cfg(feature = "ess_miss_recovery")]`
+# in shared `secure_kernel.rs` (UDF-trap demand-paging path). Not enabled on
+# N657 — there's no transparent block-decrypt peripheral here for runtime
+# fetch — but declared so the cfg checks don't emit `unexpected_cfgs` warnings.
+ess_miss_recovery = []
+
+[profile.dev]
+panic = "abort"
+opt-level = 0
+debug = true
+
+[profile.release]
+panic = "abort"
+debug = true
+opt-level = 0

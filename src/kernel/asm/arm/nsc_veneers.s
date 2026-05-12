@@ -1,18 +1,18 @@
     .syntax unified
-    .cpu cortex-m33
+    // .cpu is controlled by the build.rs -mcpu flag per platform
     .thumb
 
     // NSC veneer section — SG entry points callable from Non-Secure world
     .section .umbra_nsc_api, "a"
 
-    .global umbra_tee_create
-    .extern umbra_tee_create_imp
+    .global umbra_enclave_create
+    .extern umbra_enclave_create_imp
 
     .thumb_func
-    umbra_tee_create:
+    umbra_enclave_create:
         sg
         push {r4, lr}
-        bl umbra_tee_create_imp
+        bl umbra_enclave_create_imp
         pop {r4, lr}
         bxns lr
 

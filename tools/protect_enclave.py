@@ -6,6 +6,7 @@ import struct
 import hmac
 import hashlib
 import binascii
+import tempfile
 
 # --- Configuration ---
 # Size of the executable code block (in bytes) that is loaded into RAM
@@ -18,6 +19,9 @@ def run_cmd(args):
     try:
         result = subprocess.run(args, capture_output=True, text=True, check=True)
         return result.stdout
+    except FileNotFoundError:
+        print(f"Error: required tool not found on PATH: {args[0]}")
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"Error running command: {' '.join(args)}\n{e.stderr}")
         sys.exit(1)
@@ -52,7 +56,7 @@ def update_section(elf_path, section_name, input_file):
     """Update section content from a file."""
     run_cmd([
         "arm-none-eabi-objcopy",
-        f"--update-section", f"{section_name}={input_file}",
+        "--update-section", f"{section_name}={input_file}",
         elf_path
     ])
 
@@ -107,34 +111,28 @@ def parse_disassembly(elf_path, section_name):
 
 def encrypt_block(data, key):
     """Encrypt data using AES-128-CTR via OpenSSL (matching debug_hmac.py)."""
-    # Create temp files
-    with open("temp_pt.bin", "wb") as f:
-        f.write(data)
-    
     key_hex = key.hex()
-    iv_hex = "00" * 16 # Fixed IV for now (should be random in production but matching earlier context)
-    
-    run_cmd([
-        "openssl", "enc", "-aes-128-ctr", "-in", "temp_pt.bin", "-out", "temp_ct.bin",
-        "-K", key_hex, "-iv", iv_hex, "-nosalt"
-    ])
-    
-    with open("temp_ct.bin", "rb") as f:
-        ct = f.read()
-        
-    os.remove("temp_pt.bin")
-    os.remove("temp_ct.bin")
-    return ct
+    iv_hex = "00" * 16  # Fixed IV for now (should be random in production but matching earlier context)
+
+    with tempfile.TemporaryDirectory(prefix="umbra_enc_") as tmpdir:
+        pt_path = os.path.join(tmpdir, "pt.bin")
+        ct_path = os.path.join(tmpdir, "ct.bin")
+        with open(pt_path, "wb") as f:
+            f.write(data)
+
+        run_cmd([
+            "openssl", "enc", "-aes-128-ctr", "-in", pt_path, "-out", ct_path,
+            "-K", key_hex, "-iv", iv_hex, "-nosalt"
+        ])
+
+        with open(ct_path, "rb") as f:
+            return f.read()
 
 def load_symbols(elf_path):
     """Load symbols from ELF using nm, including local symbols."""
     # -a: debug-syms, -n: numeric sort
-    cmd = ["arm-none-eabi-nm", "-a", "-n", elf_path]
-    try:
-        output = run_cmd(cmd)
-    except Exception:
-        return {}
-        
+    output = run_cmd(["arm-none-eabi-nm", "-a", "-n", elf_path])
+
     syms = {}
     for line in output.splitlines():
         # Format: 0800xxxx t .L3
@@ -159,7 +157,7 @@ def main():
         sys.exit(1)
 
     elf_file = argv[0]
-    main_c_file = argv[1]
+    # argv[1] = main_c — positional placeholder, currently unused
     key_file = argv[2]
     
     print(f"[Protect] Processing {elf_file}...")
@@ -186,11 +184,11 @@ def main():
     print(f"[Protect] Section ._enclave_code: VMA=0x{sec_info['vma']:x}, Size={sec_info['size']}")
     
     # 3. Extract Raw Code
-    raw_code_file = "raw_code.bin"
-    extract_section(elf_file, "._enclave_code", raw_code_file)
-    with open(raw_code_file, "rb") as f:
-        full_code = f.read()
-    os.remove(raw_code_file)
+    with tempfile.TemporaryDirectory(prefix="umbra_protect_") as tmpdir:
+        raw_code_file = os.path.join(tmpdir, "raw_code.bin")
+        extract_section(elf_file, "._enclave_code", raw_code_file)
+        with open(raw_code_file, "rb") as f:
+            full_code = f.read()
     
     insts, labels = parse_disassembly(elf_file, "._enclave_code")
     
@@ -320,10 +318,14 @@ def main():
                 args = re.split(r'[,\s]+', ins['op_str'])
                 for arg in args:
                     try:
-                        if arg.startswith('0x'): target_val = int(arg, 16)
-                        elif re.match(r'^[0-9a-f]+$', arg): target_val = int(arg, 16)
-                        if target_val is not None: break
-                    except ValueError: pass
+                        if arg.startswith('0x'):
+                            target_val = int(arg, 16)
+                        elif re.match(r'^[0-9a-f]+$', arg):
+                            target_val = int(arg, 16)
+                        if target_val is not None:
+                            break
+                    except ValueError:
+                        pass
                     
             if target_val is not None:
                 # Check if val is a VMA in our range

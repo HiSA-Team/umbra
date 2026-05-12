@@ -5,6 +5,15 @@ edition = "2021"
 
 [dependencies]
 
+[features]
+# Exactly one platform feature must be enabled by the boot crate. The platform
+# feature selects the ESS / EFBC / PSP base addresses in common::ess to match
+# the silicon's memory map. Default keeps the historical L552 selection so
+# kernel-alone `cargo check` succeeds.
+default = ["platform-l552"]
+platform-l552 = []
+platform-n657 = []
+
 [lib]
 name = "kernel"
 path = "src/lib.rs"

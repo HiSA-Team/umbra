@@ -24,11 +24,11 @@
 set -uo pipefail
 
 UART="${UMBRA_UART:?Set UMBRA_UART to the target serial device}"
-OOCD_HOST="${UMBRA_OOCD_HOST:-localhost}"
-OOCD_TELNET_PORT="${UMBRA_OOCD_TELNET_PORT:-4444}"
-OOCD_GDB_PORT="${UMBRA_OOCD_GDB_PORT:-3333}"
 LOG="tools/last_uart_fault.log"
-WAIT_MS="${UMBRA_SMOKE_WAIT_MS:-10000}"
+
+# Shared helpers (oocd_telnet, flash_elf, start_picocom_capture,
+# target_reset_run, plus UMBRA_OOCD_HOST/PORT/WAIT_MS defaults).
+source "$(cd "$(dirname "$0")" && pwd)/smoke_test_lib.sh"
 
 HOST_ELF="host/bare_metal_arm/bin/bare_metal_arm.elf"
 BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
@@ -38,20 +38,6 @@ BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/re
 # Without ess_miss_recovery, layout is [Meta(32)|CT(256)], so CT starts at 32.
 CORRUPT_OFFSET="${UMBRA_CORRUPT_OFFSET:-64}"
 EXPECT_MARKER="${UMBRA_EXPECT_MARKER:-[UMBRASecureBoot] chained-measurement FAIL}"
-
-oocd_telnet() {
-    nc -w 5 "$OOCD_HOST" "$OOCD_TELNET_PORT"
-}
-
-flash_elf() {
-    # Non-interactive GDB load. Loads only program sections, exits cleanly.
-    arm-none-eabi-gdb "$1" \
-        -ex "target extended-remote :${OOCD_GDB_PORT}" \
-        -ex 'set confirm off' \
-        -ex "load $1" \
-        -ex 'detach' \
-        -ex 'quit' >/dev/null 2>&1
-}
 
 # 1. Rebuild a clean image.
 echo "[fault] rebuilding clean image..."
@@ -80,16 +66,10 @@ flash_elf "$HOST_ELF" || {
 }
 
 # 4. Start UART capture BEFORE reset so we don't miss the banner.
-pkill -f "picocom.*$UART" 2>/dev/null
-sleep 0.3
-: > "$LOG"
-picocom -b 9600 -q --imap lfcrlf --logfile "$LOG" \
-        --exit-after "$WAIT_MS" "$UART" >/dev/null 2>&1 &
-PICO_PID=$!
-sleep 1
+start_picocom_capture "$LOG"
 
-printf 'reset run\nexit\n' | oocd_telnet >/dev/null 2>&1 || {
-    echo "ERROR: could not reach openocd telnet on ${OOCD_HOST}:${OOCD_TELNET_PORT}" >&2
+target_reset_run || {
+    echo "ERROR: could not reach openocd telnet on ${UMBRA_OOCD_HOST}:${UMBRA_OOCD_TELNET_PORT}" >&2
     kill "$PICO_PID" 2>/dev/null
     exit 2
 }

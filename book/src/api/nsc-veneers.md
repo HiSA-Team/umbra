@@ -4,13 +4,13 @@ Umbra exposes 5 Non-Secure Callable (NSC) functions. These are the **only** way 
 
 Each function is implemented as an assembly veneer containing a `SG` (Secure Gateway) instruction, followed by a branch to the Rust implementation. The veneers are placed in the `.umbra_nsc_api` section at fixed addresses starting at `0x0803C000`.
 
-## umbra_tee_create
+## umbra_enclave_create
 
 ```c
-uint32_t umbra_tee_create(uint32_t base_addr);
+uint32_t umbra_enclave_create(uint32_t base_addr);
 ```
 
-Creates a TEE from an enclave binary at `base_addr` in Non-Secure flash.
+Creates an enclave from a binary at `base_addr` in Non-Secure flash.
 
 - Reads and validates the enclave header (magic `0x524D4255` = "UBMR")
 - Performs chained measurement (HMAC chain over all blocks)

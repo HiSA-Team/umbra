@@ -33,12 +33,12 @@
 set -uo pipefail
 
 UART="${UMBRA_UART:?Set UMBRA_UART to the target serial device}"
-OOCD_HOST="${UMBRA_OOCD_HOST:-localhost}"
-OOCD_TELNET_PORT="${UMBRA_OOCD_TELNET_PORT:-4444}"
-OOCD_GDB_PORT="${UMBRA_OOCD_GDB_PORT:-3333}"
 LOG="tools/last_uart_fault_runtime.log"
-WAIT_MS="${UMBRA_SMOKE_WAIT_MS:-10000}"
 ATTACK="${UMBRA_ATTACK:?Set UMBRA_ATTACK to ciphertext|hmac|swap}"
+
+# Shared helpers (oocd_telnet, flash_elf, start_picocom_capture,
+# target_reset_run, plus UMBRA_OOCD_HOST/PORT/WAIT_MS defaults).
+source "$(cd "$(dirname "$0")" && pwd)/smoke_test_lib.sh"
 
 HOST_ELF="host/bare_metal_arm/bin/bare_metal_arm.elf"
 BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
@@ -56,24 +56,11 @@ BLOCK1_CT_OFFSET=384
 # so we bounce openocd around the extload step (approach (a)).
 MCU_VARIANT_EFFECTIVE="${MCU_VARIANT:-stm32l552}"
 
-oocd_telnet() {
-    nc -w 5 "$OOCD_HOST" "$OOCD_TELNET_PORT"
-}
-
-flash_elf() {
-    arm-none-eabi-gdb "$1" \
-        -ex "target extended-remote :${OOCD_GDB_PORT}" \
-        -ex 'set confirm off' \
-        -ex "load $1" \
-        -ex 'detach' \
-        -ex 'quit' >/dev/null 2>&1
-}
-
 # Wait up to 10s for openocd telnet to answer (after we restart it post-extload).
 wait_for_oocd() {
     local i=0
     while (( i < 50 )); do
-        if printf 'exit\n' | nc -w 1 "$OOCD_HOST" "$OOCD_TELNET_PORT" >/dev/null 2>&1; then
+        if printf 'exit\n' | nc -w 1 "$UMBRA_OOCD_HOST" "$UMBRA_OOCD_TELNET_PORT" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.2
@@ -109,7 +96,7 @@ l562_extload_and_restart_oocd() {
     disown 2>/dev/null || true
 
     if ! wait_for_oocd; then
-        echo "ERROR: openocd did not come back up on ${OOCD_HOST}:${OOCD_TELNET_PORT}" >&2
+        echo "ERROR: openocd did not come back up on ${UMBRA_OOCD_HOST}:${UMBRA_OOCD_TELNET_PORT}" >&2
         echo "       See /tmp/umbra_oocd_fault_rt.log" >&2
         return 1
     fi
@@ -175,16 +162,10 @@ echo "[fault-rt] flashing tampered host ELF..."
 flash_elf "$HOST_ELF" || { echo "ERROR: gdb flash (host) failed" >&2; exit 2; }
 
 # 4. UART capture.
-pkill -f "picocom.*$UART" 2>/dev/null
-sleep 0.3
-: > "$LOG"
-picocom -b 9600 -q --imap lfcrlf --logfile "$LOG" \
-        --exit-after "$WAIT_MS" "$UART" >/dev/null 2>&1 &
-PICO_PID=$!
-sleep 1
+start_picocom_capture "$LOG"
 
-printf 'reset run\nexit\n' | oocd_telnet >/dev/null 2>&1 || {
-    echo "ERROR: could not reach openocd telnet on ${OOCD_HOST}:${OOCD_TELNET_PORT}" >&2
+target_reset_run || {
+    echo "ERROR: could not reach openocd telnet on ${UMBRA_OOCD_HOST}:${UMBRA_OOCD_TELNET_PORT}" >&2
     kill "$PICO_PID" 2>/dev/null
     exit 2
 }

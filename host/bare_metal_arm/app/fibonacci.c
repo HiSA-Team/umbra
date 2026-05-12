@@ -1,7 +1,7 @@
 #include "fibonacci.h"
 
 // Demo enclave payload. Linked into `.app.enclave_code` and loaded by secure
-// boot via the EFB pipeline. `fibonacci()` returns 1925854120; the
+// boot via the EFB pipeline. `fibonacci()` returns 0x72CA33A8; the
 // `dummy_filler_*` functions exist only to push the code size past one EFB
 // block so the multi-block loader path gets exercised.
 
@@ -76,5 +76,5 @@ int fibonacci() {
     nextTerm = t1 + t2;
   }
 
-  return nextTerm; // Expected : 1925854120
+  return nextTerm; // Expected : 0x72CA33A8
 }

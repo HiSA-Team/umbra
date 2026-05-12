@@ -1,0 +1,39 @@
+# Composite action: install gcc-arm-none-eabi + binutils-arm-none-eabi
+# with retries and per-attempt timeouts.
+#
+# Background: a previous CI run had one matrix job hang for 40+ minutes
+# on `sudo apt-get install` after the runner drew a slow apt mirror.
+# Wrapping each apt call in `timeout 300` turns a stuck mirror into a
+# fast failure; the retry loop then re-rolls the mirror up to 3 times.
+#
+# Local action — no third-party dependency. Reviewed for shell-injection:
+# inputs are author-controlled (none here) and apt arguments are static.
+
+name: Install arm-none-eabi toolchain
+description: |
+  apt install gcc-arm-none-eabi + binutils-arm-none-eabi with retries
+  and a per-attempt timeout, so transient apt-mirror flakes never hang
+  the job.
+
+runs:
+  using: composite
+  steps:
+    - name: Install arm-none-eabi toolchain (with retries)
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "::group::apt install attempt $attempt"
+          if timeout 300 sudo apt-get update -qq && \
+             timeout 300 sudo apt-get install -y --no-install-recommends \
+               gcc-arm-none-eabi binutils-arm-none-eabi; then
+            echo "::endgroup::"
+            echo "apt install succeeded on attempt $attempt"
+            exit 0
+          fi
+          echo "::endgroup::"
+          echo "attempt $attempt failed (timeout or apt error); backing off" >&2
+          sleep $((attempt * 10))
+        done
+        echo "arm-none-eabi toolchain install failed after 3 attempts" >&2
+        exit 1

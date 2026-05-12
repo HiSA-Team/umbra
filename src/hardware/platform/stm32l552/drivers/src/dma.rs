@@ -123,8 +123,6 @@ pub struct Dma {
     requests: [Request; MAX_NUMBER_OF_REQUESTS],
 }
 
-static mut ALREADY_INIT: bool = false;
-
 impl Dma {
     const fn _new() -> Self {
         let regs = unsafe {[
@@ -140,18 +138,12 @@ impl Dma {
         }
     }
 
+    /// Construct a `Dma` handle. Multiple instances are allowed by design:
+    /// the ESS-miss fault handler re-creates one after `secure_boot()` has
+    /// already initialised another. The `Option` return is preserved so the
+    /// signature can become fallible later (e.g. once a proper singleton /
+    /// global-reuse pattern lands) without breaking callers.
     pub fn new() -> Option<Self> {
-        unsafe {
-            // Guard intentionally disabled: the ESS-miss fault handler must
-            // re-create a Dma instance after secure_boot() already initialised one.
-            // A proper singleton / global-reuse pattern is future work.
-            if ALREADY_INIT && false {
-                return None
-            }
-
-            ALREADY_INIT = true;
-        }
-        
         Some(Self::_new())
     }
 

@@ -1,5 +1,6 @@
 
 use core::ptr;
+use arm::mmio::{SCB_BFAR, SCB_CFSR, SCB_HFSR, SCB_MMFAR, SCB_SFAR, SCB_SFSR};
 use crate::raw_print::{print_str, print_hex};
 
 // Common function to dump stack frame
@@ -38,10 +39,10 @@ pub extern "C" fn umbra_hard_fault_handler(sp: u32, exc_return: u32) {
         print_hex(frame.add(6).read_volatile());               print_str(" ");
         print_hex(frame.add(7).read_volatile());               print_str(" ");
         print_hex(frame.add(0).read_volatile());               print_str(" ");
-        print_hex(ptr::read_volatile(0xE000EDE4 as *const u32)); print_str(" ");
-        print_hex(ptr::read_volatile(0xE000EDE8 as *const u32)); print_str(" ");
-        print_hex(ptr::read_volatile(0xE000ED28 as *const u32)); print_str(" ");
-        print_hex(ptr::read_volatile(0xE000ED2C as *const u32));
+        print_hex(ptr::read_volatile(SCB_SFSR)); print_str(" ");
+        print_hex(ptr::read_volatile(SCB_SFAR)); print_str(" ");
+        print_hex(ptr::read_volatile(SCB_CFSR)); print_str(" ");
+        print_hex(ptr::read_volatile(SCB_HFSR));
     }
     print_str("\n");
     loop {}
@@ -81,7 +82,7 @@ pub extern "C" fn umbra_nmi_handler(sp: u32) {
 pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32) -> u32 {
     use kernel::common::enclave::EnclaveState;
 
-    let cfsr = 0xE000ED28 as *mut u32;
+    let cfsr = SCB_CFSR;
     let cfsr_val = ptr::read_volatile(cfsr);
     let mmfsr = (cfsr_val & 0xFF) as u8;
 
@@ -112,7 +113,7 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32) -> u32 {
     let fault_addr = if is_iaccviol {
         raw_pc & !0x1000_0000u32
     } else {
-        let mmfar = 0xE000ED34 as *const u32;
+        let mmfar = SCB_MMFAR;
         ptr::read_volatile(mmfar) & !0x1000_0000u32
     };
 
@@ -157,7 +158,7 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32) -> u32 {
 /// exception-return and re-issues the faulting instruction.
 #[no_mangle]
 pub unsafe extern "C" fn umbra_secure_fault_handler(sp: u32) {
-    let sfsr = 0xE000EDE4 as *mut u32;
+    let sfsr = SCB_SFSR;
     let sfsr_val = ptr::read_volatile(sfsr);
 
     // SFSR.INVEP (bit 0) — "invalid entry point": secure branch to an NS
@@ -212,8 +213,8 @@ fn panic_dump(sp: u32, cfsr: u32, reason: &str) -> ! {
     // but printing them unconditionally costs nothing and makes diagnosis
     // straightforward — the valid bit tells you whether to trust the value.
     unsafe {
-        let mmfar = ptr::read_volatile(0xE000ED34 as *const u32);
-        let bfar  = ptr::read_volatile(0xE000ED38 as *const u32);
+        let mmfar = ptr::read_volatile(SCB_MMFAR);
+        let bfar  = ptr::read_volatile(SCB_BFAR);
         print_str("MMFAR: 0x"); print_hex(mmfar); print_str("\n");
         print_str("BFAR:  0x"); print_hex(bfar);  print_str("\n");
     }
@@ -238,7 +239,7 @@ fn panic_dump(sp: u32, cfsr: u32, reason: &str) -> ! {
 /// unrecoverable paths.
 #[no_mangle]
 pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
-    let cfsr = 0xE000ED28 as *mut u32;
+    let cfsr = SCB_CFSR;
     let cfsr_val = ptr::read_volatile(cfsr);
     let bfsr = ((cfsr_val >> 8) & 0xFF) as u8;
 
@@ -259,7 +260,7 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
         let frame = sp as *const u32;
         ptr::read_volatile(frame.add(6)) & !0x1000_0000u32
     } else {
-        let bfar = 0xE000ED38 as *const u32;
+        let bfar = SCB_BFAR;
         ptr::read_volatile(bfar) & !0x1000_0000u32
     };
 
@@ -315,7 +316,7 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
 pub unsafe extern "C" fn umbra_usage_fault_dispatch(psp: u32) -> u32 {
     use kernel::common::enclave::EnclaveState;
 
-    let cfsr_ptr = 0xE000_ED28 as *mut u32;
+    let cfsr_ptr = SCB_CFSR;
     let cfsr_val = ptr::read_volatile(cfsr_ptr);
     let ufsr = (cfsr_val >> 16) as u16;
     let is_undefinstr = (ufsr & 0x01) != 0;
@@ -372,7 +373,7 @@ unsafe fn usage_fault_terminate(
     use kernel::common::enclave::EnclaveContext;
 
     // UFSR occupies CFSR bits [31:16]; clear every sub-type we might observe.
-    let cfsr_ptr = 0xE000_ED28 as *mut u32;
+    let cfsr_ptr = SCB_CFSR;
     ptr::write_volatile(cfsr_ptr, 0xFFFF_0000);
 
     let ctx_ptr = crate::secure_kernel::CURRENT_ENCLAVE_CTX_PTR as *mut EnclaveContext;

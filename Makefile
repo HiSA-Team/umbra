@@ -37,7 +37,35 @@ secureboot_check:
 key_gen:
 	@python3 tools/gen_key.py
 
-secureboot_build: key_gen
+generate_boot_measurements: key_gen
+# Use HOST_NAME (set by settings.sh based on HOST_APP) since HOST_APP itself
+# is the short name (`object_detection`, `bare_metal`, `freertos`) while
+# HOST_NAME is the full directory name we actually need to match.
+ifeq ($(HOST_NAME),object_detection_n657)
+	@echo "[NPU] Extracting NPU bytecode + computing boot HMACs (using freshly-generated master key)..."
+	@python3 tools/extract_bytecode.py \
+		host/object_detection_n657/Model/NUCLEO-N657X0-Q \
+		host/object_detection_n657/build
+	@python3 tools/measure_blobs.py \
+		tools/master_key.bin \
+		host/object_detection_n657/build/model_bytecode.bin \
+		host/object_detection_n657/Model/NUCLEO-N657X0-Q/network_data.xSPI2.bin \
+		src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+else
+	@# For non-obj-det hosts, write an all-zero stub so the boot crate still
+	@# compiles. Overwrite unconditionally (the previous "only if missing"
+	@# guard caused stale HMACs to survive across HOST_APP switches and
+	@# broke obj-det boot HMAC verification at G.2.b).
+	@echo "// Auto-generated stub — HOST_NAME != object_detection_n657" > src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+	@echo "pub const MODEL_BYTECODE_ADDR: u32 = 0;" >> src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+	@echo "pub const MODEL_BYTECODE_LEN: u32 = 0;" >> src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+	@echo "pub const MODEL_BYTECODE_HMAC: [u8; 32] = [0; 32];" >> src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+	@echo "pub const MODEL_WEIGHTS_ADDR: u32 = 0;" >> src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+	@echo "pub const MODEL_WEIGHTS_LEN: u32 = 0;" >> src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+	@echo "pub const MODEL_WEIGHTS_HMAC: [u8; 32] = [0; 32];" >> src/hardware/platform/stm32n657/boot/src/boot_measurements.rs
+endif
+
+secureboot_build: generate_boot_measurements
 	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} build ${BOOT_ELF_MODE} ${BOOT_FEATURES}
  
 secureboot_bin: 

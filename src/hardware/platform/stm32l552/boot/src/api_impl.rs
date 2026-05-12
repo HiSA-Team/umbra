@@ -18,7 +18,7 @@ static mut NEXT_ENCLAVE_ID: u32 = 1;
 
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]
-pub extern "C" fn umbra_tee_create_imp(base_addr: u32) -> u32{
+pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
     let enclave_flash_addr: u32 = base_addr;
 
     let kernel = unsafe {
@@ -349,9 +349,9 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
 
     // Reconfigure MPU for this enclave (after prefetch)
     unsafe {
-        let mpu_rbar = 0xE000_ED9C as *mut u32;
-        let mpu_rlar = 0xE000_EDA0 as *mut u32;
-        let mpu_rnr  = 0xE000_ED98 as *mut u32;
+        let mpu_rbar = arm::mmio::MPU_RBAR;
+        let mpu_rlar = arm::mmio::MPU_RLAR;
+        let mpu_rnr  = arm::mmio::MPU_RNR;
 
         let psp_base = kernel::common::ess::enclave_psp_top(enclave_idx)
                      - kernel::common::ess::ENCLAVE_PSP_STACK_SIZE;

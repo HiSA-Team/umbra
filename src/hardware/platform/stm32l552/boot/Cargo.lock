@@ -53,6 +53,7 @@ dependencies = [
 name = "drivers"
 version = "0.1.0"
 dependencies = [
+ "arm",
  "kernel",
  "peripheral_regs",
 ]

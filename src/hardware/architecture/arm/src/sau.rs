@@ -196,11 +196,14 @@ impl SauDriver {
         let regs_base_address = self.regs as *const SauRegisters as *const u32;
         let region_num : u8 = read_register(regs_base_address, SAU_TYPE_REG) as u8;
 
-        for i in 0..region_num {
+        // Avoid `for` loop (Range iterator may trigger Rust nightly UB checks on N657)
+        let mut i: u8 = 0;
+        while i < region_num {
             // First, select the region
             write_register(regs_base_address, SAU_RNR_REG, i as u32);
             // Let's clear the region enable bit
             clear_register_field(regs_base_address, SAU_RLAR_REG, SAU_RLAR_ENABLE_FIELD, 0x1);
+            i += 1;
         }
         write_register(regs_base_address, SAU_RNR_REG, 0 as u32);
     }
@@ -239,13 +242,16 @@ impl SauDriver {
         let regs_base_address = self.regs as *const SauRegisters as *const u32;
         let region_num : u8 = read_register(regs_base_address, SAU_TYPE_REG) as u8;
 
-        for i in 0..region_num {
+        // Avoid `for` loop (Range iterator may trigger Rust nightly UB checks on N657)
+        let mut i: u8 = 0;
+        while i < region_num {
             // First, select the region
             write_register(regs_base_address, SAU_RNR_REG, i as u32);
             // Let's read the region enable bit
             if (read_register(regs_base_address, SAU_RLAR_REG) & 0x1) == 0 {
                 return i as u8;
             }
+            i += 1;
         }
 
         return 0 as u8;
