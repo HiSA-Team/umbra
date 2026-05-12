@@ -5,15 +5,6 @@
 
 extern void umbra_debug_print(const char *s);
 
-static char *u32_to_hex_h(uint32_t val, char *buf) {
-    const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0'; buf[1] = 'x';
-    for (int i = 7; i >= 0; i--)
-        buf[2 + (7 - i)] = hex[(val >> (i * 4)) & 0xF];
-    buf[10] = '\0';
-    return buf;
-}
-
 void _host_Default_Handler(void)   { for (;;); }
 void _host_NMI_Handler(void)       { for (;;); }
 void _host_DebugMon_Handler(void)  { for (;;); }

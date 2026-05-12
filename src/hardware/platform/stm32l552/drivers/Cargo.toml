@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+arm = { path = "../../../architecture/arm" }
 peripheral_regs = { path = "../../../common/peripheral_regs" }
-kernel = { path = "../../../../kernel" }
+# Platform-agnostic — boot crate selects the kernel platform feature.
+# NOTE: cannot be `cargo check`ed in isolation; build via the boot crate
+# (see arm/Cargo.toml for the longer explanation).
+kernel = { path = "../../../../kernel", default-features = false }
 
 [features]
 stm32l562 = []

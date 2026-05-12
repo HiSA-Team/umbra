@@ -1,4 +1,6 @@
 #!/bin/bash
+set -eo pipefail
+
 source ./settings.sh
 
 if [ "$MCU_VARIANT" = "stm32l562" ]; then

@@ -7,7 +7,7 @@ The bare-metal host (`host/bare_metal_arm/`) is the simplest way to interact wit
 ```
 main()
   ├── Scan NS flash (0x08040000–0x08080000) for UMBR magic at 4KB page boundaries
-  ├── umbra_tee_create(addr) for each enclave found
+  ├── umbra_enclave_create(addr) for each enclave found
   └── Round-robin loop:
         ├── umbra_enclave_enter(id) → returns status
         │     ├── SUSPENDED  → enclave was preempted by Secure SysTick

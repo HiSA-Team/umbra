@@ -1,19 +1,56 @@
 
 use crate::common::enclave::EnclaveDescriptor;
 
-pub const ESS_BASE: u32 = 0x30032000; // SRAM2 (Structures)
-pub const ESS_SIZE: u32 = 0x10000; // 64KB
-pub const EFBC_BASE: u32 = 0x20020000; // SRAM1 Top 64KB (Execution) — NS alias so MPCBB per-block attribution is enforced
+// Reject building with both platform features enabled — the cfg-gated
+// constants below would conflict.
+#[cfg(all(feature = "platform-l552", feature = "platform-n657"))]
+compile_error!("Enable exactly ONE of kernel features platform-l552 or platform-n657");
+
+// ── L552 platform ESS layout ─────────────────────────────────────────
+//
+// PSP stacks live just above .bss, well below the MSP. The MSP starts at
+// _umb_estack (0x3003DFFC) and can grow 32 KB down to 0x30036000 before
+// touching the PSP ceiling.
+#[cfg(feature = "platform-l552")]
+pub const ESS_BASE: u32 = 0x30032000;        // SRAM2 (Structures, Secure alias)
+#[cfg(feature = "platform-l552")]
+pub const ESS_SIZE: u32 = 0x10000;           // 64KB
+#[cfg(feature = "platform-l552")]
+pub const EFBC_BASE: u32 = 0x20020000;       // SRAM1 Top 64KB (Execution) — NS alias so MPCBB per-block attribution is enforced
+#[cfg(feature = "platform-l552")]
+pub const ENCLAVE_PSP_BASE: u32 = 0x30034000;
+#[cfg(feature = "platform-l552")]
+pub const ENCLAVE_PSP_TOP: u32 = 0x30036000;
+
+// ── N657 platform ESS layout ─────────────────────────────────────────
+//
+// AXISRAM1 (1 MB IDAU view) is split: 0x34000000-0x34063FFF is FLEXRAM
+// (RISAF7), 0x34064000-0x340FFFFF is AXISRAM1 proper (RISAF2). The host runs
+// in the lower portion via the NS alias (0x24000000+); enclave code lives in
+// the upper portion via the Secure alias. RISAF2 region 1 must end before
+// EFBC_BASE so default region 0 (Secure+CID=1+priv) governs the upper bank.
+//
+// Layout summary (Secure alias):
+//   0x34064000–0x340DFFFF  ~496 KB  NS host (RISAF2 region 1 SEC=0)
+//   0x340E0000–0x340EFFFF   64 KB   EFBC — enclave code blocks (Secure)
+//   0x340F0000–0x340F1FFF    8 KB   PSP stacks (4 enclaves × 2 KB)
+//   0x340F2000–0x340FFFFF   56 KB   reserved for ESS metadata / future use
+#[cfg(feature = "platform-n657")]
+pub const ESS_BASE: u32 = 0x340E0000;
+#[cfg(feature = "platform-n657")]
+pub const ESS_SIZE: u32 = 0x10000;           // 64KB EFBC region
+#[cfg(feature = "platform-n657")]
+pub const EFBC_BASE: u32 = 0x340E0000;       // Secure alias — RISAF2 default region 0 governs (CID=1+priv)
+#[cfg(feature = "platform-n657")]
+pub const ENCLAVE_PSP_BASE: u32 = 0x340F0000;
+#[cfg(feature = "platform-n657")]
+pub const ENCLAVE_PSP_TOP: u32 = 0x340F2000;
+
+// ── Platform-agnostic constants ──────────────────────────────────────
 pub const SLOT_SIZE: u32 = 256;
 pub const MAX_EFBS: usize = 32;
-
 pub const MAX_ENCLAVES_CTX: usize = 4;
 pub const ENCLAVE_PSP_STACK_SIZE: u32 = 0x800; // 2KB per enclave
-// PSP stacks live just above .bss, well below the MSP to avoid
-// overlap.  The MSP starts at _umb_estack (0x3003DFFC) and can grow
-// 32 KB down to 0x30036000 before touching the PSP ceiling.
-pub const ENCLAVE_PSP_BASE: u32 = 0x30034000;  // Base of PSP stack region
-pub const ENCLAVE_PSP_TOP: u32 = 0x30036000;   // Top of enclave 0 stack (grows down)
 pub const CACHE_LIMIT_PER_ENCLAVE: usize = 24;
 
 pub fn enclave_psp_top(enclave_idx: usize) -> u32 {
@@ -78,10 +115,11 @@ impl EnclaveSwapSpace {
         let mut found_start = 0;
         let mut found_count = 0;
 
-        for i in 0..total_slots {
+        let mut i: usize = 0;
+        while i < total_slots {
             let word_idx = i / 32;
             let bit_idx = i % 32;
-            
+
             if (self.bitmap[word_idx] & (1 << bit_idx)) == 0 {
                 if found_count == 0 { found_start = i; }
                 found_count += 1;
@@ -91,13 +129,16 @@ impl EnclaveSwapSpace {
 
             if found_count == slots_needed {
                 // Mark as used
-                for k in 0..slots_needed {
-                    let idx = found_start + (k as usize);
+                let mut k: usize = 0;
+                while k < (slots_needed as usize) {
+                    let idx = found_start + k;
                     self.bitmap[idx / 32] |= 1 << (idx % 32);
+                    k += 1;
                 }
                 // Return address from EFBC (Execution Memory)
                 return Some(EFBC_BASE + (found_start as u32 * SLOT_SIZE));
             }
+            i += 1;
         }
         None
     }

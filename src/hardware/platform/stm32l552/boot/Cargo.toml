@@ -7,16 +7,20 @@ edition = "2021"
 cortex-m = "0.7"
 arm = { path = "../../../architecture/arm" }
 drivers = { path = "../drivers" }
-kernel = { path = "../../../../kernel"}
+kernel = { path = "../../../../kernel", default-features = false, features = ["platform-l552"] }
 peripheral_regs = { path = "../../../common/peripheral_regs" }
 
 [features]
-default = ["chained_measurement", "ess_miss_recovery"]
+default = ["chained_measurement", "ess_miss_recovery", "boot_tests"]
 boot_tests = []
 stm32l562 = ["drivers/stm32l562"]
 chained_measurement = []
 ess_miss_recovery = []
 benchmark = []
+# Required alongside `benchmark` to acknowledge that this feature is research
+# instrumentation, not for production firmware. Keeps `cargo build --features
+# benchmark` from silently producing a boot-bricking image.
+i_acknowledge_benchmark_is_research_only = []
 
 
 [profile.dev]

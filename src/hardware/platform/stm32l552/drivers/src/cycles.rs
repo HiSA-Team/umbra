@@ -6,9 +6,7 @@
 // always use `elapsed` (which wraps correctly) rather than a plain
 // subtraction on readings.
 
-const DEMCR:      *mut u32 = 0xE000_EDFC as *mut u32;
-const DWT_CTRL:   *mut u32 = 0xE000_1000 as *mut u32;
-const DWT_CYCCNT: *mut u32 = 0xE000_1004 as *mut u32;
+use arm::mmio::{DEMCR, DWT_CTRL, DWT_CYCCNT};
 
 const DEMCR_TRCENA_BIT:    u32 = 1 << 24;
 const DWT_CTRL_CYCCNTENA:  u32 = 1 << 0;

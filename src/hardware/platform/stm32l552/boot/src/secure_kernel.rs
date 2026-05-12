@@ -1,3 +1,13 @@
+use arm::mmio::{
+    DCIMVAC, ICIALLU,
+    SCB_ICSR,
+    SYST_CSR, SYST_CVR, SYST_RVR,
+};
+// ess_miss_recovery uses MPU reconfig + D-cache clean+invalidate during the
+// UDF-trap demand-paging flow; those constants are not referenced when the
+// feature is off, so gate the import to avoid an `unused_imports` warning.
+#[cfg(feature = "ess_miss_recovery")]
+use arm::mmio::{DCCIMVAC, MPU_RLAR, MPU_RNR};
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 use kernel::common::ess::EnclaveSwapSpace;
 use kernel::common::enclave::EnclaveContext;
@@ -110,16 +120,16 @@ impl Kernel {
 
     #[allow(dead_code)] // SysTick enabled by assembly in startup.s _svc_enter; this method exists for future Rust-side use
     pub unsafe fn enable_systick(&self) {
-        let syst_rvr = 0xE000_E014 as *mut u32;
-        let syst_cvr = 0xE000_E018 as *mut u32;
-        let syst_csr = 0xE000_E010 as *mut u32;
+        let syst_rvr = SYST_RVR;
+        let syst_cvr = SYST_CVR;
+        let syst_csr = SYST_CSR;
         core::ptr::write_volatile(syst_rvr, Self::SYSTICK_RELOAD - 1);
         core::ptr::write_volatile(syst_cvr, 0);
         core::ptr::write_volatile(syst_csr, 0x07);
     }
 
     pub unsafe fn disable_systick(&self) {
-        let syst_csr = 0xE000_E010 as *mut u32;
+        let syst_csr = SYST_CSR;
         core::ptr::write_volatile(syst_csr, 0x00);
         // Also clear any already-pending SysTick exception. Otherwise a
         // SysTick that fired mid-handler will tail-chain after our current
@@ -127,7 +137,7 @@ impl Kernel {
         // status word that the UsageFault / MemManage / BusFault handler
         // wrote into the SVC-entry MSP frame — turning a Faulted/Terminated
         // return into a spurious Suspended.
-        let icsr = 0xE000_ED04 as *mut u32;
+        let icsr = SCB_ICSR;
         core::ptr::write_volatile(icsr, 1 << 25); // PENDSTCLR
     }
 
@@ -153,7 +163,7 @@ impl Kernel {
     /// entry point and must remain resident; evicting it would leave
     /// `umbra_enclave_enter_imp` jumping to a UDF slot. The early return
     /// below is defence-in-depth — the real invariant is upstream at
-    /// `find_eviction_victim` (loop starts at 1) and `umbra_tee_create_imp`
+    /// `find_eviction_victim` (loop starts at 1) and `umbra_enclave_create_imp`
     /// (eviction loop starts at 1).
     #[cfg(feature = "ess_miss_recovery")]
     #[inline(never)]
@@ -177,8 +187,8 @@ impl Kernel {
             (ns, ns | 0x1000_0000)
         };
 
-        let mpu_rnr  = 0xE000_ED98 as *mut u32;
-        let mpu_rlar = 0xE000_EDA0 as *mut u32;
+        let mpu_rnr  = MPU_RNR;
+        let mpu_rlar = MPU_RLAR;
         core::ptr::write_volatile(mpu_rnr, 5);
         let saved_rlar = core::ptr::read_volatile(mpu_rlar);
         core::ptr::write_volatile(mpu_rlar, saved_rlar & !1u32);
@@ -196,7 +206,7 @@ impl Kernel {
 
         // D-cache clean+invalidate so the UDF pattern reaches physical
         // SRAM before handle_ess_miss writes new data via the same alias.
-        let dccimvac = 0xE000EF70 as *mut u32;
+        let dccimvac = DCCIMVAC;
         let mut addr = slot_addr_s;
         while addr < slot_addr_s + SLOT_SIZE {
             core::ptr::write_volatile(dccimvac, addr);
@@ -209,7 +219,7 @@ impl Kernel {
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        let iciallu = 0xE000EF50 as *mut u32;
+        let iciallu = ICIALLU;
         core::ptr::write_volatile(iciallu, 0);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
@@ -317,7 +327,7 @@ impl Kernel {
             }
         }
 
-        let dcimvac = 0xE000EF5C as *mut u32;
+        let dcimvac = DCIMVAC;
         let mut addr = scratch_addr;
         let end_addr = scratch_addr + transfer_size;
         while addr < end_addr {
@@ -438,8 +448,8 @@ impl Kernel {
         //    can access NS memory through either alias for the AES decrypt.
         let ess_write_addr = ess_target_addr | 0x1000_0000;
 
-        let mpu_rnr  = 0xE000_ED98 as *mut u32;
-        let mpu_rlar = 0xE000_EDA0 as *mut u32;
+        let mpu_rnr  = MPU_RNR;
+        let mpu_rlar = MPU_RLAR;
         core::ptr::write_volatile(mpu_rnr, 5);
         let saved_rlar = core::ptr::read_volatile(mpu_rlar);
         core::ptr::write_volatile(mpu_rlar, saved_rlar & !1u32);
@@ -524,17 +534,17 @@ impl Kernel {
         }
 
         // 11. D-cache clean+invalidate, then I-cache invalidate.
-        //     DCCIMVAC (0xE000EF70) writes dirty cache lines to RAM before
-        //     invalidating. DCIMVAC (0xE000EF5C) would DISCARD dirty lines,
-        //     losing the plaintext we just wrote.
+        //     DCCIMVAC writes dirty cache lines to RAM before invalidating;
+        //     DCIMVAC alone would DISCARD dirty lines, losing the plaintext
+        //     we just wrote.
         {
-            let dccimvac = 0xE000EF70 as *mut u32;
+            let dccimvac = DCCIMVAC;
             let mut addr = ess_write_addr;
             let end_addr = ess_write_addr + V_CODE_BLOCK_SIZE as u32;
             while addr < end_addr { *dccimvac = addr; addr += 32; }
             cortex_m::asm::dsb();
             cortex_m::asm::isb();
-            let iciallu = 0xE000EF50 as *mut u32;
+            let iciallu = ICIALLU;
             *iciallu = 0;
             cortex_m::asm::dsb();
             cortex_m::asm::isb();
@@ -642,7 +652,7 @@ impl Kernel {
 
             // Invalidate D-cache for the freshly-written ESS line, then I-cache
             // (the enclave will execute from here).
-            let dcimvac = 0xE000EF5C as *mut u32;
+            let dcimvac = DCIMVAC;
             let mut addr = ess_target_addr;
             let end_addr = ess_target_addr + CODE_BLOCK_SIZE;
             while addr < end_addr {
@@ -651,7 +661,7 @@ impl Kernel {
             }
             cortex_m::asm::dsb();
             cortex_m::asm::isb();
-            let iciallu = 0xE000EF50 as *mut u32;
+            let iciallu = ICIALLU;
             *iciallu = 0;
             cortex_m::asm::dsb();
             cortex_m::asm::isb();

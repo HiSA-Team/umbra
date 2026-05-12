@@ -1,18 +1,6 @@
 #include "fibonacci.h"
+#include "umbra_hex.h"
 #include <stdint.h>
-
-// Minimal hex printer for bare-metal (no printf available).
-// Writes "0xHHHHHHHH" into buf (must be >= 11 bytes). Returns buf.
-static char *u32_to_hex(uint32_t val, char *buf) {
-  const char hex[] = "0123456789ABCDEF";
-  buf[0] = '0';
-  buf[1] = 'x';
-  for (int i = 7; i >= 0; i--) {
-    buf[2 + (7 - i)] = hex[(val >> (i * 4)) & 0xF];
-  }
-  buf[10] = '\0';
-  return buf;
-}
 
 __attribute__((section(".app.enclave_header")))
 const uint8_t enclave_header[48] = {
@@ -28,7 +16,7 @@ const uint8_t enclave_header[48] = {
     0x41, 0x64, 0x0E, 0x57, 0x55, 0x32, 0xC0, 0xB7, 0xDF, 0x49, 0x83, 0x98,
     0xCC, 0xC8, 0x30, 0x59, 0x03, 0xCC, 0xD9, 0x36};
 
-extern unsigned int umbra_tee_create(unsigned int base_addr);
+extern unsigned int umbra_enclave_create(unsigned int base_addr);
 extern void umbra_debug_print(const char *s);
 extern unsigned int umbra_enclave_enter(unsigned int enclave_id);
 extern unsigned int umbra_enclave_status(unsigned int enclave_id);
@@ -56,7 +44,7 @@ int main() {
        addr < NS_FLASH_END && enclave_count < MAX_ENCLAVES; addr += PAGE_SIZE) {
     uint32_t magic = *(volatile uint32_t *)(uintptr_t)addr;
     if (magic == UMBRA_MAGIC) {
-      unsigned int id = umbra_tee_create(addr);
+      unsigned int id = umbra_enclave_create(addr);
       if (id < 0xFFFFFFF0) {
         enclave_ids[enclave_count++] = id;
         umbra_debug_print("[USER] Enclave created\n");
@@ -88,13 +76,13 @@ int main() {
       } else if (status == STATUS_TERMINATED) {
         unsigned int full_result = umbra_enclave_status(enclave_ids[i]);
         umbra_debug_print("[USER] Enclave terminated! R0=");
-        umbra_debug_print(u32_to_hex(full_result, hex_buf));
+        umbra_debug_print(umbra_u32_to_hex(full_result, hex_buf));
         umbra_debug_print("\n");
         enclave_ids[i] = 0;
         active--;
       } else if (status == STATUS_FAULTED) {
         umbra_debug_print("[USER] Enclave faulted — ret=");
-        umbra_debug_print(u32_to_hex(ret, hex_buf));
+        umbra_debug_print(umbra_u32_to_hex(ret, hex_buf));
         umbra_debug_print("\n");
         enclave_ids[i] = 0;
         active--;

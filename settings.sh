@@ -63,7 +63,9 @@ export OBJDUMP=${GCC_PREFIX}objdump
 export OBJCOPY=${GCC_PREFIX}objcopy
 export GDB=${GCC_PREFIX}gdb
 export GDBGUI=gdbgui
-export FLASHER=/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI
+# STM32_Programmer_CLI shipped with STM32CubeIDE. Override on non-macOS via
+# `export FLASHER=/path/to/STM32_Programmer_CLI` before sourcing this script.
+export FLASHER="${FLASHER:-/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI}"
 export OPENOCD=openocd
 export AR=${GCC_PREFIX}ar
 
@@ -121,8 +123,8 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 # by configuring all the secure memory controller hierarchy. 
 
 # Select the target MCU variant here
-# Options: stm32l552, stm32l562
-export MCU_VARIANT=stm32l562
+# Options: stm32l552, stm32l562, stm32n657
+export MCU_VARIANT=stm32n657
 
 # Enable the EFB crypto benchmark (set to 1 to build with the
 # `benchmark` feature; any other value disables it). When enabled, the
@@ -138,8 +140,13 @@ elif [ "$MCU_VARIANT" = "stm32l562" ]; then
     # We reuse the stm32l552 platform directory but enable 562 features
     export MCU=stm32l552
     export BOOT_FEATURES="--features stm32l562"
+    # Override on non-macOS by setting EXTLOAD_STLDR before sourcing.
     export EXTLOAD_STLDR="${EXTLOAD_STLDR:-/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin/ExternalLoader/MX25LM51245G_STM32L562E-DK.stldr}"
     echo -e "${SUCCESS}[mcu_selection] Selected STM32L562 (HW AES Enabled)${VANILLA}"
+elif [ "$MCU_VARIANT" = "stm32n657" ]; then
+    export MCU=stm32n657
+    export BOOT_FEATURES=""
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q)${VANILLA}"
 else
     echo -e "${FAILURE}[mcu_selection] Unknown MCU_VARIANT: $MCU_VARIANT${VANILLA}"
     return 1
@@ -156,9 +163,15 @@ if [ "$UMBRA_BENCHMARK" = "1" ]; then
     echo -e "${SUCCESS}[benchmark] CHES26 EFB crypto benchmark ENABLED${VANILLA}"
 fi
 
-export OPENOCD_CONFIG=./openocd_scripts/stm32l5x.cfg
-export TARGET_FLASH_START=0x0C000000
-export TARGET_ARCH=thumbv8m.main-none-eabi
+if [ "$MCU_VARIANT" = "stm32n657" ]; then
+    export OPENOCD_CONFIG=./openocd_scripts/stm32n6x.cfg
+    export TARGET_FLASH_START=0x30000000
+    export TARGET_ARCH=thumbv8m.main-none-eabi
+else
+    export OPENOCD_CONFIG=./openocd_scripts/stm32l5x.cfg
+    export TARGET_FLASH_START=0x0C000000
+    export TARGET_ARCH=thumbv8m.main-none-eabi
+fi
 
 # T3 smoke-test harness (tools/smoke_test.sh)
 export UMBRA_UART=/dev/tty.usbmodem211203
@@ -368,11 +381,25 @@ echo -e ""
 echo -e "${BOLD}Configuring Host information${VANILLA}"
 
 # Host application selection
-# Options: bare_metal (default), freertos
-# Usage: export HOST_APP=freertos && source ./settings.sh
+# Options: bare_metal (default), freertos, object_detection (N657 only)
+# Usage: export HOST_APP=object_detection && source ./settings.sh
 export HOST_APP=${HOST_APP:-bare_metal}
 
-if [ "$HOST_APP" = "bare_metal" ]; then
+if [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ "$HOST_APP" = "bare_metal" ]; then
+        export HOST_DIR=${ROOT_DIR}/host/bare_metal_n657
+        export HOST_NAME=bare_metal_n657
+    elif [ "$HOST_APP" = "freertos" ]; then
+        export HOST_DIR=${ROOT_DIR}/host/freertos_n657
+        export HOST_NAME=freertos_n657
+    elif [ "$HOST_APP" = "object_detection" ]; then
+        export HOST_DIR=${ROOT_DIR}/host/object_detection_n657
+        export HOST_NAME=object_detection_n657
+    else
+        echo -e "${FAILURE}[host_selection] Unknown HOST_APP for N657: $HOST_APP (expected bare_metal, freertos, or object_detection)${VANILLA}"
+        return 1
+    fi
+elif [ "$HOST_APP" = "bare_metal" ]; then
     export HOST_DIR=${ROOT_DIR}/host/bare_metal_arm
     export HOST_NAME=bare_metal_arm
 elif [ "$HOST_APP" = "freertos" ]; then

@@ -13,7 +13,7 @@ main()
 
 vEnclaveTask(pvParameters)
   ├── Scan NS flash for enclave headers (same logic as bare-metal)
-  ├── umbra_tee_create(addr) for each enclave found
+  ├── umbra_enclave_create(addr) for each enclave found
   ├── Loop: umbra_enclave_enter(id)
   │     ├── SUSPENDED  → print, re-enter
   │     ├── TERMINATED → print R0, mark done

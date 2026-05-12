@@ -1,0 +1,2 @@
+ST Edge AI Core v2.0.0-20052
+The TensorFlow library was compiled to use AVX instructions, but these aren't available on your machine.

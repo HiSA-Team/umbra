@@ -17,6 +17,10 @@ APP_DIR     = app
 INC_DIR     = inc
 STARTUP_DIR = src
 
+# Shared host utilities (umbra_u32_to_hex + memset/memcpy stubs).
+COMMON_SRC_DIR = ../common/src
+COMMON_INC_DIR = ../common/inc
+
 # FreeRTOS paths (V11.1.0: port files are in non_secure/ subdirectory)
 FREERTOS_DIR    = lib/FreeRTOS-Kernel
 FREERTOS_PORT   = $(FREERTOS_DIR)/portable/GCC/ARM_CM33_NTZ/non_secure
@@ -35,7 +39,7 @@ OBJDUMP     = $(CC_PREFIX)objdump
 OBJCOPY     = $(CC_PREFIX)objcopy
 
 CFLAGS      = -O0 -march=armv8-m.main -g -c -save-temps=obj -fverbose-asm -Wa,-L
-CFLAGS     += -I$(INC_DIR) -I$(SRC_DIR)
+CFLAGS     += -I$(INC_DIR) -I$(SRC_DIR) -I$(COMMON_INC_DIR)
 CFLAGS     += -I$(FREERTOS_DIR)/include -I$(FREERTOS_PORT)
 
 LDFLAGS     = -nostdlib $(addprefix -T,$(LD_SCRIPTS)) --discard-none --allow-multiple-definition
@@ -48,6 +52,10 @@ LDFLAGS     = -nostdlib $(addprefix -T,$(LD_SCRIPTS)) --discard-none --allow-mul
 APP_SRCS    = $(wildcard $(SRC_DIR)/*.c) $(wildcard $(APP_DIR)/*.c)
 APP_OBJS    = $(addprefix $(OBJ_DIR)/, $(notdir $(APP_SRCS:.c=.o)))
 
+# Shared host utilities (linked into every host that needs them).
+COMMON_SRCS = $(COMMON_SRC_DIR)/umbra_hex.c $(COMMON_SRC_DIR)/umbra_mem.c
+COMMON_OBJS = $(addprefix $(OBJ_DIR)/, $(notdir $(COMMON_SRCS:.c=.o)))
+
 # FreeRTOS sources
 FREERTOS_SRCS = $(FREERTOS_DIR)/tasks.c \
                 $(FREERTOS_DIR)/queue.c \
@@ -58,7 +66,7 @@ FREERTOS_SRCS = $(FREERTOS_DIR)/tasks.c \
 
 FREERTOS_OBJS = $(addprefix $(OBJ_DIR)/freertos_, $(notdir $(FREERTOS_SRCS:.c=.o)))
 
-ALL_OBJS = $(APP_OBJS) $(FREERTOS_OBJS) $(OBJ_DIR)/startup.o
+ALL_OBJS = $(APP_OBJS) $(COMMON_OBJS) $(FREERTOS_OBJS) $(OBJ_DIR)/startup.o
 
 RM      = rm -rf
 MKDIR   = @mkdir -p $(@D)
@@ -76,6 +84,12 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) -o $@ $^ $(CFLAGS)
 
 $(OBJ_DIR)/%.o: $(APP_DIR)/%.c
+	@echo "\n[OBJ]	Compiling $<"
+	$(MKDIR)
+	$(CC) -o $@ $^ $(CFLAGS)
+
+# Shared host utilities (host/common/)
+$(OBJ_DIR)/%.o: $(COMMON_SRC_DIR)/%.c
 	@echo "\n[OBJ]	Compiling $<"
 	$(MKDIR)
 	$(CC) -o $@ $^ $(CFLAGS)

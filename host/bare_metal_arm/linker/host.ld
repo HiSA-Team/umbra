@@ -88,7 +88,7 @@ SECTIONS
 /* These are the SG entry points in _NSC_TEXT_MEMORY_, not the _imp implementations */
 /* Addresses from 'nm boot | grep umbra_' after building secureboot */
 /* TODO: Update these addresses after each secure rebuild, or use import lib mechanism */
-PROVIDE(umbra_tee_create = 0x0803c001);     /* Thumb mode address of umbra_tee_create veneer */
+PROVIDE(umbra_enclave_create = 0x0803c001);     /* Thumb mode address of umbra_enclave_create veneer */
 PROVIDE(umbra_debug_print = 0x0803c011);    /* Thumb mode address of umbra_debug_print veneer */
 PROVIDE(umbra_enclave_enter = 0x0803c021);  /* Thumb mode address of umbra_enclave_enter veneer */
 PROVIDE(umbra_enclave_exit = 0x0803c031);   /* Thumb mode address of umbra_enclave_exit veneer */

@@ -77,7 +77,7 @@ SECTIONS
 ASSERT(_ebss < _host_sstack, "ERROR: BSS/heap overlaps MSP stack region!");
 
 /* NSC veneer addresses — same as bare_metal_arm */
-PROVIDE(umbra_tee_create = 0x0803c001);
+PROVIDE(umbra_enclave_create = 0x0803c001);
 PROVIDE(umbra_debug_print = 0x0803c011);
 PROVIDE(umbra_enclave_enter = 0x0803c021);
 PROVIDE(umbra_enclave_exit = 0x0803c031);

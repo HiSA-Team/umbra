@@ -21,10 +21,15 @@ PROGRAM_NAME = $(shell basename $(dir $(abspath $(firstword $(MAKEFILE_LIST)))))
 SRC_DIR		= src
 OBJ_DIR		= obj
 APP_DIR		= app
-INC_DIR 	= inc 
+INC_DIR 	= inc
 STARTUP_DIR = src
 
-LD_SCRIPTS = linker/memory.ld ../../linker/umbra.ld linker/host.ld 
+# Shared host utility (umbra_u32_to_hex). bare_metal_arm uses libc memset/
+# memcpy, so it does NOT link umbra_mem.c.
+COMMON_SRC_DIR = ../common/src
+COMMON_INC_DIR = ../common/inc
+
+LD_SCRIPTS = linker/memory.ld ../../linker/umbra.ld linker/host.ld
 
 #############
 # Libraries #
@@ -53,10 +58,10 @@ LIB_DIR		= lib
 # Misc #
 ########
 
-SRCS_AUTO = $(wildcard src/*.c) $(wildcard app/*.c)
+SRCS_AUTO = $(wildcard src/*.c) $(wildcard app/*.c) $(COMMON_SRC_DIR)/umbra_hex.c
 # Force app/fibonacci.c to the front of the link order. The `.app.enclave_code`
 # section is concatenated in link order, and its byte at offset 0 is the
-# enclave entry point (see `entry_point: ess_addr` in umbra_tee_create_imp).
+# enclave entry point (see `entry_point: ess_addr` in umbra_enclave_create_imp).
 # If counter.c sorts first alphabetically, counter_main becomes the entry and
 # fibonacci/helpers end up dead code — which silently defeats the runtime
 # ESS-miss fault test (tools/smoke_test_fault_runtime.sh UMBRA_ATTACK=hmac).
@@ -79,14 +84,19 @@ all: bin/$(PROGRAM_NAME).bin
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@echo "\n[OBJ]	Creating OBJs from src"
 	$(MKDIR)
-	$(CC) -o $@ $^ -I$(INC_DIR) $(LIB_INC_LIST) $(CFLAGS)
+	$(CC) -o $@ $^ -I$(INC_DIR) -I$(COMMON_INC_DIR) $(LIB_INC_LIST) $(CFLAGS)
 
 $(OBJ_DIR)/%.o: $(APP_DIR)/%.c
 	@echo "\n[OBJ]	Creating OBJs from app"
 	$(MKDIR)
-	$(CC) -o $@ $^ -I$(INC_DIR) $(LIB_INC_LIST) $(CFLAGS)
+	$(CC) -o $@ $^ -I$(INC_DIR) -I$(COMMON_INC_DIR) $(LIB_INC_LIST) $(CFLAGS)
 
-obj/startup.o: 
+$(OBJ_DIR)/%.o: $(COMMON_SRC_DIR)/%.c
+	@echo "\n[OBJ]	Creating OBJs from host/common"
+	$(MKDIR)
+	$(CC) -o $@ $^ -I$(INC_DIR) -I$(COMMON_INC_DIR) $(LIB_INC_LIST) $(CFLAGS)
+
+obj/startup.o:
 	@echo "\n[OBJ]	Creating OBJs from $(STARTUP_DIR)/startup.s"
 	$(MKDIR)
 	$(CC) -o obj/startup.o $(STARTUP_DIR)/startup.s -I$(LIB_INC_LIST) $(CFLAGS)

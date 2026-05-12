@@ -22,7 +22,7 @@ SECTIONS
 
     .umbra_api_implementation :
     {
-        KEEP(*(.text.umbra_tee_create_imp))
+        KEEP(*(.text.umbra_enclave_create_imp))
         KEEP(*(.text.umbra_debug_print_imp))
         KEEP(*(.text.umbra_enclave_enter_imp))
         KEEP(*(.text.umbra_enclave_exit_imp))

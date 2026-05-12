@@ -11,7 +11,7 @@
 //////////////////////////////////////////////////////////////////////
 
     .syntax unified
-    .cpu cortex-m33
+    // .cpu is controlled by the build.rs -mcpu flag per platform
     .thumb
 
     .global _umb_start              // Define the entry point

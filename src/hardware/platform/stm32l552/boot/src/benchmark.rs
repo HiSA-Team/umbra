@@ -1,11 +1,12 @@
 // Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
 //
-// EFB crypto benchmark
+// EFB crypto benchmark — RESEARCH INSTRUMENTATION, NOT FOR PRODUCTION.
 //
-// Runs under `#[cfg(feature = "benchmark")]`. After crypto init in
-// `secure_boot()`, `run_all()` is called and never returns: it prints
-// TSV rows to UART and halts with `wfi` so measurements are not
-// contaminated by subsequent boot work.
+// `run_all()` is invoked from `platform_impl.rs` after crypto init in
+// `secure_boot()` and never returns: it prints TSV rows to UART and halts
+// with `wfi` so measurements are not contaminated by subsequent boot
+// work. Shipping a firmware image with this feature enabled will brick
+// the device on the next warm reset.
 //
 // Matrix: 2 runs x 3 scenarios = 6 data points.
 //   Run A: L552 / SW AES (AesEmulated, production default)
@@ -15,11 +16,19 @@
 //
 // See docs/superpowers/specs/2026-04-15-efb-crypto-benchmark-design.md.
 
+#[cfg(not(feature = "i_acknowledge_benchmark_is_research_only"))]
+compile_error!(
+    "The `benchmark` feature is research instrumentation; enabling it makes the \
+     boot path halt forever after measurements. To build it intentionally, also \
+     pass `--features i_acknowledge_benchmark_is_research_only`. Never enable \
+     either feature in production firmware."
+);
+
 use drivers::cycles;
 use drivers::uart::Uart;
 
 extern "C" {
-    fn umbra_tee_create_imp() -> u32;
+    fn umbra_enclave_create_imp() -> u32;
 }
 
 /// Number of warmup iterations, discarded from min/mean/max.
@@ -236,13 +245,13 @@ pub fn run_all(uart: &Uart) -> ! {
 
     print_header(uart, board, aes_impl);
 
-    // Measure the full load-time path once: umbra_tee_create_imp runs
+    // Measure the full load-time path once: umbra_enclave_create_imp runs
     // the BFS block loader and (under chained_measurement) the chain
     // verification. This is the production "boot cost" of enclave #0.
     // Single-shot measurement — the function has side effects (allocates
     // enclave state) so we cannot warm it up in a loop.
     let load_start = cycles::read();
-    let _ = unsafe { umbra_tee_create_imp() };
+    let _ = unsafe { umbra_enclave_create_imp() };
     let load_end = cycles::read();
     let load_cycles = cycles::elapsed(load_start, load_end);
 

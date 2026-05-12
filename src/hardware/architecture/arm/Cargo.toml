@@ -6,4 +6,9 @@ edition = "2021"
 [dependencies]
 peripheral_regs = { path = "../../common/peripheral_regs" }
 cortex-m = "0.7"
-kernel = { path = "../../../kernel" }
+# Platform-agnostic — boot crate selects the kernel platform feature.
+# NOTE: this crate cannot be `cargo check`ed in isolation. It transitively
+# pulls kernel, whose ess.rs requires either `platform-l552` or
+# `platform-n657` to compile. Build via a boot crate (l552/boot or
+# n657/boot), which sets the feature in its `kernel = { … features = […] }`.
+kernel = { path = "../../../kernel", default-features = false }

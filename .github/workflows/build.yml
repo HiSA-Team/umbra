@@ -1,0 +1,178 @@
+# Build CI. Reviewed for workflow injection: no `${{ github.event.* }}`,
+# `github.head_ref`, commit/PR/issue text appears in any `run:` block.
+name: Build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TARGET: thumbv8m.main-none-eabi
+
+jobs:
+  cargo-check:
+    name: cargo check (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabi
+          components: clippy, rustfmt
+
+      - uses: ./.github/actions/install-arm-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+
+      - name: cargo check (entry-point crates)
+        # The `arm` and `drivers` crates are platform-agnostic libraries
+        # that depend on `kernel` with `default-features = false`. They do
+        # not select a `platform-*` feature themselves — that's the boot
+        # crate's job. Checking them in isolation would build kernel with
+        # no platform feature, which fails by design (ess.rs constants are
+        # cfg-gated). The boot crate `cargo check`s cover arm + drivers
+        # transitively with the right features, so we skip them here.
+        run: |
+          set -euo pipefail
+          for crate in \
+              src/hardware/common/peripheral_regs \
+              src/kernel \
+              src/hardware/platform/stm32l552/boot \
+              src/hardware/platform/stm32n657/boot ; do
+            echo "::group::cargo check $crate"
+            (cd "$crate" && cargo check --target "$RUST_TARGET")
+            echo "::endgroup::"
+          done
+
+  feature-matrix:
+    name: cargo check matrix (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── L552 / L562 boot crate — most diverse feature space ─────────
+          - { name: "l552 boot default",      crate: "src/hardware/platform/stm32l552/boot", flags: "" }
+          - { name: "l552 boot no-default",   crate: "src/hardware/platform/stm32l552/boot", flags: "--no-default-features" }
+          - { name: "l552 boot chained only", crate: "src/hardware/platform/stm32l552/boot", flags: "--no-default-features --features chained_measurement" }
+          - { name: "l562 boot (HW AES)",     crate: "src/hardware/platform/stm32l552/boot", flags: "--features stm32l562" }
+          - { name: "l552 boot benchmark",    crate: "src/hardware/platform/stm32l552/boot", flags: "--features benchmark,i_acknowledge_benchmark_is_research_only" }
+          # ── N657 boot crate ─────────────────────────────────────────────
+          - { name: "n657 boot default",      crate: "src/hardware/platform/stm32n657/boot", flags: "" }
+          - { name: "n657 boot no-default",   crate: "src/hardware/platform/stm32n657/boot", flags: "--no-default-features" }
+          - { name: "n657 boot tests",        crate: "src/hardware/platform/stm32n657/boot", flags: "--features boot_tests" }
+          # ── kernel crate — both platform selectors ──────────────────────
+          - { name: "kernel platform-l552",   crate: "src/kernel", flags: "" }
+          - { name: "kernel platform-n657",   crate: "src/kernel", flags: "--no-default-features --features platform-n657" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabi
+      - uses: ./.github/actions/install-arm-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - name: cargo check (${{ matrix.name }})
+        env:
+          CRATE: ${{ matrix.crate }}
+          CARGO_ARGS: ${{ matrix.flags }}
+        # `CARGO_ARGS` is intentionally word-split by the shell — matrix
+        # values are author-controlled YAML, not external input.
+        # shellcheck disable=SC2086
+        run: |
+          set -euo pipefail
+          cd "$CRATE"
+          cargo check --target "$RUST_TARGET" $CARGO_ARGS
+
+  clippy:
+    name: cargo clippy (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabi
+          components: clippy
+
+      - uses: ./.github/actions/install-arm-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+
+      - name: cargo clippy (entry-point crates)
+        # arm / drivers skipped — see `cargo-check` job for rationale; both
+        # are covered transitively when checking the boot crates.
+        run: |
+          for crate in \
+              src/hardware/common/peripheral_regs \
+              src/kernel \
+              src/hardware/platform/stm32l552/boot \
+              src/hardware/platform/stm32n657/boot ; do
+            echo "::group::cargo clippy $crate"
+            (cd "$crate" && cargo clippy --target "$RUST_TARGET" --all-targets) || true
+            echo "::endgroup::"
+          done
+
+  rustfmt:
+    name: cargo fmt --check (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: |
+          for crate in \
+              src/hardware/common/peripheral_regs \
+              src/hardware/architecture/arm \
+              src/hardware/platform/stm32l552/drivers \
+              src/hardware/platform/stm32n657/drivers \
+              src/kernel \
+              src/hardware/platform/stm32l552/boot \
+              src/hardware/platform/stm32n657/boot ; do
+            echo "::group::cargo fmt $crate"
+            (cd "$crate" && cargo fmt --check) || true
+            echo "::endgroup::"
+          done
+
+  python-lint:
+    name: ruff (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff
+      - run: ruff check tools/
+
+  shell-lint:
+    name: shellcheck (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck scripts
+        run: |
+          shopt -s globstar nullglob
+          files=( rebuild_all.sh debug.sh tools/**/*.sh tools/*.sh )
+          [ ${#files[@]} -eq 0 ] && { echo "no scripts found"; exit 0; }
+          shellcheck "${files[@]}" || true
