@@ -1,14 +1,21 @@
 use kernel::key_storage_server::crypto::CryptoEngine;
 use drivers::hash::Hash;
-use drivers::aes::{AesEmulated, AesEngine};
+use drivers::aes::AesEngine;
+
+// `n657_aes_hw` ON  → CRYP1 + SAES1 hardware path
+// `n657_aes_hw` OFF → T-table software fallback
+#[cfg(feature = "n657_aes_hw")]
+type ActiveAes = drivers::aes::AesHardware;
+#[cfg(not(feature = "n657_aes_hw"))]
+type ActiveAes = drivers::aes::AesEmulated;
 
 pub struct UmbraCryptoEngine {
     hash: Hash,
-    aes: AesEmulated,
+    aes: ActiveAes,
 }
 
 impl UmbraCryptoEngine {
-    pub fn new(hash: Hash, aes: AesEmulated) -> Self {
+    pub fn new(hash: Hash, aes: ActiveAes) -> Self {
         Self { hash, aes }
     }
 }
@@ -25,29 +32,16 @@ impl CryptoEngine for UmbraCryptoEngine {
     }
 
     fn aes_decrypt(&mut self, key: &[u8], iv: &[u8], data: &mut [u8]) -> Result<(), ()> {
-        let mut output_block = [0u8; 16];
-        let chunks = data.len() / 16;
-        let mut counter_block = [0u8; 16];
-        counter_block.copy_from_slice(iv);
-        if key.len() < 16 { return Err(()); }
+        if key.len() < 16 || iv.len() < 16 { return Err(()); }
         let mut aes_key = [0u8; 16];
+        let mut iv_block = [0u8; 16];
         let mut k: usize = 0;
-        while k < 16 { aes_key[k] = key[k]; k += 1; }
+        while k < 16 { aes_key[k] = key[k]; iv_block[k] = iv[k]; k += 1; }
+        // init() configures the engine in ECB (or "key-loaded") state.
+        // CTR-specific config (counter/IV, ALGOMODE swap for HW path) lives
+        // in ctr_xform so engines that override it own their state machine.
         self.aes.init(&aes_key, None);
-        let mut i: usize = 0;
-        while i < chunks {
-            self.aes.encrypt_block(&counter_block, &mut output_block);
-            let mut j: usize = 0;
-            while j < 16 { data[i*16 + j] ^= output_block[j]; j += 1; }
-            // Increment counter (big-endian)
-            let mut c: usize = 15;
-            loop {
-                counter_block[c] = counter_block[c].wrapping_add(1);
-                if counter_block[c] != 0 || c == 0 { break; }
-                c -= 1;
-            }
-            i += 1;
-        }
+        self.aes.ctr_xform(&iv_block, data);
         Ok(())
     }
 }

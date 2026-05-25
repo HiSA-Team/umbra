@@ -21,7 +21,7 @@ Currently supported targets:
 |---|---|---|---|
 | NUCLEO-L552ZE-Q | STM32L552 | Cortex-M33 | Software AES, DMA block loading |
 | STM32L562E-DK | STM32L562 | Cortex-M33 | Hardware AES, OCTOSPI + OTFDEC |
-| NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, HW HMAC-SHA256, NPU-in-enclave demo |
+| NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, HW HMAC-SHA256, HW AES (CRYP1), NPU-in-enclave demo |
 
 ## Install Dependencies
 To build Umbra, rust is required

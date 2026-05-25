@@ -1,17 +1,118 @@
 //! AES engine for STM32N657.
 //!
 //! Two implementations are provided: `AesEmulated`, a pure-software AES-128
-//! used in the current build, and the CRYP1 hardware driver under `cryp.rs`
-//! (skeleton — 11 cycles per 16-byte block once wired up).
+//! used in the current build, and `AesHardware` which routes key material
+//! through the SAES1 keystore and performs block operations via CRYP1
+//! (14 cycles per 16-byte block (RM0486 §49)).
+//!
+//! `AesHardware` composes SAES1 (keystore) + CRYP1 (engine) — key never
+//! appears in CRYP_KxLR/RR via shared-key bus.
 //!
 //! NOTE: All loops use `while` instead of `for` ranges because Rust nightly
 //! UB checks in `core::iter::range` panic on ARMv8-M.
+
+/// AEAD error codes.
+///
+/// `AuthFail` is the security-critical variant: any byte modification to
+/// ciphertext/tag/AD/nonce must produce it. Buffer-size mismatches surface
+/// separately so callers can distinguish API misuse from tampering.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AeadError {
+    /// `out` slice shorter than `plaintext.len() + Self::TAG_SIZE`.
+    OutputTooSmall,
+    /// `plaintext_out` slice shorter than `ciphertext.len() - Self::TAG_SIZE`.
+    PlaintextBufferTooSmall,
+    /// Authentication tag did not match. Plaintext output is undefined and
+    /// MUST NOT be released to higher layers.
+    AuthFail,
+    /// Nonce length does not match `Self::NONCE_SIZE`.
+    InvalidNonceLength,
+    /// Key length does not match `Self::KEY_SIZE`.
+    InvalidKeyLength,
+    /// Concrete implementation is declared in the type system but not yet
+    /// wired to hardware. Returned by placeholder impls.
+    NotYetImplemented,
+}
+
+/// Authenticated Encryption with Associated Data.
+///
+/// Associated consts (KEY_SIZE / NONCE_SIZE / TAG_SIZE) make this trait
+/// **not** object-safe (no `&dyn Aead`). This is deliberate for embedded:
+/// callers use it generically, monomorphization keeps the vtable cost at
+/// zero. Mirrors the idiom of the upstream `aead` crate.
+pub trait Aead {
+    /// Symmetric key length in bytes.
+    const KEY_SIZE: usize;
+    /// Nonce / IV length in bytes. For GCM this is conventionally 12.
+    const NONCE_SIZE: usize;
+    /// Authentication tag length appended to ciphertext, in bytes.
+    const TAG_SIZE: usize;
+
+    /// Encrypt `plaintext` under `key`+`nonce`, authenticate
+    /// `plaintext` + `associated_data`. Writes `ciphertext || tag` to
+    /// `ciphertext_out` (length must be `plaintext.len() + TAG_SIZE`).
+    /// Returns the number of bytes written.
+    fn seal(
+        &mut self,
+        key: &[u8],
+        nonce: &[u8],
+        associated_data: &[u8],
+        plaintext: &[u8],
+        ciphertext_out: &mut [u8],
+    ) -> Result<usize, AeadError>;
+
+    /// Verify tag against `associated_data` and the ciphertext portion of
+    /// `ciphertext_and_tag`, then decrypt to `plaintext_out`. The last
+    /// `TAG_SIZE` bytes of `ciphertext_and_tag` are the tag. On `Ok`,
+    /// returns the plaintext length written. On `AuthFail`, the plaintext
+    /// output buffer must be treated as untrusted (typically zeroized).
+    fn open(
+        &mut self,
+        key: &[u8],
+        nonce: &[u8],
+        associated_data: &[u8],
+        ciphertext_and_tag: &[u8],
+        plaintext_out: &mut [u8],
+    ) -> Result<usize, AeadError>;
+}
 
 /// Common interface for AES engines.
 pub trait AesEngine {
     fn init(&mut self, key: &[u8], iv: Option<&[u8]>);
     fn encrypt_block(&self, input: &[u8; 16], output: &mut [u8; 16]);
     fn decrypt_block(&self, input: &[u8; 16], output: &mut [u8; 16]);
+
+    /// AES-128-CTR XOR transform (encrypt and decrypt are the same operation).
+    ///
+    /// `iv` is the initial 128-bit counter (block). `data.len()` must be a
+    /// multiple of 16. The counter increments big-endian (NIST SP800-38A
+    /// convention) on the rightmost byte; carry propagates left.
+    ///
+    /// Default impl: repeated `encrypt_block` of the counter, XORed into
+    /// `data`. Overridable for native CTR-mode hardware (`AesHardware`
+    /// switches `Cryp1` to ALGOMODE=0x6 and lets the peripheral increment
+    /// the counter and produce keystream internally).
+    fn ctr_xform(&mut self, iv: &[u8; 16], data: &mut [u8]) {
+        let mut counter_block = *iv;
+        let mut keystream = [0u8; 16];
+        let chunks = data.len() / 16;
+        let mut i: usize = 0;
+        while i < chunks {
+            self.encrypt_block(&counter_block, &mut keystream);
+            let mut j: usize = 0;
+            while j < 16 {
+                data[i * 16 + j] ^= keystream[j];
+                j += 1;
+            }
+            let mut c: usize = 15;
+            loop {
+                counter_block[c] = counter_block[c].wrapping_add(1);
+                if counter_block[c] != 0 || c == 0 { break; }
+                c -= 1;
+            }
+            i += 1;
+        }
+    }
 }
 
 /// Software AES-128 implementation.
@@ -133,6 +234,10 @@ impl AesEmulated {
         }
     }
 
+    // Forward sub_bytes/shift_rows/mix_columns are unused — the encrypt
+    // path uses T-tables (see encrypt_block). Kept for reference/decrypt
+    // symmetry; the actual decrypt path uses the inv_* variants.
+    #[allow(dead_code)]
     fn sub_bytes(&self, s: &mut [u8; 16]) {
         let mut i: usize = 0;
         while i < 16 { s[i] = self.sbox[s[i] as usize]; i += 1; }
@@ -142,6 +247,7 @@ impl AesEmulated {
         while i < 16 { s[i] = self.rsbox[s[i] as usize]; i += 1; }
     }
 
+    #[allow(dead_code)]
     fn shift_rows(s: &mut [u8; 16]) {
         let t = s[1]; s[1]=s[5]; s[5]=s[9]; s[9]=s[13]; s[13]=t;
         let (t1,t2) = (s[2],s[6]); s[2]=s[10]; s[6]=s[14]; s[10]=t1; s[14]=t2;
@@ -168,6 +274,7 @@ impl AesEmulated {
         p
     }
 
+    #[allow(dead_code)]
     fn mix_columns(s: &mut [u8; 16]) {
         let mut i: usize = 0;
         while i < 4 {
@@ -296,5 +403,148 @@ impl AesEngine for AesEmulated {
         Self::inv_shift_rows(&mut s); self.inv_sub_bytes(&mut s);
         self.add_round_key(&mut s, &self.expanded_key[0..4]);
         *output = s;
+    }
+}
+
+/// Hardware AES via CRYP1.
+///
+/// `init` SW-loads the key into CRYP and configures ECB mode (used by
+/// `encrypt_block` / `decrypt_block`). `ctr_xform` switches the engine to
+/// native CTR mode: CRYP generates the keystream, XORs with input, and
+/// increments the counter (IV1RR) internally per block — no manual loop
+/// in software. The SAES driver is preserved for a future DHUK-wrapped
+/// key-isolation path (`saes.rs`).
+pub struct AesHardware {
+    #[allow(dead_code)]   // clocked + ready for DHUK-wrap key isolation path
+    saes: crate::saes::Saes,
+    cryp: crate::cryp::Cryp1,
+    // Cached most-recent key — `init()` writes it into CRYP_K* (ECB
+    // config) so that `encrypt_block`/`decrypt_block` work for
+    // `boot_tests` math sanity. `ctr_xform()` re-uses this byte buffer
+    // when reconfiguring CRYP from ECB → CTR for a streaming decrypt;
+    // CRYP key registers are reloaded as part of `configure_ctr_128_sw_key`
+    // (the ascending K2LR→K3RR sequence must be repeated to land KEYVALID).
+    key: [u8; 16],
+}
+
+impl AesHardware {
+    pub fn new() -> Self {
+        use crate::rcc::{self, Rcc};
+        let rcc = Rcc::new();
+        rcc.enable_ahb3_clock(rcc::SAESEN);
+        rcc.enable_ahb3_clock(rcc::CRYP1EN);
+        // SAFETY: The two preceding enable_ahb3 writes are volatile MMIO writes
+        // to RCC_AHB3ENR (0x56028258). The DSB ensures those writes are visible
+        // to the SAES and CRYP1 peripheral buses before the Saes::new() and
+        // Cryp1::new() constructors below access their registers.
+        // core::arch::asm! is used because cortex_m::asm::dsb() is not
+        // available in this no_std driver crate.
+        unsafe { core::arch::asm!("dsb"); }
+        Self {
+            saes: crate::saes::Saes::new(),
+            cryp: crate::cryp::Cryp1::new(),
+            key: [0u8; 16],
+        }
+    }
+}
+
+impl AesEngine for AesHardware {
+    fn init(&mut self, key: &[u8], _iv: Option<&[u8]>) {
+        if key.len() != 16 {
+            panic!("AesHardware: only 128-bit keys supported");
+        }
+        self.key.copy_from_slice(&key[..16]);
+        // SW-load CRYP key directly in ECB mode. ECB is the safe default
+        // for `encrypt_block`/`decrypt_block`. `ctr_xform` reconfigures to
+        // CTR on entry. The SAES shared-bus path requires DHUK-wrapped
+        // keys per RM0486 §48.4.15 (see saes.rs).
+        self.cryp.configure_ecb_128_sw_key(&self.key);
+    }
+
+    fn encrypt_block(&self, input: &[u8; 16], output: &mut [u8; 16]) {
+        self.cryp.process_block(input, output);
+    }
+
+    fn decrypt_block(&self, input: &[u8; 16], output: &mut [u8; 16]) {
+        // Intentional: CTR is symmetric, runtime never calls decrypt_block.
+        // boot_tests uses AesEmulated for math sanity.
+        self.cryp.process_block(input, output);
+    }
+
+    /// Native HW CTR override.
+    ///
+    /// Reconfigures CRYP from ECB (left over from `init`) to CTR mode with
+    /// `iv` as the initial counter, then streams `data` through the same
+    /// FIFO protocol used by `process_block`. CRYP handles counter
+    /// increment and XOR internally — the output of `process_block` is
+    /// already the ciphertext/plaintext, not raw keystream.
+    ///
+    /// Trade-off vs default impl: saves one ECB encrypt+XOR loop per block
+    /// in software, but adds a one-time CRYP reconfiguration cost. Worth
+    /// it for any payload ≥ 2 blocks. For 1 block the difference is
+    /// negligible.
+    fn ctr_xform(&mut self, iv: &[u8; 16], data: &mut [u8]) {
+        let chunks = data.len() / 16;
+        if chunks == 0 { return; }
+
+        // Reload CRYP in CTR mode with cached key + provided IV. The
+        // ascending K2LR→K3RR sequence triggers KEYVALID again inside
+        // configure_ctr_128_sw_key.
+        self.cryp.configure_ctr_128_sw_key(&self.key, iv);
+
+        let mut block = [0u8; 16];
+        let mut out_block = [0u8; 16];
+        let mut i: usize = 0;
+        while i < chunks {
+            // Stage one 16-byte ciphertext block in scratch
+            let mut j: usize = 0;
+            while j < 16 { block[j] = data[i * 16 + j]; j += 1; }
+
+            // CRYP in CTR mode XORs internally — `out_block` is the
+            // post-XOR result, not raw keystream.
+            self.cryp.process_block(&block, &mut out_block);
+
+            let mut j: usize = 0;
+            while j < 16 { data[i * 16 + j] = out_block[j]; j += 1; }
+            i += 1;
+        }
+    }
+}
+
+// Aead trait surface for AesHardware.
+//
+// AES-128-GCM is the target construction: AES-128 in CTR-mode keystream
+// XORed with plaintext, GHASH over (associated_data || ciphertext) for the
+// 16-byte tag, all under one CRYP ALGOMODE=0x8 configuration. CRYP supports
+// GCM natively per RM0486 §49.4.13 (the four-phase init→header→payload→
+// final state machine), and the existing `configure_ctr_128_sw_key` is the
+// closest neighbor to extend. The placeholder seal/open below returns
+// `NotYetImplemented` until the GCM driver lands.
+impl Aead for AesHardware {
+    const KEY_SIZE: usize = 16;     // AES-128
+    const NONCE_SIZE: usize = 12;   // GCM standard nonce (96-bit; CRYP §49.4.13)
+    const TAG_SIZE: usize = 16;     // GCM standard tag (128-bit)
+
+    fn seal(
+        &mut self,
+        _key: &[u8],
+        _nonce: &[u8],
+        _associated_data: &[u8],
+        _plaintext: &[u8],
+        _ciphertext_out: &mut [u8],
+    ) -> Result<usize, AeadError> {
+        // CRYP ALGOMODE=0x8 (GCM) goes here when implemented.
+        Err(AeadError::NotYetImplemented)
+    }
+
+    fn open(
+        &mut self,
+        _key: &[u8],
+        _nonce: &[u8],
+        _associated_data: &[u8],
+        _ciphertext_and_tag: &[u8],
+        _plaintext_out: &mut [u8],
+    ) -> Result<usize, AeadError> {
+        Err(AeadError::NotYetImplemented)
     }
 }

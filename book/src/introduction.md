@@ -19,7 +19,7 @@ Umbra runs in the **Secure World** of a Cortex-M33 (ARMv8-M) or Cortex-M55 (ARMv
 |---|---|---|---|
 | NUCLEO-L552ZE-Q | STM32L552 | Cortex-M33 | Software AES, DMA block loading, LPUART1 debug |
 | STM32L562E-DK | STM32L562 | Cortex-M33 | Hardware AES, OCTOSPI + OTFDEC transparent decryption, USART1 debug |
-| NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, 4.2 MB SRAM, HW HMAC-SHA256, NPU-in-enclave demo |
+| NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, 4.2 MB SRAM, HW HMAC-SHA256, HW AES (CRYP1), NPU-in-enclave demo |
 
 ## Current Status
 

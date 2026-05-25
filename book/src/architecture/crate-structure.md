@@ -70,7 +70,12 @@ STM32N657 peripheral drivers:
 - **HASH** — hardware HMAC-SHA256 (used for boot-time chained measurement
   over enclave + NPU bytecode/weights; replaces the SW implementation
   used during early bring-up)
-- **AES** — `CRYP1` hardware engine
+- **AES** — `CRYP1` hardware engine via `AesHardware` (ECB single-block
+  + native CTR streaming, ALGOMODE=0x6 with HW counter increment);
+  SAES1 driver preserved for future DHUK-wrap key isolation; `AesEmulated`
+  T-table software fallback available behind the `n657_aes_hw` feature flag
+- **Aead trait** — typed seal/open surface with associated KEY_SIZE / NONCE_SIZE /
+  TAG_SIZE consts (currently placeholder; AES-128-GCM via CRYP ALGOMODE=0x8 planned)
 - **RISAF** — per-memory firewall (RISAF2 = AXISRAM1, RISAF12 = XSPI2, ...)
 - **MCE** — memory cipher engine for external flash (currently passthrough;
   encrypt-at-rest "Path B-full" deferred — see `oracle.rs` doc)
