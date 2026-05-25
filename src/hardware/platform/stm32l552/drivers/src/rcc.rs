@@ -195,6 +195,117 @@ impl Rcc {
         unsafe { write_register(vtor_ns_addr as *const u32, 0, vtor_ns); }
     }
 
+    // ─── HSI16 + PLL + SYSCLK switch (added 2026-05-24) ─────────────────
+    //
+    // Reference RM0438 §9.4.1 (RCC_CR), §9.4.4 (PLLCFGR), §9.4.3 (CFGR).
+    //
+    // Bring-up order from caller (mandatory):
+    //   1. PWR_CR1.VOS = Range 0 (Boost)             — pwr.rs
+    //   2. FLASH_ACR.LATENCY = 5 + ICEN + DCEN + PRF — flash.rs
+    //   3. RCC: enable_hsi16()
+    //   4. RCC: enable_pll_hsi16_110mhz()
+    //   5. RCC: switch_sysclk_to_pll()
+
+    /// Enable HSI16 (16 MHz internal RC) and wait for HSIRDY.
+    /// RCC_CR.HSION = bit 8, RCC_CR.HSIRDY = bit 10.
+    pub fn enable_hsi16(&self) {
+        // Safety: RCC_CR is MMIO; HSION enables an oscillator.
+        unsafe { set_register_bit(self.regs, RCC_CR_BASE_OFFSET, 8); }
+        loop {
+            // Safety: read-only readback to poll readiness flag.
+            let cr = unsafe { read_register(self.regs, RCC_CR_BASE_OFFSET) };
+            if (cr & (1 << 10)) != 0 { break; }
+        }
+    }
+
+    /// Configure and enable PLL on HSI16.
+    ///   PLLM field = 3 (bits [7:4], encodes M-1) → M = 4 → PLL input = HSI16/4 = 4 MHz
+    ///   PLLN = 55 (bits [14:8], value-direct)    → VCO = 4 MHz × 55 = 220 MHz
+    ///   PLLR field = 0 (bits [26:25])            → PLLR divider = 2 → PLLR clock = 110 MHz
+    ///   PLLREN = 1 (bit 24)                      → enable PLLR output to SYSCLK
+    ///   PLLSRC = 2 (bits [1:0])                  → 10 = HSI16 as PLL source
+    ///
+    /// Caller MUST have called enable_hsi16() first and set VOS Range 0
+    /// + flash 5 WS beforehand.
+    ///
+    /// Encodings per RM0438 §9.4.4 and ST HAL `__HAL_RCC_PLL_PLLM_CONFIG`:
+    ///   PLLM field = (M - 1), so PLLM=4 stored as field value 3.
+    ///   PLLN field = N directly (range 8-86).
+    ///   PLLR field: 00=÷2, 01=÷4, 10=÷6, 11=÷8 — we want ÷2 → 00.
+    pub fn enable_pll_hsi16_110mhz(&self) {
+        // 1. Make sure PLL is OFF before reconfiguring (RM0438 §9.4.4:
+        //    PLLCFGR is writable only when PLL is disabled).
+        // Safety: RCC_CR.PLLON = bit 24.
+        unsafe { clear_register_bit(self.regs, RCC_CR_BASE_OFFSET, 24); }
+        loop {
+            // Safety: read-only poll for PLLRDY=0.
+            let cr = unsafe { read_register(self.regs, RCC_CR_BASE_OFFSET) };
+            if (cr & (1 << 25)) == 0 { break; }
+        }
+
+        // 2. Write PLLCFGR atomically: PLLSRC=10, PLLM field=3 (M=4),
+        //    PLLN=55, PLLR=00 (÷2), PLLREN=1.
+        //    Bit layout: [1:0]=PLLSRC, [7:4]=PLLM, [14:8]=PLLN,
+        //                [26:25]=PLLR, [24]=PLLREN.
+        let pllcfgr: u32 =
+              (0b10  << 0)   // PLLSRC = HSI16
+            | (3u32  << 4)   // PLLM field = 3 (encodes M-1 → M=4)
+            | (55u32 << 8)   // PLLN   = 55
+            | (0u32  << 25)  // PLLR   = ÷2
+            | (1u32  << 24); // PLLREN
+        // Safety: PLL is disabled (verified above); PLLCFGR is now writable.
+        unsafe { write_register(self.regs, RCC_PLLCFGGR_BASE_OFFSET, pllcfgr); }
+
+        // 3. Enable PLL and poll PLLRDY (bit 25).
+        // Safety: re-arming PLL with the new config.
+        unsafe { set_register_bit(self.regs, RCC_CR_BASE_OFFSET, 24); }
+        loop {
+            // Safety: read-only poll for PLLRDY=1.
+            let cr = unsafe { read_register(self.regs, RCC_CR_BASE_OFFSET) };
+            if (cr & (1 << 25)) != 0 { break; }
+        }
+    }
+
+    /// Switch SYSCLK source from current (MSI after reset) to PLL.
+    /// RCC_CFGR.SW = bits [1:0]:
+    ///   00 = MSI, 01 = HSI16, 10 = HSE, 11 = PLLR (= PLLCLK)
+    /// RCC_CFGR.SWS = bits [3:2] reflects current source.
+    pub fn switch_sysclk_to_pll(&self) {
+        // Safety: writing SW field of CFGR initiates SYSCLK source switch.
+        unsafe {
+            let cfgr = read_register(self.regs, RCC_CFGR_BASE_OFFSET);
+            let new = (cfgr & !0b11) | 0b11;  // SW = 11 (PLLR)
+            write_register(self.regs, RCC_CFGR_BASE_OFFSET, new);
+        }
+        // Poll SWS until 11 (PLLR is now the active SYSCLK).
+        loop {
+            // Safety: read-only poll of SWS.
+            let cfgr = unsafe { read_register(self.regs, RCC_CFGR_BASE_OFFSET) };
+            if ((cfgr >> 2) & 0b11) == 0b11 { break; }
+        }
+    }
+
+    /// Route USART1 kernel clock to HSI16 (16 MHz) instead of PCLK2.
+    /// RCC_CCIPR1.USART1SEL = bits [1:0]:
+    ///   00 = PCLK2 (default — varies with SYSCLK)
+    ///   01 = SYSCLK
+    ///   10 = HSI16
+    ///   11 = LSE
+    ///
+    /// Used only on L562 (the L552 board uses LPUART1, which is already
+    /// routed to LSE via select_lse_to_lpuart1). Routing USART1 to HSI16
+    /// makes the BRR fixed across SYSCLK changes.
+    #[cfg(feature = "stm32l562")]
+    pub fn select_usart1_hsi16(&self) {
+        // Safety: CCIPR1 controls peripheral kernel clock muxes; modifying
+        // USART1SEL takes effect at the next BRR write.
+        unsafe {
+            let ccipr1 = read_register(self.regs, RCC_CCIPR1_BASE_OFFSET);
+            let new = (ccipr1 & !0b11) | 0b10;  // USART1SEL = 10 = HSI16
+            write_register(self.regs, RCC_CCIPR1_BASE_OFFSET, new);
+        }
+    }
+
     #[cfg(feature = "stm32l562")]
     pub fn select_ospi_clock_source_sysclk(&self) {
         // CCIPR2.OSPISEL (bits [21:20]) = 00: SYSCLK selected as OCTOSPI clock

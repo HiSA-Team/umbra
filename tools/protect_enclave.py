@@ -98,13 +98,21 @@ def parse_disassembly(elf_path, section_name):
             if ';' in op_str:
                 op_str = op_str.split(';')[0].strip()
                 
-            size = len(hex_bytes.replace(" ", "")) // 2
+            hex_clean = hex_bytes.replace(" ", "")
+            # Tolerate odd-length hex from objdump on PIC blobs where .data/.bss
+            # bytes are interleaved with code in `._enclave_code` and don't
+            # form complete Thumb instructions. The downstream
+            # sequential-fallthrough pass still threads reachability for data
+            # regions; skipping malformed lines silently is safe.
+            if len(hex_clean) % 2 != 0:
+                continue
+            size = len(hex_clean) // 2
             instructions.append({
                 "addr": addr,
                 "size": size,
                 "mnemonic": mnemonic,
                 "op_str": op_str,
-                "bytes": binascii.unhexlify(hex_bytes.replace(" ", ""))
+                "bytes": binascii.unhexlify(hex_clean)
             })
             
     return instructions, labels
@@ -196,14 +204,41 @@ def main():
         print("Error: No instructions found in section")
         sys.exit(1)
         
-    # Determine code constraints
+    # Determine code constraints.
+    #
+    # Prefer the linker-emitted _enclave_code_end symbol so the size covers
+    # .text + .rodata + .data + .bss (everything that gets loaded into the
+    # ESS region under -fpic -mpic-data-is-text-relative). The fallback
+    # (end-of-last-instruction) is the historical behaviour and is kept for
+    # blobs built against older linker scripts; it misses .data/.bss and
+    # under-sizes the kernel ESS allocation, causing global writes past the
+    # code-only region to trap MemManage with "addr outside any enclave".
     start_addr = sec_info['vma']
-    end_addr = insts[-1]['addr'] + insts[-1]['size'] # Rough end of code
-    code_len = end_addr - start_addr
-    print(f"[Protect] Detected Code Length: {code_len} bytes")
-    
-    # Trim full_code to just the used part (plus alignment)
-    full_code = full_code[:code_len]
+    end_sym   = symbol_map.get("_enclave_code_end")
+    start_sym = symbol_map.get("_enclave_code_start")
+    if end_sym is not None and start_sym is not None:
+        code_len = end_sym - start_sym
+        print(f"[Protect] Detected Code+Data Length: {code_len} bytes "
+              f"(from _enclave_code_end)")
+    else:
+        code_len = (insts[-1]['addr'] + insts[-1]['size']) - start_addr
+        print(f"[Protect] Detected Code Length: {code_len} bytes "
+              f"(no _enclave_code_end symbol; .data/.bss may be missed)")
+
+    # `end_addr` is the upper bound of the enclave's content in VMA space.
+    # Downstream code (Stage 5: branch-target → block-idx classification)
+    # uses it to decide whether a `bl`/`b` target lives inside this enclave.
+    end_addr = start_addr + code_len
+
+    # Trim/pad full_code to code_len. The extracted ._enclave_code section
+    # contains any in-section .bss bytes materialised as zeros (the linker
+    # promotes mixed-content output sections to PROGBITS); if the section
+    # was shorter than code_len for some reason we pad with zeros so the
+    # block splitter below still produces a self-consistent blob.
+    if len(full_code) > code_len:
+        full_code = full_code[:code_len]
+    elif len(full_code) < code_len:
+        full_code = full_code + b"\x00" * (code_len - len(full_code))
     
     # 4. Split into EFBs
     blocks = []
@@ -407,7 +442,11 @@ def main():
     META_SIZE = 32
     HMAC_PREFIX_SIZE = 32 if (not chained_mode or ess_miss_recovery) else 0
     HEADER_SIZE = META_SIZE + HMAC_PREFIX_SIZE  # 32 or 64
-    MAX_REACHABLE = 16 # Max reachable blocks to store
+    # MUST match kernel's `MAX_REACHABLE` in src/kernel/src/common/ess.rs.
+    # Kernel asserts `count <= MAX_REACHABLE` on each block's meta and
+    # truncates reads to this many entries — host writing more would yield
+    # divergent meta interpretation.
+    MAX_REACHABLE = 4
 
     # Seed the running chain key with the master key (matches the kernel's
     # `Kernel::begin_measurement` which copies `master_key::MASTER_KEY`).
@@ -427,120 +466,95 @@ def main():
     if hmac_over_plaintext:
         print("[Protect] --hmac-over-plaintext: ct region carries plaintext, sig binds plaintext")
 
+    # Pass 1: Compute meta + ciphertext + binding_input + (optional) sig for
+    # every block in numeric order. These are independent of fold order.
+    per_block = []
     for blk in blocks:
-        # 1. Encrypt Data (L552) or pass through plaintext (L562, hmac-over-plaintext).
-        # Under --hmac-over-plaintext the variable name "ciphertext" is a misnomer:
-        # it literally holds plaintext, which OTFDEC will re-encrypt when the
-        # secure boot oracle writes the block back to OCTOSPI flash.
+        # Encrypt (L552) or pass through plaintext (L562, hmac-over-plaintext).
         if hmac_over_plaintext:
             ciphertext = blk['data']
         else:
             ciphertext = encrypt_block(blk['data'], aes_key)
-        
-        # 2. Build Metadata part (for HMAC calculation)
-        # What do we HMAC? The Encrypted Data? Or Header + Data?
-        # Usually Encrypt-then-MAC on the Ciphertext.
-        # So HMAC(Ciphertext + Metadata?)
-        # Design says: "computes HMAC ... for each block ... chaining each HMAC"
-        # "chaining each HMAC as the key for the next EFB" -> interesting!
-        # For now, let's just HMAC(Ciphertext).
-        
-        # Reachable list
+
+        # Reachable list — sorted, truncated to MAX_REACHABLE (= kernel's value).
         reachable_list = sorted(list(blk['reachable']))
         if len(reachable_list) > MAX_REACHABLE:
             print(f"WARNING: Block {blk['id']} has too many reachable blocks ({len(reachable_list)}). Truncating.")
             reachable_list = reachable_list[:MAX_REACHABLE]
-            
+
         meta = struct.pack("B", len(reachable_list))
         for r_idx in reachable_list:
             meta += struct.pack("B", r_idx)
-        # Pad metadata to a fixed META_SIZE (32B) regardless of layout. The
-        # kernel always reads 32 bytes of metadata per block from flash.
+        # Pad metadata to a fixed META_SIZE (32B). Kernel reads 32B per block.
         meta += b'\x00' * (META_SIZE - len(meta))
-        
-        # Calc HMAC
-        # Using a fixed key for now? Or chained?
-        # "chaining each HMAC as the key for the next EFB"
-        # Step 1: HMAC(Key, Data) -> H1
-        # Step 2: HMAC(H1, Data2) -> H2
-        # We need to maintain state.
-        
-        # Let's use the `hmac_key` for the first block, then chain.
-        # But wait, Random Access?
-        # If we use chaining, we can't verify Block N without verifying 0..N-1.
-        # This kills random access for swapping!
-        # Using chaining is for "Secure Boot" (checking the whole chain).
-        # But for *Runtime Swapping* (ESS), we need to verify individual blocks.
-        # Design says: "reads EFBs from flash and computes HMAC... chaining... The final result... is compared".
-        # This describes the INITIAL validation (at boot/load).
-        # "ESS... caches validated...".
-        # If we just need to validate at load time, chaining is fine.
-        # But if we swap in a block later, do we re-validate?
-        # "If an enclave tries to execute code outside its EFBC... re-validation process from flash".
-        # It implies we might re-read from flash.
-        # If we use chaining, we must re-read everything from start to N? That's O(N).
-        # "entrusting execution to the processor... validation involves flash and accelerators".
-        # "Two nearly independent computational paths".
-        # Maybe we verify ONLY the needed block?
-        # "Hash-based Message Authentication Code (HMAC) for each block using a securely stored key".
-        # It says "using a securely stored key", NOT "using the previous HMAC".
-        # Wait, the text says: "chaining each HMAC as the key for the next EFB".
-        # This explicitly implies chaining.
-        # This is a specific design choice called "Hash Chain" or "Merkle implementation".
-        # It suggests sequential validation.
-        # If we want O(1) validation, we need a Merkle Tree or individual MACs with same key.
-        # Given "chaining each HMAC as the key for the next EFB", I will implement that.
-        # BUT this makes random access validation hard.
-        # "When a new block is needed... fetching, validating...".
-        # If validation relies on the chain, we are stuck.
-        # UNLESS the "securely stored key" is used for *loading into ESS* and we trust ESS?
-        # Maybe the Design implies: We validate the WHOLE image at start?
-        # "When Enclave is identified... host loader invokes enclave_create... validates the application binary... Once all EFBs are validated, the enclave is considered secure".
-        # Ah! Validation happens ONCE at creation.
-        # Then blocks are just loaded?
-        # But "ESS stores validated and decrypted blocks".
-        # "decoupling enclave execution from code validation".
-        # "speculatively request, validate, and load".
-        # This implies validation happens *during* runtime too?
-        # If the key is changing (chaining), we need the current key state?
-        # If we skipped blocks, we don't have the key.
-        # Re-reading "using a securely stored key, chaining each HMAC...".
-        # Maybe the "securely stored key" IS the root, and we generate per-block keys?
-        # Or maybe the text implies the *measure* (M) is the detailed hash chain.
-        # If so, maybe we just store the HMACs in the header?
-        # Let's stick to a simpler "HMAC of block using Master Key" for this implementation, as "chaining" might be a specific requirement regarding the *measurement* stored in the DB, not necessarily the runtime verification mechanism if random access is needed.
-        # OR better: I will implement individual HMACs using the Master Key. This is robust and allows random access. I'll note the deviation or interpretation.
-        # The User said: "Each block has it's own hmac" (singular).
-        
-        # Block-binding input: [block_id_le(4) | ciphertext | meta]. This is
-        # exactly what the kernel's verify_slice builds, so the two sides must
-        # agree bit-for-bit.
+
+        # Block-binding input: [block_id_le(4) | ciphertext | meta]. Must match
+        # kernel's `verify_slice` in load_and_verify_block byte-for-byte.
         block_id_bytes = struct.pack("<I", blk['id'])
         binding_input = block_id_bytes + ciphertext + meta
 
-        if chained_mode:
-            # Fold this block into the running chain. The final chain_state is
-            # written into the enclave header as the reference measurement.
-            chain_state = hmac.new(chain_state, binding_input, hashlib.sha256).digest()
-            if ess_miss_recovery:
-                # Alongside the chain, prepend a per-block HMAC keyed
-                # with the derived hmac_key so the runtime Validator can re-check
-                # an individual block on an ESS miss without replaying the chain.
-                sig = hmac.new(per_block_hmac_key, binding_input, hashlib.sha256).digest()
-                block_blob = sig + meta + ciphertext
-            else:
-                # Chained layout has NO per-block HMAC prefix on flash.
-                block_blob = meta + ciphertext
-        else:
-            # Legacy per-block HMAC keyed with the (fixed) master key; the 32B
-            # digest is prepended to every block on flash. This path is retained
-            # only for diffing — do not rely on it in production.
+        # Per-block HMAC sig. Used in:
+        #  - chained_mode + ess_miss_recovery: runtime Validator re-check on ESS miss.
+        #  - non-chained: prepended to every block on flash (legacy diff path).
+        sig = None
+        if chained_mode and ess_miss_recovery:
+            sig = hmac.new(per_block_hmac_key, binding_input, hashlib.sha256).digest()
+        elif not chained_mode:
             sig = hmac.new(hmac_key, binding_input, hashlib.sha256).digest()
-            block_blob = sig + meta + ciphertext
 
+        per_block.append({
+            'id': blk['id'],
+            'reachable_in_meta': reachable_list,  # truncated, sorted; matches what kernel reads from meta
+            'meta': meta,
+            'ciphertext': ciphertext,
+            'binding_input': binding_input,
+            'sig': sig,
+            'reachable_display': list(blk['reachable']),
+        })
+
+    # Pass 2: Simulate the kernel's BFS fold order. Mirrors api_impl.rs's
+    # `umbra_enclave_create_imp` lines 100-159 — start at block 0, walk
+    # reachables in meta order (already sorted), skipping visited and
+    # out-of-range entries. Folding chain in this order is fix #4 from prior
+    # session findings; without it, host folds [0..num_blocks-1] in numeric
+    # order while kernel folds only the BFS-reachable subset, causing
+    # chained-measurement FAIL whenever the call graph leaves any block
+    # un-reached (e.g. prime's block 2 when block 1 ends with `pop {pc}`
+    # and has no branch to block 2).
+    if chained_mode:
+        bfs_visit_order = []
+        bfs_visited = {0}
+        bfs_queue = [0]
+        while bfs_queue:
+            idx = bfs_queue.pop(0)
+            bfs_visit_order.append(idx)
+            for r in per_block[idx]['reachable_in_meta']:
+                if r not in bfs_visited and r < num_blocks:
+                    bfs_visited.add(r)
+                    bfs_queue.append(r)
+
+        for idx in bfs_visit_order:
+            chain_state = hmac.new(chain_state, per_block[idx]['binding_input'], hashlib.sha256).digest()
+
+        if bfs_visit_order != list(range(num_blocks)):
+            print(f"[Protect] BFS chain fold order: {bfs_visit_order} "
+                  f"(numeric would be {list(range(num_blocks))})")
+            unreached = sorted(set(range(num_blocks)) - set(bfs_visit_order))
+            if unreached:
+                print(f"[Protect] Unreached-by-BFS blocks (NOT in chain): {unreached}")
+
+    # Pass 3: Build final_blob in numeric order to match the on-flash layout
+    # the kernel expects (block N at flash_offset = header + N * TOTAL_BLOCK_SIZE).
+    final_blob = b""
+    for entry in per_block:
+        if chained_mode and ess_miss_recovery:
+            block_blob = entry['sig'] + entry['meta'] + entry['ciphertext']
+        elif chained_mode:
+            block_blob = entry['meta'] + entry['ciphertext']
+        else:
+            block_blob = entry['sig'] + entry['meta'] + entry['ciphertext']
         final_blob += block_blob
-
-        print(f"Block {blk['id']}: Size={len(block_blob)}, Reachable={list(blk['reachable'])}")
+        print(f"Block {entry['id']}: Size={len(block_blob)}, Reachable={entry['reachable_display']}")
 
     # 7. Write Output to Section
     # Check if it fits? 

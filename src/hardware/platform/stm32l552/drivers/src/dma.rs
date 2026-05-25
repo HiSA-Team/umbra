@@ -172,11 +172,43 @@ impl Dma {
         }
     }
     
+    // Reclaim slots whose DMA transfer has finished. The hardware auto-clears
+    // CCR.EN to 0 when the channel's CNDTR reaches 0 (non-circular mode), so
+    // checking `read_ccrx(dma_id, ch) & 1 == 0` for a slot in `Running` state
+    // tells us the transfer is done and the slot can be reused.
+    //
+    // Without this GC pass, the requests[] array fills up after
+    // MAX_NUMBER_OF_REQUESTS calls (= 10) and `enqueue()` silently returns
+    // None — the DMA never starts and any caller waiting on
+    // `is_dma_complete()` blocks forever in `wfi()`. The 8-block prefetch
+    // for the countnegative TACLeBench enclave hits this limit at the 11th
+    // enqueue (handle_ess_miss block 6, fetch) and hangs the kernel.
+    fn gc_done_requests(&mut self) {
+        for i in 0..MAX_NUMBER_OF_REQUESTS {
+            if self.requests[i].slot_state != RequestSlotState::Running {
+                continue;
+            }
+            let (dma_id, ch) = match self.requests[i].channel {
+                Some(c) => c,
+                None    => continue,
+            };
+            if (self.read_ccrx(dma_id, ch) & 1) == 0 {
+                self.requests[i].slot_state = RequestSlotState::Empty;
+                self.requests[i].channel    = None;
+            }
+        }
+    }
+
     // Enqueue appends (a copy) the Request to the internal queue of the driver.
     // The request will be executed some time in the future.
     // A weak reference is returned, a strong reference can be taken to check the status of the request.
     // The strong reference cannot be taken if the driver has dropped the request or if it has completed.
     pub fn enqueue(&mut self, request: &Request) -> Option<RequestNonce> {
+        // Reclaim slots whose transfer has already finished. Without this,
+        // the requests[] array fills up after 10 enqueues and we silently
+        // return None — see `gc_done_requests` doc-comment above.
+        self.gc_done_requests();
+
         // Search for the first empty slot in the array
         for i in 0..MAX_NUMBER_OF_REQUESTS {
             if self.requests[i].slot_state != RequestSlotState::Empty {
@@ -189,12 +221,12 @@ impl Dma {
             self.requests[i].slot_state = RequestSlotState::Ready;
             self.requests[i].channel = None;
             self.requests[i].nonce = nonce;
-            
+
             // Try to move to DMA
             self.handle_queue();
             return Some(nonce)
         }
-        
+
         None
     }
     

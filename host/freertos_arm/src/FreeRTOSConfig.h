@@ -2,7 +2,7 @@
 #define FREERTOS_CONFIG_H
 
 /* Clocks */
-#define configCPU_CLOCK_HZ          ( 4000000UL )   /* MSI default */
+#define configCPU_CLOCK_HZ          ( 110000000UL ) /* Stage-A PLL HSI16 → 110 MHz, see project_pll_ttable_perf.md */
 #define configTICK_RATE_HZ          ( ( TickType_t ) 1000 )
 
 /* Scheduler */
@@ -13,7 +13,7 @@
 
 /* Memory */
 #define configMINIMAL_STACK_SIZE    ( ( unsigned short ) 128 )
-#define configTOTAL_HEAP_SIZE       ( ( size_t ) 32768 )
+#define configTOTAL_HEAP_SIZE       ( ( size_t ) 16384 )  /* 16 KB sufficient for 3 tasks (Enclave + Heartbeat + Idle) */
 #define configMAX_TASK_NAME_LEN     ( 16 )
 
 /* Features — keep minimal */
@@ -27,7 +27,7 @@
 
 /* Hooks */
 #define configUSE_IDLE_HOOK         0
-#define configUSE_TICK_HOOK         0
+#define configUSE_TICK_HOOK         1  /* enables vApplicationTickHook for DWT drift instrumentation */
 #define configUSE_MALLOC_FAILED_HOOK 0
 #define configCHECK_FOR_STACK_OVERFLOW 2
 

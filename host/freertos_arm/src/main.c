@@ -37,6 +37,25 @@ extern uint8_t _enclave_start;
 #define STATUS_TERMINATED 4
 #define STATUS_FAULTED    5
 
+/* --- Tick drift instrumentation (DWT-based) ----------------------------- */
+typedef struct {
+    uint32_t max_delta_cycles;
+    uint32_t buckets[6];   /* <1.5x, <2x, <5x, <10x, <100x, >=100x EXPECTED */
+    uint32_t total_ticks;
+} drift_stats_t;
+
+static drift_stats_t g_drift;
+
+#define EXPECTED_CYC_PER_TICK 110000UL   /* 110 MHz / 1 kHz */
+
+/* DWT MMIO — declared here (not next to SCB_VTOR below) so vApplicationTickHook
+ * can reference DWT_CYCCNT. The DWT block is NS-accessible on L552. */
+#define DEMCR       (*(volatile uint32_t *)0xE000EDFC)
+#define DWT_CTRL    (*(volatile uint32_t *)0xE0001000)
+#define DWT_CYCCNT  (*(volatile uint32_t *)0xE0001004)
+#define DWT_TRCENA  (1u << 24)
+#define DWT_CYCCNTENA 1u
+
 /* --- FreeRTOS task: scan, create, and run enclaves ----------------------- */
 static void vEnclaveTask(void *pvParameters) {
     (void)pvParameters;
@@ -58,15 +77,21 @@ static void vEnclaveTask(void *pvParameters) {
             unsigned int id = umbra_enclave_create(addr);
             if (id < 0xFFFFFFF0) {
                 enclave_ids[enclave_count++] = id;
+                taskENTER_CRITICAL();
                 umbra_debug_print("[FREERTOS] Enclave created\n");
+                taskEXIT_CRITICAL();
             } else {
+                taskENTER_CRITICAL();
                 umbra_debug_print("[FREERTOS] Enclave creation REJECTED\n");
+                taskEXIT_CRITICAL();
             }
         }
     }
 
     if (enclave_count == 0) {
+        taskENTER_CRITICAL();
         umbra_debug_print("[FREERTOS] No enclaves found\n");
+        taskEXIT_CRITICAL();
         vTaskDelete(NULL);
         return;
     }
@@ -83,26 +108,95 @@ static void vEnclaveTask(void *pvParameters) {
             char hex_buf[11];
 
             if (status == STATUS_SUSPENDED) {
+                taskENTER_CRITICAL();
                 umbra_debug_print("[FREERTOS] Enclave preempted (SysTick)\n");
+                taskEXIT_CRITICAL();
             } else if (status == STATUS_TERMINATED) {
+                taskENTER_CRITICAL();
                 unsigned int full_result = umbra_enclave_status(enclave_ids[i]);
                 umbra_debug_print("[FREERTOS] Enclave terminated! R0=");
                 umbra_debug_print(umbra_u32_to_hex(full_result, hex_buf));
                 umbra_debug_print("\n");
+                taskEXIT_CRITICAL();
                 enclave_ids[i] = 0;
                 active--;
             } else if (status == STATUS_FAULTED) {
+                taskENTER_CRITICAL();
                 umbra_debug_print("[FREERTOS] Enclave faulted — ret=");
                 umbra_debug_print(umbra_u32_to_hex(ret, hex_buf));
                 umbra_debug_print("\n");
+                taskEXIT_CRITICAL();
                 enclave_ids[i] = 0;
                 active--;
             }
         }
     }
 
+    taskENTER_CRITICAL();
     umbra_debug_print("[FREERTOS] All enclaves done\n");
+    taskEXIT_CRITICAL();
+
+    /* Dump drift stats for the harness (parsed by tools/test_taclebench.sh). */
+    taskENTER_CRITICAL();
+    {
+        char buf[11];
+        umbra_debug_print("[DRIFT] max=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.max_delta_cycles, buf));
+        umbra_debug_print(" total=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.total_ticks, buf));
+        umbra_debug_print("\n[DRIFT] b0=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.buckets[0], buf));
+        umbra_debug_print(" b1=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.buckets[1], buf));
+        umbra_debug_print(" b2=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.buckets[2], buf));
+        umbra_debug_print(" b3=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.buckets[3], buf));
+        umbra_debug_print(" b4=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.buckets[4], buf));
+        umbra_debug_print(" b5=");
+        umbra_debug_print(umbra_u32_to_hex(g_drift.buckets[5], buf));
+        umbra_debug_print("\n");
+    }
+    taskEXIT_CRITICAL();
+
     vTaskDelete(NULL);
+}
+
+/* --- FreeRTOS task: visible heartbeat for composability evidence --------- */
+static void vHeartbeatTask(void *pvParameters) {
+    (void)pvParameters;
+    char buf[11];
+    /* 100 ms FreeRTOS-time → ~325 ms wall under enclave load. Effective NS
+     * tick rate drops to ~250-300 Hz during enclave execution because
+     * NS_SysTick is masked while in Secure code (Cortex-M33 single-pending-bit
+     * coalesces missed ticks into one). */
+    const TickType_t period = pdMS_TO_TICKS(100);
+    for (;;) {
+        TickType_t t = xTaskGetTickCount();
+        umbra_debug_print("[HEARTBEAT t=");
+        umbra_debug_print(umbra_u32_to_hex((unsigned int)t, buf));
+        umbra_debug_print("]\n");
+        vTaskDelay(period);
+    }
+}
+
+/* --- FreeRTOS application tick hook (DWT drift accounting; ISR context) --- */
+void vApplicationTickHook(void) {
+    static uint32_t last = 0;
+    uint32_t now = DWT_CYCCNT;
+    uint32_t delta = now - last;          /* u32 subtraction is wraparound-safe */
+    last = now;
+
+    g_drift.total_ticks++;
+    if (delta > g_drift.max_delta_cycles) g_drift.max_delta_cycles = delta;
+
+    if      (delta < EXPECTED_CYC_PER_TICK * 3 / 2) g_drift.buckets[0]++;
+    else if (delta < EXPECTED_CYC_PER_TICK * 2)     g_drift.buckets[1]++;
+    else if (delta < EXPECTED_CYC_PER_TICK * 5)     g_drift.buckets[2]++;
+    else if (delta < EXPECTED_CYC_PER_TICK * 10)    g_drift.buckets[3]++;
+    else if (delta < EXPECTED_CYC_PER_TICK * 100)   g_drift.buckets[4]++;
+    else                                            g_drift.buckets[5]++;
 }
 
 /* --- FreeRTOS stack overflow hook ---------------------------------------- */
@@ -126,6 +220,12 @@ int main(void) {
     SCB_VTOR = (uint32_t)(uintptr_t)__vector_table;
     SCB_SHCSR |= (1 << 16) | (1 << 17) | (1 << 18);
 
+    /* Enable DWT.CYCCNT for vApplicationTickHook drift instrumentation.
+     * DWT is NS-accessible on L552 (not gated by GTZC). */
+    DEMCR     |= DWT_TRCENA;
+    DWT_CYCCNT = 0;
+    DWT_CTRL  |= DWT_CYCCNTENA;
+
     umbra_debug_print("[FREERTOS] Starting FreeRTOS demo\n");
 
     xTaskCreate(
@@ -135,6 +235,15 @@ int main(void) {
         NULL,               /* parameters */
         1,                  /* priority (above idle) */
         NULL                /* handle (not needed) */
+    );
+
+    xTaskCreate(
+        vHeartbeatTask,
+        "Heartbeat",
+        256,        /* stack depth in words (1 KB) */
+        NULL,
+        2,          /* priority 2 — higher than vEnclaveTask (1), preempts mid-run */
+        NULL
     );
 
     vTaskStartScheduler();

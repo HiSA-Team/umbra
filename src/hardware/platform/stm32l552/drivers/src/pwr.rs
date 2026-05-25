@@ -60,6 +60,37 @@ impl Pwr {
         unsafe { set_register_bit(self.regs, PWR_CR2_BASE_OFFSET, 9); }
     }
 
+    /// Set VOS = range 0 (Boost) in PWR_CR1.
+    ///
+    /// Required for SYSCLK > 80 MHz on STM32L5 (RM0438 §6.1.5).
+    /// VOS field is bits [10:9] of PWR_CR1:
+    ///   00 = reserved
+    ///   01 = Range 1 (max 80 MHz)  ← reset default
+    ///   10 = Range 2 (max 26 MHz)
+    ///   00 with VOS field cleared = Range 0 boost (max 110 MHz)
+    /// (RM0438 §6.4.1 — bit pattern is encoded as 00 = Range 0 / Boost.)
+    ///
+    /// After writing, polls PWR_SR2.VOSF (bit 10) until 0 (regulator
+    /// settled at the new range). This must be called BEFORE raising
+    /// SYSCLK above the previous VOS limit, otherwise the chip
+    /// undervolts and hangs.
+    pub fn set_vos_range_boost(&self) {
+        // PWR_CR1.VOS bits [10:9]: clear to 00 = Range 0.
+        // Safety: PWR_CR1 is the MMIO register at PWR_BASE + 0x00. Modifying
+        // bits 10:9 changes voltage scaling; reset default is Range 1 (01).
+        unsafe {
+            let cr1 = read_register(self.regs, PWR_CR1_BASE_OFFSET);
+            let new = cr1 & !(0b11 << 9);
+            write_register(self.regs, PWR_CR1_BASE_OFFSET, new);
+        }
+        // Poll VOSF (PWR_SR2 bit 10) until 0 = regulator ready at new range.
+        loop {
+            // Safety: read-only readback of PWR_SR2.
+            let sr2 = unsafe { read_register(self.regs, PWR_SR2_BASE_OFFSET) };
+            if (sr2 & (1 << 10)) == 0 { break; }
+        }
+    }
+
     pub fn set_bit(&self, reg_offset: PwrRegisters, bit: u8) {
         unsafe { set_register_bit(self.regs, reg_offset, bit) }
     }
