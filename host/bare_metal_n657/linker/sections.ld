@@ -1,4 +1,6 @@
 /*
+ * Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+ *
  * STM32N657 NS host sections — placed in AXISRAM3 (NS).
  *
  * Layout in AXISRAM3 (0x24200000, 448K):
@@ -58,7 +60,7 @@ SECTIONS
         _ebss = .;
     } > AXISRAM3_NS
 
-    /* ── Enclave region — Phase E.4a real loader ──────────────────────
+    /* ── Enclave region ────────────────────────────────────────────────
      * Pinned at 0x24010000 (offset 0x10000 from AXISRAM3_NS base) via
      * an explicit section start address — `. = ALIGN(N)` between
      * `> REGION` placements doesn't carry across the region directive,
@@ -106,7 +108,7 @@ SECTIONS
     PROVIDE(umbra_enclave_status = 0x341AB441);
 }
 
-/* Phase E.4c MCE2 — linker symbols consumed by:
+/* MCE2 linker symbols consumed by:
  *   - Rust FSBL oracle: extern "C" { static _enclave_plaintext_flash_addr; ... }
  *   - C host main.c:    extern uint32_t _enclave_ciphertext_flash_addr;
  * `_enclave_ciphertext_flash_addr` is what enclave_create() will be passed

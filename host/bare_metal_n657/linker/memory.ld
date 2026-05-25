@@ -1,5 +1,7 @@
 /*********************************************************************************************************
 *
+*   Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+*
 *   STM32N657X0 memory map for Umbra
 *
 *   No internal flash — Umbra runs as FSBL from AXISRAM (copied by Boot ROM from XSPI2).
@@ -72,7 +74,7 @@ ASSERT(ORIGIN(_SECURE_KERNEL_TEXT_MEMORY_) + LENGTH(_SECURE_KERNEL_TEXT_MEMORY_)
 ASSERT(ORIGIN(_NSC_TEXT_MEMORY_) + LENGTH(_NSC_TEXT_MEMORY_) == ORIGIN(_SECURE_KERNEL_DATA_MEMORY_), "ERROR: NSC_TEXT and SECURE_KERNEL_DATA regions are not contiguous!");
 ASSERT(ORIGIN(_SECURE_KERNEL_DATA_MEMORY_) + LENGTH(_SECURE_KERNEL_DATA_MEMORY_) == ORIGIN(_NSC_DATA_MEMORY_), "ERROR: SECURE_KERNEL_DATA and NSC_DATA regions are not contiguous!");
 
-/* ── Phase E.4c MCE2 encryption: configurable region size ────────────────
+/* ── MCE2 encryption region: configurable size ───────────────────────────
  * Default: 4 MB. Override via --defsym from the Makefile.
  * Three canonical layouts (must update BOTH ENCLAVE_REGION_SIZE and
  * ENCLAVE_DST_START together):

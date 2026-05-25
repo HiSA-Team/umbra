@@ -1,3 +1,5 @@
+// Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+
 use arm::mmio::{
     DCISW, ICIALLU, NVIC_ITNS1,
     SCB_CCR, SCB_CCSIDR, SCB_CSSELR, SCB_SHCSR,
@@ -533,7 +535,7 @@ impl PlatformBoot for Stm32n657Platform {
         use arm::mpu;
         use drivers::risaf::{Risaf, RisafInstance};
 
-        // VTOR already set by main.rs Phase 0c (0x34180000).
+        // VTOR already set by main.rs (0x34180000).
 
         // 1. Enable configurable fault handlers (SHCSR) and clear residual
         //    Secure-side stack limits left by Boot ROM. PSPLIM_S in particular

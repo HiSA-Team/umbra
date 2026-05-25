@@ -1,5 +1,7 @@
 /*
- * STM32N657 NS host — Phase E.4a real-loader test.
+ * Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+ *
+ * STM32N657 NS host — bare-metal enclave host.
  *
  * The enclave (fibonacci.c) is linked into ._enclave_code by the host's
  * linker at offset 0x10000 from AXISRAM3_NS base. Its UMBR manifest
@@ -45,8 +47,8 @@ extern unsigned int  umbra_enclave_status(unsigned int enclave_id);
  * linker places this at VMA 0x24010000 (offset 0x10000 from AXISRAM3_NS
  * base). The corresponding flash address is HOST_FLASH_BASE + offset.
  *
- * Path B-lite: enclave is flashed in plaintext at 0x70090000 (= header).
- * Phase E.4c MCE2 encryption is deferred (see boot crate's oracle.rs
+ * The enclave is flashed in plaintext at 0x70090000 (= header).
+ * MCE2 encryption-at-rest is deferred (see boot crate's oracle.rs
  * doc + memory note `project_n657_mce2_is_noekeon.md`). The
  * `_enclave_ciphertext_flash_addr` linker symbol stays PROVIDE'd by
  * sections.ld but is unused. */
