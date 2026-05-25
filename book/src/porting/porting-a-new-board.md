@@ -288,7 +288,7 @@ adjustments. Re-use the FreeRTOS-Kernel submodule already cloned into
 
 ## Step 7 — Bring up incrementally
 
-Don't try to boot the whole thing on first try. Phase the bring-up:
+Don't try to boot the whole thing on first try. Stage the bring-up:
 
 1. **Reach `_umb_start`** — UART silent, but JTAG shows the PC is
    inside the FSBL. Confirms reset vector / signing / Boot ROM hand-off.

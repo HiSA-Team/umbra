@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+# Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
 """
 Extract NPU bytecode array from network_ecblobs.h into a raw little-endian
 binary plus a manifest JSON describing its size and entry offset.
 
-Used by Phase G.2.b to flash the bytecode separately from the host binary
-so the FSBL can boot-measure it via chained HMAC.
+Used to flash the NPU bytecode separately from the host binary so the
+FSBL can boot-measure it via chained HMAC.
 
 Usage:
     extract_bytecode.py <model_dir> <out_dir>

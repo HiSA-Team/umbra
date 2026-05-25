@@ -1,14 +1,16 @@
+/* Author: Salvatore Bramante <salvatore.bramante@imtlucca.it> */
+
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
 /* Clocks
  *
  * SysTick on Cortex-M55 is driven by the processor clock (= CPU clock, IC1 from
- * PLL1). After Phase G.0 the Umbra FSBL bumps PLL1 to 800 MHz and routes IC1 →
- * CPUCLK at 800 MHz (AXI = 400 MHz, HCLK = 200 MHz). USART1 kernel clock is
- * switched to HSI=64 MHz before the bump (insulated from PLL1).
+ * PLL1). The Umbra FSBL programs PLL1 to 800 MHz and routes IC1 → CPUCLK at
+ * 800 MHz (AXI = 400 MHz, HCLK = 200 MHz). USART1 kernel clock is switched to
+ * HSI=64 MHz before the PLL retune (insulated from PLL1).
  */
-#define configCPU_CLOCK_HZ          ( 800000000UL ) /* N657 CPU clock post-G.0 */
+#define configCPU_CLOCK_HZ          ( 800000000UL ) /* N657 CPU clock */
 #define configTICK_RATE_HZ          ( ( TickType_t ) 1000 )
 
 /* Scheduler */

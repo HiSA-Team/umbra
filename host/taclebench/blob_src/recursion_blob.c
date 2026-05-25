@@ -1,3 +1,5 @@
+// Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+//
 // Standalone Umbra enclave blob wrapping the TACLeBench `recursion`
 // benchmark. Provides the 48-byte header + entry function; the upstream
 // recursion.c is compiled separately (see Makefile) so we don't pull in
@@ -15,8 +17,8 @@
 // SysTick preemption boundary. On resume, the kernel's save/restore path
 // drops the enclave into another enclave's ESS region (PC lands in
 // fibonacci's old code at 0x328). This is a kernel bug, tracked separately;
-// the bypass keeps Phase 2 unblocked and matches recursion_return's
-// algorithmic check `result == 89`.
+// the bypass works around it and matches recursion_return's algorithmic
+// check `result == 89`.
 extern int recursion_fib(int i);
 
 // 48-byte enclave header. Layout mirrors host/bare_metal_arm/src/main.c.

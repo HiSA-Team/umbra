@@ -1,3 +1,5 @@
+# Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+#
 # Standalone Umbra enclave blobs from TACLeBench benchmarks.
 #
 # Each blob compiles + links upstream TACLeBench sources + a thin wrapper
@@ -48,7 +50,7 @@ LDFLAGS = -nostdlib --gc-sections -T $(LINKER_DIR)/enclave_blob.ld
 
 KEY = $(TOOLS)/master_key.bin
 
-# ----- recursion (Phase 2 first port) ----------------------------------
+# ----- recursion ----------------------------------
 
 RECURSION_OBJS = $(OBJ_DIR)/recursion_blob.o $(OBJ_DIR)/recursion.o
 
@@ -75,7 +77,7 @@ $(APP_DIR)/recursion.bin: $(APP_DIR)/recursion.elf
 
 recursion: $(APP_DIR)/recursion.bin
 
-# ----- fac (Phase 3 second port) ---------------------------------------
+# ----- fac ---------------------------------------
 
 FAC_OBJS = $(OBJ_DIR)/fac_blob.o $(OBJ_DIR)/fac.o
 
@@ -102,7 +104,7 @@ $(APP_DIR)/fac.bin: $(APP_DIR)/fac.elf
 
 fac: $(APP_DIR)/fac.bin
 
-# ----- insertsort (Phase 4 — canonical path, first multi-block + globals) -
+# ----- insertsort  -
 
 INSERTSORT_OBJS = $(OBJ_DIR)/insertsort_blob.o $(OBJ_DIR)/insertsort.o
 
@@ -129,7 +131,7 @@ $(APP_DIR)/insertsort.bin: $(APP_DIR)/insertsort.elf
 
 insertsort: $(APP_DIR)/insertsort.bin
 
-# ----- multi_block_test (Phase 2.5b diagnostic) ------------------------
+# ----- multi_block_test ------------------------
 # Self-contained 2-block enclave to isolate "multi-block chain bug" from
 # "insertsort-specific bug". No upstream tacle-bench dependency.
 
@@ -154,7 +156,7 @@ $(APP_DIR)/multi_block_test.bin: $(APP_DIR)/multi_block_test.elf
 
 multi_block_test: $(APP_DIR)/multi_block_test.bin
 
-# ----- three_block_test (Phase 2.5b disambiguation) --------------------
+# ----- three_block_test  --------------------
 # Same shape as multi_block_test but padded to 3 blocks. If this passes
 # chained-measurement, multi-block-N>=3 works; insertsort failure is
 # shape-specific. If this fails, the bug scales with chain length.
@@ -180,7 +182,7 @@ $(APP_DIR)/three_block_test.bin: $(APP_DIR)/three_block_test.elf
 
 three_block_test: $(APP_DIR)/three_block_test.bin
 
-# ----- prime (Phase 4 — third TACLeBench port, bypass pattern) ---------
+# ----- prime ---------
 
 PRIME_OBJS = $(OBJ_DIR)/prime_blob.o $(OBJ_DIR)/prime.o
 
@@ -207,7 +209,6 @@ $(APP_DIR)/prime.bin: $(APP_DIR)/prime.elf
 
 prime: $(APP_DIR)/prime.bin
 
-# ----- Phase 5 candidate benchmarks (canonical wrappers) ---------------
 # Generic recipe for "canonical _init/_main/_return" benchmarks. Each
 # expects $(BLOB_SRC)/<name>_blob.c (header + entry calling the triplet)
 # and $(TACLE)/<name>/<name>.c (upstream source).
@@ -356,17 +357,7 @@ dump-three_block_test: $(APP_DIR)/three_block_test.elf
 
 # Working benchmarks (`all` only includes those proven to pass
 # chained-measurement AND to terminate cleanly on hardware).
-#
-# Phase 5 stateful benchmarks (binarysearch, bsort, countnegative) joined
-# `all` after the MPU-AP=RW + ESS-sizing fix landed — they now write to
-# their .data/.bss globals without the MemManage-DACCVIOL preempt-loop.
-#
-# Excluded:
-#   - insertsort: parse_disassembly literal-pool false positives in the
-#                 chain order; see project_c_phase2_preemption_bug.md
-#   - complex_updates: float operations need __aeabi_f* helpers from
-#                 libgcc which `-nostdlib` rejects.
-#   - multi_block_test / three_block_test: diagnostic targets only.
+
 all: recursion fac prime binarysearch bsort countnegative
 
 # Paper benchmarks (Section §Evaluation). NOT in `all` until validated

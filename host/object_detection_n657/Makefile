@@ -1,5 +1,6 @@
-# Object-detection enclave host for Umbra / STM32N657 — Phase G.2.b.
-# Issue #38 NPU sub-project.
+# Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+#
+# Object-detection enclave host for Umbra / STM32N657.
 #
 # M1.3 (link-fix): HAL pile dropped — FSBL does all platform init before
 # jump_to_ns; the NS host needs only FreeRTOS + app/src + startup + NSC

@@ -1,16 +1,18 @@
 #!/bin/bash
 #
-# tools/test_taclebench.sh — end-to-end automated test for TACLeBench
-# Phase 5 benchmarks on STM32L552ZE-Q.
+# Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
 #
-# Strategy: SEQUENTIAL PASSES (one Phase 5 benchmark at a time).
+# tools/test_taclebench.sh — end-to-end automated test for TACLeBench
+# stateful benchmarks on STM32L552ZE-Q.
+#
+# Strategy: SEQUENTIAL PASSES (one benchmark at a time).
 #
 # Why: a 4-enclave round-robin (fib + binarysearch + bsort + countnegative
 # all flashed simultaneously) hangs after the first preempt of bsort —
-# the next `enter(countnegative)` never returns. This is the original
-# Phase 2 multi-enclave-coexistence bug; our MPU-AP=RW fix addressed
-# only the data-write half of the symptom. Until that's resolved
-# separately, we test each Phase 5 benchmark in isolation alongside fib.
+# the next `enter(countnegative)` never returns. This is a known
+# multi-enclave-coexistence bug; the MPU-AP=RW fix addressed only the
+# data-write half of the symptom. Until that's resolved separately, we
+# test each benchmark in isolation alongside fib.
 #
 # Per pass:
 #   - erase NS-flash sectors 240-255 via FLASHER
@@ -42,10 +44,11 @@ OOCD_LOG=${OOCD_LOG:-/tmp/taclebench_openocd.log}
 GDB_LOG=${GDB_LOG:-/tmp/taclebench_gdb.log}
 CSV_LOG=${CSV_LOG:-/tmp/taclebench_results.csv}
 
-# Phase 5 benchmarks to test sequentially. Override with PHASE5_BENCHES env.
+# TACLeBench stateful benchmarks to test sequentially. Override with the
+# PHASE5_BENCHES env var (legacy name retained for compatibility).
 #
-# Default = the three validated Phase 5 stateful benchmarks. To exercise
-# the paper-app set (Section §Evaluation), use the magic value `paper`:
+# Default = the three validated stateful benchmarks. To exercise the
+# paper-app set (Section §Evaluation), use the magic value `paper`:
 #   PHASE5_BENCHES=paper ./tools/test_taclebench.sh
 # (Plain `export PAPER_BENCHES=...` from inside the script doesn't reach
 # the calling shell, so we expand a magic name here instead.)
@@ -65,9 +68,10 @@ if [ "${PHASE5_BENCHES}" = "validated" ]; then
 fi
 
 # Set PHASE5_ALL_AT_ONCE=1 to do a SINGLE pass that flashes fib (bundled
-# in host) + all 3 Phase 5 enclaves to distinct NS-flash sectors and lets
-# the host round-robin through them. This exercises the multi-enclave
-# coexistence path that was hanging before c154152. Ignored unless set.
+# in host) + all 3 stateful enclaves to distinct NS-flash sectors and
+# lets the host round-robin through them. This exercises the multi-
+# enclave coexistence path that was hanging before c154152. Ignored
+# unless set.
 #
 # NOTE: After 2026-05-23, MAX_ENCLAVES_CTX was reduced from 4 to 2 to
 # accommodate the 8 KB per-enclave PSP stack needed for paper-app
@@ -490,14 +494,14 @@ expected_r0_for() {
     esac
 }
 
-# ── All-at-once pass: fib + every Phase 5 enclave flashed simultaneously
+# ── All-at-once pass: fib + every stateful enclave flashed simultaneously
 #
 # Flashes fib (bundled in host) + binarysearch/bsort/countnegative to
 # 0x08079000/0x0807A000/0x0807B000 respectively. Host (bare_metal_arm)
 # round-robins through all 4 with MAX_ENCLAVES=4 enclave_ids[]. Validates
 # all 4 expected R0 values + final "All enclaves done" appear in one
 # trace. Exercises the multi-enclave coexistence path that the original
-# "Phase 2 residual bug" was attributed to before commit c154152 fixed
+# "multi-enclave residual bug" was attributed to before commit c154152 fixed
 # the DMA slot-leak that was the actual cause.
 run_all_at_once_pass() {
     if [ "${HOST_APP:-bare_metal}" = "freertos" ]; then
@@ -543,7 +547,7 @@ run_all_at_once_pass() {
         die "UART capture failed to start — close any serial monitor on ${UART}"
     fi
 
-    echo "  -- flash boot + host + ALL Phase 5 enclaves + reset run"
+    echo "  -- flash boot + host + ALL stateful enclaves + reset run"
     "${GDB}" -batch -nx \
         -ex 'set confirm off' \
         -ex 'set pagination off' \
@@ -603,7 +607,7 @@ run_all_at_once_pass() {
     grep -qF "[HardFault]" "${UART_LOG}" && \
         { failures+=("FORBIDDEN: HardFault"); pass=false; }
 
-    # Expect 4 chained-measurement OK (fib + 3 Phase 5).
+    # Expect 4 chained-measurement OK (fib + 3 stateful).
     local ok_count
     ok_count=$(grep -c "chained-measurement OK" "${UART_LOG}" || true)
     if [ "${ok_count}" -lt 4 ]; then
@@ -648,9 +652,9 @@ SUMMARY=()
 
 if [ "${PHASE5_ALL_AT_ONCE}" = "1" ]; then
     if run_all_at_once_pass; then
-        SUMMARY+=("all-at-once (fib + 3 Phase 5): PASS")
+        SUMMARY+=("all-at-once (fib + 3 stateful): PASS")
     else
-        SUMMARY+=("all-at-once (fib + 3 Phase 5): FAIL")
+        SUMMARY+=("all-at-once (fib + 3 stateful): FAIL")
         ALL_PASS=false
     fi
 else

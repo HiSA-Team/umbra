@@ -1,4 +1,6 @@
-# Phase 0 probe — DHUK availability on N657 Nucleo (BSEC-open dev silicon)
+# Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
+#
+# DHUK availability on N657 Nucleo (BSEC-open dev silicon)
 # Run: openocd -f openocd_scripts/stm32n6x.cfg &
 #      arm-none-eabi-gdb -batch -nx -x tools/dhuk_probe.gdb
 #
