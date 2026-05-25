@@ -20,7 +20,7 @@ The Enclave Swap Space (ESS) manages this process as a **demand-paged cache**:
 5. `handle_ess_miss()` is called:
    - **Fetch**: DMA transfer from flash to scratch buffer (L552) or CPU copy from OCTOSPI (L562)
    - **Validate**: HMAC-SHA256 verification against on-flash signature
-   - **Decrypt**: AES-CTR decryption (L552 software, L562 via OTFDEC)
+   - **Decrypt**: AES-CTR — L552 = software (T-table); L562 = OTFDEC transparent decrypt at the OCTOSPI controller; N657 = native CRYP1 CTR mode
    - **Evict**: If cache is full, evict LFU (Least Frequently Used) block
    - **Install**: DMA copy to ESS slot, MPCBB flip to Secure, cache invalidate
 6. Fault handler returns — CPU re-executes the faulting instruction, now hitting valid code

@@ -11,5 +11,6 @@ pub mod uart;
 pub mod hash;
 pub mod aes;
 pub mod cryp;
+pub mod saes;
 pub mod mce;
 pub mod risaf;

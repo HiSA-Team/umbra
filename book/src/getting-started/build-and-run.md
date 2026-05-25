@@ -57,7 +57,10 @@ This performs a full clean build:
 4. Build the Umbra kernel static library (`lib/libumbra.a`).
 5. Build the selected host application.
 6. Protect enclave binaries via `tools/protect_enclave.py` (HMAC signing,
-   AES encryption on L552, no encryption on N657 Path B-lite).
+   AES encryption on L552; on L562 the kernel ships plaintext blobs and
+   relies on OTFDEC for transparent decryption from OCTOSPI; on N657 the
+   kernel ships plaintext blobs today, but the CRYP1 HW AES path is ready
+   for encrypted-blob mode when needed).
 
 ## Flash and Run
 

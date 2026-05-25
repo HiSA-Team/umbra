@@ -11,7 +11,7 @@ kernel = { path = "../../../../kernel", default-features = false, features = ["p
 peripheral_regs = { path = "../../../common/peripheral_regs" }
 
 [features]
-default = ["chained_measurement"]
+default = ["chained_measurement", "n657_aes_hw", "boot_tests"]
 boot_tests = []
 chained_measurement = []
 # `ess_miss_recovery` is referenced via `#[cfg(feature = "ess_miss_recovery")]`
@@ -19,6 +19,9 @@ chained_measurement = []
 # N657 — there's no transparent block-decrypt peripheral here for runtime
 # fetch — but declared so the cfg checks don't emit `unexpected_cfgs` warnings.
 ess_miss_recovery = []
+
+# N657 hardware AES path via CRYP1 + SAES1.
+n657_aes_hw = []
 
 [profile.dev]
 panic = "abort"
