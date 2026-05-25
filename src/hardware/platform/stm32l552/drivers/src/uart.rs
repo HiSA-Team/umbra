@@ -74,10 +74,10 @@ impl Uart {
             gpio.set_alternate_function(10, 7);
             
             // Configure Baud Rate
-            // Assuming default MSI 4 MHz clock for now
-            // USART1 on APB2. 
-            // BRR = fck / baud = 4000000 / 9600 = 416.66 -> 417
-            usart.set_baud(417); 
+            // USART1 kernel clock routed to HSI16 (16 MHz) in init_clocks,
+            // making BRR independent of SYSCLK.
+            // BRR = fck / baud = 16_000_000 / 9600 = 1666.66 → 1667
+            usart.set_baud(1667);
             
             usart.enable_transmit();
             usart.enable();

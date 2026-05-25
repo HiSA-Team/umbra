@@ -63,8 +63,24 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
     let total_ram_needed = num_blocks * CODE_BLOCK_SIZE;
     let ess_addr = match kernel.ess.allocate(total_ram_needed) {
         Some(addr) => addr,
-        None => return 0xFFFFFFFD, 
+        None => return 0xFFFFFFFD,
     };
+
+    // Helper closure: release ESS slots and return the given error code. Used
+    // on every FAIL path between `allocate` and `register_enclave` to avoid
+    // leaking the slot run on tampered / stale / under-sized blobs. Without
+    // this, every `chained-measurement FAIL` would consume a few hundred
+    // bytes of ESS permanently — a slow leak that eventually starves the
+    // allocator for legitimate enclaves across long boot cycles.
+    //
+    // We pass `&mut kernel.ess` rather than capturing `kernel` so the closure
+    // can be invoked from match arms that already hold a `&kernel` borrow.
+    macro_rules! ess_fail {
+        ($err:expr) => {{
+            kernel.ess.release(ess_addr, total_ram_needed);
+            return $err;
+        }};
+    }
 
     let scratch_addr: u32 = 0x30010000;
     
@@ -90,17 +106,19 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
         kernel.begin_measurement();
 
         // BFS State
-        // Simple bitmap for visited blocks (Max 32 blocks for now)
-        let mut loaded_mask: u32 = 0;
+        // Bitmap for visited blocks. MUST be wide enough to cover
+        // MAX_EFBS bits — u64 covers ≤64. For larger enclaves switch
+        // to a chunked bitmap.
+        let mut loaded_mask: u64 = 0;
         // Queue (fixed size ring buffer or simple array)
         let mut queue = [0u8; MAX_EFBS];
         let mut head = 0;
         let mut tail = 0;
-        
+
         // Push Block 0
         queue[tail] = 0;
         tail += 1;
-        loaded_mask |= 1; // Mark 0 as visited/pending
+        loaded_mask |= 1u64; // Mark 0 as visited/pending
         
         while head < tail {
             let curr_idx = queue[head] as u32;
@@ -141,25 +159,26 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
                             for i in 0..count {
                                 let next_blk = *meta_ptr.add(1 + i as usize);
                                 if usize::from(next_blk) < MAX_EFBS {
-                                    if (loaded_mask & (1 << next_blk)) == 0 {
+                                    let mask = 1u64 << next_blk;
+                                    if (loaded_mask & mask) == 0 {
                                         // Found new reachable block
                                         if tail < MAX_EFBS {
                                             queue[tail] = next_blk;
                                             tail += 1;
-                                            loaded_mask |= 1 << next_blk;
+                                            loaded_mask |= mask;
                                         }
                                     }
                                 }
                             }
                         }
                     },
-                    Err(e) => return e, 
+                    Err(e) => ess_fail!(e),
                 }
             }
         }
-        
+
     } else {
-        return 0xFFFFFFFB;
+        ess_fail!(0xFFFFFFFB);
     }
 
     // Finalize the chained measurement: compare against the reference HMAC in
@@ -170,7 +189,7 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
         let expected: [u8; 32] = header.hmac;
         if kernel.finalize_measurement(&expected).is_err() {
             umbra_debug_print_imp(b"[UMBRASecureBoot] chained-measurement FAIL\n\0".as_ptr());
-            return 0xFFFFFFF6;
+            ess_fail!(0xFFFFFFF6);
         }
         #[cfg(feature = "boot_tests")]
         umbra_debug_print_imp(b"[UMBRASecureBoot] chained-measurement OK\n\0".as_ptr());
@@ -196,24 +215,87 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
     };
 
     if !kernel.ess.register_enclave(descriptor, ess_addr, efbs, efb_count) {
-        return 0xFFFFFFF8;
+        ess_fail!(0xFFFFFFF8);
     }
 
-    // UDF-fill every non-entry block at creation so their first
-    // execution raises UsageFault.UNDEFINSTR and routes through
-    // `umbra_usage_fault_dispatch -> handle_ess_miss`. The runtime reload
-    // path is the only place where per-block HMAC is validated (the initial
-    // BFS `load_and_verify_block` only folds the block into the chained
-    // measurement), so forcing it on every non-entry block ensures every
-    // block gets an on-demand integrity check. CACHE_LIMIT_PER_ENCLAVE is
-    // still honored by `handle_ess_miss` when installing a reloaded block.
+    // Force-load every block at create time so the enclave never sees
+    // an UDF-filled slot at runtime. The previous design evicted all
+    // non-entry blocks here, relying on Secure-alias reads to NS slots
+    // raising BusFault for the handle_ess_miss recovery path. But L552
+    // MPCBB has SRWILADIS=0 by default, meaning Secure reads to NS
+    // slots silently return the underlying bytes (0xDEDEDEDE for
+    // UDF-filled slots) without faulting. Enclaves with disconnected
+    // BFS components (e.g., ndes blocks 13/14, statemate block 40 —
+    // reachable only via indirect branches that parse_disassembly
+    // doesn't detect) would read UDF garbage and compute wild pointers,
+    // eventually MemManage'ing with `addr outside any enclave`.
+    //
+    // Solution: load ANY block the BFS pass didn't visit via
+    // handle_ess_miss (per-block HMAC validation, not chained-folded).
+    // BFS-loaded blocks already have validated chained-measurement and
+    // valid plaintext in their ESS slot, so leave them alone. This
+    // gives us "all blocks loaded after create" with the same security
+    // properties: chained-measurement covers BFS-reachable graph,
+    // per-block HMAC covers disconnected components.
     #[cfg(feature = "ess_miss_recovery")]
     unsafe {
         let _ = CACHE_LIMIT_PER_ENCLAVE;
-        for idx in 1..(num_blocks as usize) {
-            if idx < MAX_EFBS {
-                kernel.evict_block(assigned_id, idx as u32);
+        // DIAGNOSTIC: confirm we reach this path (will disappear once
+        // ndes/statemate are known-good).
+        umbra_debug_print_imp(b"[UMBRASecureBoot] force-load start\n\0".as_ptr());
+        if let Some(mut force_dma) = Dma::new() {
+            force_dma.reserve_ch(0, 0);
+            force_dma.reserve_ch(0, 1);
+            force_dma.reserve_ch(0, 3);
+            force_dma.reserve_ch(0, 4);
+            force_dma.reserve_ch(0, 5);
+            force_dma.reserve_ch(0, 6);
+            force_dma.reserve_ch(0, 7);
+            // Re-look up the freshly-registered enclave for per-block
+            // is_loaded state. handle_ess_miss bounds-checks against
+            // efb_count internally (won't update is_loaded for indices
+            // >= efb_count) — so we ALSO bump efb_count up to num_blocks
+            // here BEFORE the force-load loop, otherwise the loaded
+            // blocks past the BFS-visited set get installed in SRAM but
+            // remain flagged is_loaded=false and is_recoverable=false.
+            if let Some(slot) = kernel.ess.loaded_enclaves.iter_mut()
+                .flatten()
+                .find(|e| e.descriptor.id == assigned_id)
+            {
+                if (num_blocks as usize) <= MAX_EFBS
+                   && slot.efb_count < num_blocks as usize
+                {
+                    slot.efb_count = num_blocks as usize;
+                }
             }
+            let mut loaded_extra: u32 = 0;
+            let mut failed: u32 = 0;
+            for idx in 1..(num_blocks as usize) {
+                if idx >= MAX_EFBS { break; }
+                let already_loaded = kernel.ess.loaded_enclaves.iter()
+                    .flatten()
+                    .find(|e| e.descriptor.id == assigned_id)
+                    .map(|e| e.efbs[idx].is_loaded)
+                    .unwrap_or(false);
+                if !already_loaded {
+                    match kernel.handle_ess_miss(
+                        assigned_id, idx as u32, &mut force_dma, false)
+                    {
+                        Ok(()) => { loaded_extra += 1; }
+                        Err(_) => { failed += 1; }
+                    }
+                }
+            }
+            // DIAGNOSTIC: how many extra blocks force-loaded, how many
+            // failed. PASS expectations: failed=0; loaded_extra ≥ 0 for
+            // every enclave (>0 only when BFS missed some).
+            umbra_debug_print_imp(b"[UMBRASecureBoot] force-load done loaded=\0".as_ptr());
+            crate::raw_print::print_hex(loaded_extra);
+            crate::raw_print::print_str(" failed=");
+            crate::raw_print::print_hex(failed);
+            crate::raw_print::print_str("\n");
+        } else {
+            umbra_debug_print_imp(b"[UMBRASecureBoot] force-load: Dma::new() returned None\n\0".as_ptr());
         }
     }
 
@@ -362,12 +444,27 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         core::ptr::write_volatile(mpu_rbar, (psp_base & 0xFFFF_FFE0) | (0b01 << 1) | 0x01);
         core::ptr::write_volatile(mpu_rlar, (psp_limit & 0xFFFF_FFE0) | 0x01);
 
-        // Region 5: Enclave code (RO+Execute, unprivileged)
+        // Region 5: Enclave code+data (RW any, executable).
+        //
+        // AP=0b01 (RW, all privilege levels). XN=0 (executable). Under
+        // `-fpic -mpic-data-is-text-relative`, the enclave's .data/.bss
+        // are emitted into the same ._enclave_code section as code (see
+        // host/taclebench/linker/enclave_blob.ld) and loaded into ESS,
+        // so the region must permit writes for any enclave that touches
+        // a global. RO+X (AP=0b11) was the original intent but trips
+        // MemManage.DACCVIOL on the first global store, which the
+        // current handler can't actually resolve — the recover path
+        // re-runs the same store and re-faults, draining only when
+        // SysTick eventually preempts the cycle.
+        //
+        // Integrity is enforced at load time by the chained-measurement
+        // HMAC over the on-flash blob; runtime modifications affect only
+        // the volatile ESS RAM copy, never the signed image on flash.
         if let Some(le) = &kernel.ess.loaded_enclaves[enclave_idx] {
             let code_base = le.start_address | 0x1000_0000;
             let code_limit = code_base + le.descriptor.code_size - 1;
             core::ptr::write_volatile(mpu_rnr, 5);
-            core::ptr::write_volatile(mpu_rbar, (code_base & 0xFFFF_FFE0) | (0b11 << 1));
+            core::ptr::write_volatile(mpu_rbar, (code_base & 0xFFFF_FFE0) | (0b01 << 1));
             core::ptr::write_volatile(mpu_rlar, (code_limit & 0xFFFF_FFE0) | 0x01);
         }
     }

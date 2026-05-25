@@ -9,7 +9,7 @@ use arm::mmio::{
 #[cfg(feature = "ess_miss_recovery")]
 use arm::mmio::{DCCIMVAC, MPU_RLAR, MPU_RNR};
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
-use kernel::common::ess::EnclaveSwapSpace;
+use kernel::common::ess::{EnclaveSwapSpace, MAX_ENCLAVES_CTX};
 use kernel::common::enclave::EnclaveContext;
 use kernel::key_storage_server::crypto::CryptoEngine;
 
@@ -29,7 +29,7 @@ pub struct Kernel {
     /// `encKey` / `hmacKey` in `docs/formal/UmbraIntegrityFixValidator.pv`.
     pub enc_key: [u8; 32],
     pub hmac_key: [u8; 32],
-    pub enclave_contexts: [EnclaveContext; 4],
+    pub enclave_contexts: [EnclaveContext; MAX_ENCLAVES_CTX],
     pub current_enclave_id: Option<u32>,
 }
 
@@ -82,7 +82,7 @@ impl Kernel {
             chain_state: [0u8; 32],
             enc_key: [0u8; 32],
             hmac_key: [0u8; 32],
-            enclave_contexts: [EnclaveContext::empty(); 4],
+            enclave_contexts: [EnclaveContext::empty(); MAX_ENCLAVES_CTX],
             current_enclave_id: None,
         }
     }
@@ -115,8 +115,8 @@ impl Kernel {
         if diff == 0 { Ok(()) } else { Err(()) }
     }
 
-    #[allow(dead_code)] // Value matches assembly constant 39999 (SYSTICK_RELOAD-1) in startup.s _svc_enter
-    pub const SYSTICK_RELOAD: u32 = 40_000; // ~10ms at 4MHz MSI
+    #[allow(dead_code)] // Value matches assembly constant 1099999 (SYSTICK_RELOAD-1) in startup.s _svc_enter
+    pub const SYSTICK_RELOAD: u32 = 1_100_000; // ~10ms at 110 MHz SYSCLK (post-PLL)
 
     #[allow(dead_code)] // SysTick enabled by assembly in startup.s _svc_enter; this method exists for future Rust-side use
     pub unsafe fn enable_systick(&self) {
@@ -145,10 +145,19 @@ impl Kernel {
     /// a currently-loaded enclave's ESS cache region. Used by the MemManage
     /// IACCVIOL handler to translate a stacked PC into a cache miss request.
     /// Returns `None` if the PC is outside every loaded enclave.
+    ///
+    /// Uses `descriptor.code_size` (= `num_blocks * CODE_BLOCK_SIZE`, set at
+    /// create time from the on-flash header) rather than `efb_count`: BFS
+    /// only visits blocks that have inbound branches from the entry block,
+    /// so a trailing `.data`/`.bss`-only block under PIC has `efb_count`
+    /// missing one entry even though it IS a part of the enclave's ESS
+    /// allocation. Using `code_size` makes the boundary truthful to the
+    /// kernel's ESS allocation, so the BusFault recovery path can demand-
+    /// load such blocks when the enclave first writes to a global.
     pub fn lookup_faulting_block(&self, pc: u32) -> Option<(u32, u32)> {
         for slot in self.ess.loaded_enclaves.iter().flatten() {
             let base = slot.start_address;
-            let top  = base + (slot.efb_count as u32) * CODE_BLOCK_SIZE;
+            let top  = base + slot.descriptor.code_size;
             if pc >= base && pc < top {
                 let block_idx = (pc - base) / CODE_BLOCK_SIZE;
                 return Some((slot.descriptor.id, block_idx));
@@ -446,6 +455,24 @@ impl Kernel {
         //    dropped by GTZC when SRWILADIS=1.  By keeping the block NS
         //    during the DMA, the transfer succeeds.  The CPU (Secure world)
         //    can access NS memory through either alias for the AES decrypt.
+        //
+        // ROOT CAUSE FIX 2026-05-24: For ESS-miss recovery (the runtime
+        // miss path) the block was already flipped to NS by `evict_block`,
+        // so the DMA worked. But FORCE-LOAD (called at create-time from
+        // api_impl.rs to load blocks BFS didn't visit) calls this same
+        // function on blocks that are STILL MPCBB-Secure from boot. The
+        // DMA write to a Secure-marked block via NS alias was silently
+        // dropped by GTZC → block stayed uninitialized → enclave read
+        // garbage from .rodata literals (e.g., the iet[] permutation
+        // initializer in ndes_cyfun's block 15) → wild-pointer fault.
+        //
+        // Explicit flip to NS here makes the precondition unconditional.
+        // Idempotent for the recovery path (already NS) and correct for
+        // the force-load path (was Secure, now NS for the DMA).
+        drivers::gtzc::mpcbb_set_slot_secure(ess_target_addr, false);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+
         let ess_write_addr = ess_target_addr | 0x1000_0000;
 
         let mpu_rnr  = MPU_RNR;
@@ -456,7 +483,7 @@ impl Kernel {
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        // DMA: scratch ciphertext → ESS (NS alias — block is still NS)
+        // DMA: scratch ciphertext → ESS (NS alias — block now NS)
         {
             let ct_in_scratch = SCRATCH_ADDR + BLOCK_META_OFFSET + BLOCK_META_SIZE;
 
@@ -651,7 +678,9 @@ impl Kernel {
             let _ = crypto_engine;
 
             // Invalidate D-cache for the freshly-written ESS line, then I-cache
-            // (the enclave will execute from here).
+            // (the enclave will execute from here). Note: L552 Cortex-M33 has
+            // no D-cache, so DCIMVAC is effectively a no-op — kept for
+            // parity with platforms that do have one.
             let dcimvac = DCIMVAC;
             let mut addr = ess_target_addr;
             let end_addr = ess_target_addr + CODE_BLOCK_SIZE;

@@ -16,6 +16,31 @@ impl PlatformBoot for Stm32l5Platform {
     fn init_clocks(&self) {
         let rcc = drivers::rcc::Rcc::new();
 
+        // ── Bring SYSCLK from MSI 4 MHz to PLL 110 MHz ────────────────
+        // Mandatory order — RM0438 §6.1 / §3.8:
+        //   1. Enable PWR clock so we can write PWR_CR1.VOS
+        //   2. PWR_CR1.VOS = Range 0 (Boost) — required above 80 MHz
+        //   3. FLASH_ACR.LATENCY = 5 + ICEN + DCEN + PRFTEN — required
+        //      above 60 MHz to avoid BusFault on first secure-flash read
+        //   4. Enable HSI16
+        //   5. Configure + enable PLL on HSI16 (110 MHz)
+        //   6. Switch SYSCLK source to PLL
+        //
+        // Inverting any pair raises BusFault (under-WS) or undervolts
+        // the chip (PLL faster than VOS allows).
+        rcc.enable_clock(drivers::rcc::peripherals::PWR);
+        let pwr = drivers::pwr::Pwr::new();
+        pwr.set_vos_range_boost();
+
+        let flash = drivers::flash::Flash::new();
+        flash.set_latency_5ws_enable_cache();
+
+        rcc.enable_hsi16();
+        rcc.enable_pll_hsi16_110mhz();
+        rcc.switch_sysclk_to_pll();
+
+        // ── Now SYSCLK = 110 MHz. Existing peripheral enables follow. ──
+
         // GPIO clock (board-specific port)
         #[cfg(feature = "stm32l562")]
         rcc.enable_clock(drivers::rcc::peripherals::GPIOD);
@@ -28,6 +53,10 @@ impl PlatformBoot for Stm32l5Platform {
         // DMA
         rcc.enable_clock(drivers::rcc::peripherals::DMA1);
         rcc.enable_clock(drivers::rcc::peripherals::DMA2);
+
+        // L562 USART1 kernel clock = HSI16 (SYSCLK-independent baudrate)
+        #[cfg(feature = "stm32l562")]
+        rcc.select_usart1_hsi16();
     }
 
     fn init_gpio(&self) {

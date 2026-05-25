@@ -33,6 +33,7 @@ pub mod uart;
 pub mod rcc;
 pub mod gpio;
 pub mod pwr;
+pub mod flash;
 pub mod dma;
 pub mod hash;
 pub mod aes;

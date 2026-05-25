@@ -18,7 +18,10 @@ pub unsafe fn prefetch_reachables(enclave_id: u32) {
     let mut queue = [0u8; QUEUE_SIZE];
     let mut head: usize = 0;
     let mut tail: usize = 0;
-    let mut visited: u32 = 0;
+    // Bitmap for visited blocks. MUST be wide enough for MAX_EFBS bits.
+    // u64 covers 64 — matches the kernel's BFS-state width in
+    // api_impl.rs umbra_enclave_create_imp.
+    let mut visited: u64 = 0;
 
     // Seed: enqueue reachables of all currently-loaded blocks
     {
@@ -28,14 +31,14 @@ pub unsafe fn prefetch_reachables(enclave_id: u32) {
         };
         for i in 0..enclave.efb_count {
             if enclave.efbs[i].is_loaded {
-                visited |= 1 << i;
+                visited |= 1u64 << i;
                 for r in 0..enclave.efbs[i].reachable_count as usize {
                     let target = enclave.efbs[i].reachable[r] as usize;
-                    if target < enclave.efb_count && (visited & (1 << target)) == 0 {
+                    if target < enclave.efb_count && (visited & (1u64 << target)) == 0 {
                         if !enclave.efbs[target].is_loaded && tail < QUEUE_SIZE {
                             queue[tail] = target as u8;
                             tail += 1;
-                            visited |= 1 << target;
+                            visited |= 1u64 << target;
                         }
                     }
                 }
@@ -88,13 +91,13 @@ pub unsafe fn prefetch_reachables(enclave_id: u32) {
             for r in 0..efb.reachable_count as usize {
                 let target = efb.reachable[r] as usize;
                 if target < enclave.efb_count
-                    && (visited & (1 << target)) == 0
+                    && (visited & (1u64 << target)) == 0
                     && !enclave.efbs[target].is_loaded
                     && tail < QUEUE_SIZE
                 {
                     queue[tail] = target as u8;
                     tail += 1;
-                    visited |= 1 << target;
+                    visited |= 1u64 << target;
                 }
             }
         }

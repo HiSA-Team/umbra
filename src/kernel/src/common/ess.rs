@@ -9,8 +9,18 @@ compile_error!("Enable exactly ONE of kernel features platform-l552 or platform-
 // ── L552 platform ESS layout ─────────────────────────────────────────
 //
 // PSP stacks live just above .bss, well below the MSP. The MSP starts at
-// _umb_estack (0x3003DFFC) and can grow 32 KB down to 0x30036000 before
-// touching the PSP ceiling.
+// _umb_estack (0x3003DFFC) and can grow 24 KB down to 0x30038000 before
+// touching the PSP ceiling (was 32 KB before the 2026-05-23 expansion).
+//
+// PSP region expanded 2026-05-23 from 8 KB ([0x30034000, 0x30036000]) to
+// 16 KB ([0x30034000, 0x30038000]) to give each enclave a 8 KB stack.
+// Paper-app `ndes` uses ~5 KB of stack (DES key schedule + two
+// `volatile char ip[65]` literal-array initialisers per ndes_des() call
+// + nested cyfun/ks calls), overflowing the previous 2 KB ceiling and
+// causing CFSR.MUNSTKERR on the next exception return. To keep the 4×
+// PSP layout within the new region, MAX_ENCLAVES_CTX dropped to 2 —
+// sequential paper-app testing only needs fib + 1 enclave coexistent
+// at any moment, so this is fine for the §Evaluation runtime plot.
 #[cfg(feature = "platform-l552")]
 pub const ESS_BASE: u32 = 0x30032000;        // SRAM2 (Structures, Secure alias)
 #[cfg(feature = "platform-l552")]
@@ -20,7 +30,7 @@ pub const EFBC_BASE: u32 = 0x20020000;       // SRAM1 Top 64KB (Execution) — N
 #[cfg(feature = "platform-l552")]
 pub const ENCLAVE_PSP_BASE: u32 = 0x30034000;
 #[cfg(feature = "platform-l552")]
-pub const ENCLAVE_PSP_TOP: u32 = 0x30036000;
+pub const ENCLAVE_PSP_TOP: u32 = 0x30038000;
 
 // ── N657 platform ESS layout ─────────────────────────────────────────
 //
@@ -48,10 +58,29 @@ pub const ENCLAVE_PSP_TOP: u32 = 0x340F2000;
 
 // ── Platform-agnostic constants ──────────────────────────────────────
 pub const SLOT_SIZE: u32 = 256;
-pub const MAX_EFBS: usize = 32;
-pub const MAX_ENCLAVES_CTX: usize = 4;
-pub const ENCLAVE_PSP_STACK_SIZE: u32 = 0x800; // 2KB per enclave
-pub const CACHE_LIMIT_PER_ENCLAVE: usize = 24;
+// MAX_EFBS bumped 32 → 64 (2026-05-23) to cover paper-app `statemate`
+// (41 blocks). The `loaded_mask` bitmap in api_impl.rs MUST stay wide
+// enough to track every block index; u32 was only sufficient for
+// ≤32 blocks. Now uses u64 — the kernel-side ceiling is 64 blocks.
+// For larger enclaves (susan / cjpeg territory), switch to a
+// `[u32; (MAX_EFBS+31)/32]` chunked bitmap.
+pub const MAX_EFBS: usize = 64;
+// MAX_ENCLAVES_CTX dropped 4 → 2 (2026-05-23) to fit the bumped
+// per-enclave PSP stack (was 2 KB, now 8 KB) into the 16 KB PSP
+// region — see ENCLAVE_PSP_TOP comment. Sequential paper-app testing
+// only needs fib + 1 coexistent enclave; the 4-enclave round-robin
+// mode in tools/test_taclebench.sh no longer fits.
+pub const MAX_ENCLAVES_CTX: usize = 2;
+pub const ENCLAVE_PSP_STACK_SIZE: u32 = 0x2000; // 8KB per enclave (was 2KB)
+// CACHE_LIMIT_PER_ENCLAVE bumped 24 → 64 (2026-05-23) so that paper
+// apps `ndes` (26 blocks under ess_miss_recovery) and `statemate`
+// (41 blocks) fit entirely without eviction-induced thrashing. With
+// the cap at 24, the next-block-needed-after-eviction pattern
+// produces UDF reads (R0=0xDEDEDEDE in MemManage dumps) → wild
+// pointer dereference → MemManage `addr outside any enclave`. EFBC
+// has 256 slots total; 2 enclaves × 64 = 128 slots fits with 50%
+// headroom for future workloads.
+pub const CACHE_LIMIT_PER_ENCLAVE: usize = 64;
 
 pub fn enclave_psp_top(enclave_idx: usize) -> u32 {
     ENCLAVE_PSP_TOP - (enclave_idx as u32) * ENCLAVE_PSP_STACK_SIZE
@@ -141,6 +170,30 @@ impl EnclaveSwapSpace {
             i += 1;
         }
         None
+    }
+
+    /// Release a previously-allocated slot run back to the free bitmap.
+    /// `address` must be the value returned by `allocate`; `size` must be the
+    /// same byte length that was originally requested.
+    ///
+    /// Used by `umbra_enclave_create_imp` to roll back ESS slots when the
+    /// create path bails out (chained-measurement FAIL, register_enclave
+    /// failure, BFS error). Without this, a tampered or stale enclave blob
+    /// (`chained-measurement FAIL` line on UART) silently leaks its slot
+    /// run on every boot, eventually starving the allocator for legitimate
+    /// enclaves.
+    pub fn release(&mut self, address: u32, size: u32) {
+        if address < EFBC_BASE { return; }
+        let slot_offset = (address - EFBC_BASE) / SLOT_SIZE;
+        let slots = (size + SLOT_SIZE - 1) / SLOT_SIZE;
+        let mut k: u32 = 0;
+        while k < slots {
+            let idx = (slot_offset + k) as usize;
+            if idx < 256 {
+                self.bitmap[idx / 32] &= !(1u32 << (idx % 32));
+            }
+            k += 1;
+        }
     }
     
     pub fn register_enclave(&mut self, descriptor: EnclaveDescriptor, address: u32, efbs: [EfbDescriptor; MAX_EFBS], efb_count: usize) -> bool {

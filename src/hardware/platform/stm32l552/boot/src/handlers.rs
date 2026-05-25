@@ -3,6 +3,12 @@ use core::ptr;
 use arm::mmio::{SCB_BFAR, SCB_CFSR, SCB_HFSR, SCB_MMFAR, SCB_SFAR, SCB_SFSR};
 use crate::raw_print::{print_str, print_hex};
 
+// Set by MemManage handler from the asm trampoline's `mov r1, sp+8`. Points
+// at saved {r4, r5, r6, r7, r8, r9, r10, r11} on MSP. Read by panic_dump
+// to print callee-saved registers (not in the HW exception frame).
+// None on entry / for BusFault / SecureFault paths (which don't push r4-r11).
+static mut LAST_FAULT_REGS: Option<u32> = None;
+
 // Common function to dump stack frame
 fn dump_stack_frame(sp: u32, exception_name: &str) {
     print_str("\n[");
@@ -79,8 +85,17 @@ pub extern "C" fn umbra_nmi_handler(sp: u32) {
 ///                stacked r0 slot on MSP so `umbra_enclave_enter_imp` sees
 ///                it as the encoded status.
 #[no_mangle]
-pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32) -> u32 {
+pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32, msp_r4_base: u32) -> u32 {
     use kernel::common::enclave::EnclaveState;
+
+    // Stash for panic_dump so it can print R4-R11. The MemManage asm
+    // trampoline (startup.s) pushes {r4-r11} then {r12, lr} on entry and
+    // passes us MSP+8 = address of saved r4. Eight consecutive words from
+    // there are r4, r5, r6, r7, r8, r9, r10, r11 — the callee-saved
+    // registers as they were at the moment of fault. Diagnoses
+    // frame-pointer / PIC-base corruption (none of these registers
+    // appear in the HW exception frame).
+    LAST_FAULT_REGS = Some(msp_r4_base);
 
     let cfsr = SCB_CFSR;
     let cfsr_val = ptr::read_volatile(cfsr);
@@ -135,6 +150,9 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32) -> u32 {
             panic_dump(psp, cfsr_val, "MemManage: handle_ess_miss failed");
         }
         ptr::write_volatile(cfsr, mmfsr as u32);
+        // Clear so a subsequent BusFault / SecureFault that calls panic_dump
+        // doesn't print this MemManage's stale R4-R11 snapshot.
+        LAST_FAULT_REGS = None;
         0
     }
 
@@ -206,6 +224,19 @@ pub unsafe extern "C" fn umbra_secure_fault_handler(sp: u32) {
 /// handler, so returning would perform an exception-return on garbage state.
 fn panic_dump(sp: u32, cfsr: u32, reason: &str) -> ! {
     dump_stack_frame(sp, "MemManage");
+    // Print callee-saved R4-R11 if the MemManage trampoline stashed them.
+    // BusFault / SecureFault paths leave LAST_FAULT_REGS = None.
+    if let Some(regs) = unsafe { LAST_FAULT_REGS } {
+        let r = regs as *const u32;
+        let labels = ["R4  ", "R5  ", "R6  ", "R7  ",
+                      "R8  ", "R9  ", "R10 ", "R11 "];
+        for (i, lbl) in labels.iter().enumerate() {
+            print_str(lbl);
+            print_str(": 0x");
+            unsafe { print_hex(r.add(i).read_volatile()); }
+            print_str("\n");
+        }
+    }
     print_str("CFSR: 0x");
     print_hex(cfsr);
     print_str("\n");

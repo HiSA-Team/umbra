@@ -79,8 +79,9 @@ fn print_header(uart: &Uart, board: &str, aes_impl: &str) {
     uart.write(" block_size=256 meta_size=32\n");
 }
 
-/// SYSCLK used by the secure boot. Keep in sync with the RCC setup.
-/// At 110 MHz, 1 cycle = 1000/110 ns ≈ 9.0909 ns.
+/// SYSCLK used by the secure boot. Set by init_clocks() to PLL 110 MHz
+/// (was MSI 4 MHz before the 2026-05-24 PLL bring-up). At 110 MHz,
+/// 1 cycle = 1000/110 ns ≈ 9.0909 ns.
 const CPU_FREQ_MHZ: u32 = 110;
 
 /// Convert cycles to nanoseconds using a 64-bit intermediate.

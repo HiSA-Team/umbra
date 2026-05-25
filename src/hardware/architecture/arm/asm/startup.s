@@ -168,6 +168,11 @@
         push {r4-r11}
         push {r12, lr}
         mrs r0, psp
+        // Pass MSP+8 (= base of saved r4..r11 on this trampoline's frame) as
+        // r1 so the Rust handler can stash it for panic_dump's R4-R11 print.
+        // Layout after both pushes: sp+0 r12, sp+4 lr, sp+8 r4, sp+12 r5,
+        // sp+16 r6, sp+20 r7, sp+24 r8, sp+28 r9, sp+32 r10, sp+36 r11.
+        add r1, sp, #8
         bl umbra_mem_manage_handler
         cmp r0, #0
         beq _mmfault_recover
@@ -270,7 +275,7 @@
         isb
         ldr lr, [r1, #36]
         ldr r2, =0xE000E014
-        ldr r3, =39999
+        ldr r3, =1099999
         str r3, [r2]
         movs r3, #0
         str r3, [r2, #4]
