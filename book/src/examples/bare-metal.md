@@ -1,6 +1,6 @@
 # Bare-Metal Example
 
-The bare-metal host (`host/bare_metal_arm/`) is the simplest way to interact with Umbra. It runs a hand-coded round-robin loop that scans flash for enclaves, creates them via NSC veneers, and executes them until termination.
+The bare-metal host (`host/stm32l552/bare_metal/`) is the simplest way to interact with Umbra. It runs a hand-coded round-robin loop that scans flash for enclaves, creates them via NSC veneers, and executes them until termination.
 
 ## How It Works
 
@@ -47,7 +47,7 @@ The number of `Enclave preempted` lines varies depending on the SysTick quantum 
 ## File Structure
 
 ```
-host/bare_metal_arm/
+host/stm32l552/bare_metal/
   ├── src/
   │   ├── main.c          Entry point, enclave header, round-robin scheduler
   │   └── startup.s       NS vector table + Reset_Handler (.data/.bss init)

@@ -1,7 +1,7 @@
 [target.thumbv8m.main-none-eabi]
 rustflags = [
   "-C", "linker=arm-none-eabi-ld",
-  "-C", "link-arg=-T../../../../../host/bare_metal_n657/linker/memory.ld",
+  "-C", "link-arg=-T../../../../../host/stm32n657/bare_metal/linker/memory.ld",
   "-C", "link-arg=-T../../../../../linker/umbra.ld",
   "-C", "link-arg=-T../linker/platform.ld"
 ]

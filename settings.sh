@@ -124,7 +124,7 @@ echo -e "${BOLD}Selecting target microcontroller${VANILLA}"
 
 # Select the target MCU variant here
 # Options: stm32l552, stm32l562, stm32n657
-export MCU_VARIANT=stm32n657
+export MCU_VARIANT=${MCU_VARIANT:-stm32n657}
 
 # Enable the EFB crypto benchmark (set to 1 to build with the
 # `benchmark` feature; any other value disables it). When enabled, the
@@ -383,35 +383,36 @@ echo -e "${BOLD}Configuring Host information${VANILLA}"
 # Host application selection
 # Options: bare_metal (default), freertos, object_detection (N657 only)
 # Usage: export HOST_APP=object_detection && source ./settings.sh
+#
+# The host tree is organized by target platform (see issue #40):
+#   host/<platform>/<app>/
+# where <platform> = $MCU (`stm32l552` for L552+L562 family, `stm32n657`)
+# and <app> = $HOST_APP. The output ELF is bin/$HOST_APP.elf (Makefiles
+# derive PROGRAM_NAME from the directory basename).
 export HOST_APP=${HOST_APP:-bare_metal}
 
 if [ "$MCU_VARIANT" = "stm32n657" ]; then
-    if [ "$HOST_APP" = "bare_metal" ]; then
-        export HOST_DIR=${ROOT_DIR}/host/bare_metal_n657
-        export HOST_NAME=bare_metal_n657
-    elif [ "$HOST_APP" = "freertos" ]; then
-        export HOST_DIR=${ROOT_DIR}/host/freertos_n657
-        export HOST_NAME=freertos_n657
-    elif [ "$HOST_APP" = "object_detection" ]; then
-        export HOST_DIR=${ROOT_DIR}/host/object_detection_n657
-        export HOST_NAME=object_detection_n657
-    else
-        echo -e "${FAILURE}[host_selection] Unknown HOST_APP for N657: $HOST_APP (expected bare_metal, freertos, or object_detection)${VANILLA}"
-        return 1
-    fi
-elif [ "$HOST_APP" = "bare_metal" ]; then
-    export HOST_DIR=${ROOT_DIR}/host/bare_metal_arm
-    export HOST_NAME=bare_metal_arm
-elif [ "$HOST_APP" = "freertos" ]; then
-    export HOST_DIR=${ROOT_DIR}/host/freertos_arm
-    export HOST_NAME=freertos_arm
+    case "$HOST_APP" in
+        bare_metal|freertos|object_detection) ;;
+        *)
+            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for N657: $HOST_APP (expected bare_metal, freertos, or object_detection)${VANILLA}"
+            return 1
+            ;;
+    esac
 else
-    echo -e "${FAILURE}[host_selection] Unknown HOST_APP: $HOST_APP${VANILLA}"
-    return 1
+    case "$HOST_APP" in
+        bare_metal|freertos) ;;
+        *)
+            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for L5: $HOST_APP (expected bare_metal or freertos)${VANILLA}"
+            return 1
+            ;;
+    esac
 fi
 
+export HOST_DIR=${ROOT_DIR}/host/${MCU}/${HOST_APP}
+export HOST_NAME=${HOST_APP}
 export HOST_ELF=${HOST_DIR}/bin/${HOST_NAME}.elf
 
-echo -e "${SUCCESS}[host_selection] Selected host: $HOST_APP ($HOST_NAME)${VANILLA}"
+echo -e "${SUCCESS}[host_selection] Selected host: $HOST_APP @ $HOST_DIR${VANILLA}"
 echo -e "${SUCCESS}[host_configuration] host elf is @ $HOST_ELF${VANILLA}"
 echo -e ""

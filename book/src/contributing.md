@@ -44,7 +44,7 @@ source settings.sh
 ```
 
 For the N657 NPU object-detection demo, the ST Edge AI artifacts under
-`host/object_detection_n657/Model/NUCLEO-N657X0-Q/` are tracked in the
+`host/stm32n657/object_detection/Model/NUCLEO-N657X0-Q/` are tracked in the
 repo — no extra tooling is needed just to build. Regenerating those
 artifacts requires installing ST Edge AI (`stedgeai` CLI).
 

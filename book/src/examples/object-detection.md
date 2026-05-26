@@ -1,6 +1,6 @@
 # NPU Object Detection (STM32N657)
 
-The `host/object_detection_n657/` example runs a quantized Tiny YOLO v2
+The `host/stm32n657/object_detection/` example runs a quantized Tiny YOLO v2
 person detector on the STM32N6 NPU **inside the Umbra Secure enclave**.
 The model bytecode and weights are flashed into XSPI2 alongside the
 host bin; the FSBL HMACs them at boot together with the enclave code
@@ -45,7 +45,7 @@ build plus the NPU-specific pre-steps:
 
 1. **Extract the model bytecode** from the ST Edge AI build product.
    `tools/extract_bytecode.py` reads
-   `host/object_detection_n657/Model/NUCLEO-N657X0-Q/network_ecblobs.h`
+   `host/stm32n657/object_detection/Model/NUCLEO-N657X0-Q/network_ecblobs.h`
    (the `_ec_blob_*[]` arrays produced by `stedgeai`) and concatenates
    them into `build/model_bytecode.bin`.
 2. **Compute boot-time chained HMACs** over the bytecode and over
@@ -88,7 +88,7 @@ into the host as `test_image_rgb888[]` and copied into
    `STATUS_TERMINATED`.
 
 The post-processing (NMS + box decode) runs **on the host**, in
-`host/object_detection_n657/src/postprocess.c`. Keeping decode out of
+`host/stm32n657/object_detection/src/postprocess.c`. Keeping decode out of
 the enclave minimizes the Secure-side TCB while still proving that the
 NPU compute path is Secure.
 

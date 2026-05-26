@@ -122,7 +122,7 @@ export UMBRA_ESS_MISS_RECOVERY=1
 [ "${MCU_VARIANT}" = "stm32l552" ] || \
     die "MCU_VARIANT must be stm32l552 (got '${MCU_VARIANT}')"
 
-# HOST_APP plumbing — settings.sh already exports HOST_APP and HOST_NAME.
+# HOST_APP plumbing — settings.sh already exports HOST_APP.
 case "${HOST_APP:-bare_metal}" in
     bare_metal)  HOST_LOG_PREFIX="[USER]" ;;
     freertos)    HOST_LOG_PREFIX="[FREERTOS]" ;;
@@ -189,21 +189,21 @@ fi
 echo "bench,host_app,blob_size_bytes,pass_fail,wall_clock_seconds,uart_bytes,heartbeat_count,drift_max_cycles,healthy_pct" >"${CSV_LOG}"
 
 BOOT_ELF="${ROOT_DIR}/src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
-HOST_ELF="${ROOT_DIR}/host/${HOST_NAME}/bin/${HOST_NAME}.elf"
-APP_DIR="${ROOT_DIR}/host/taclebench/app"
+HOST_ELF="${ROOT_DIR}/host/stm32l552/${HOST_APP}/bin/${HOST_APP}.elf"
+APP_DIR="${ROOT_DIR}/host/stm32l552/taclebench/app"
 
 [ -f "${BOOT_ELF}" ] || die "boot ELF missing: ${BOOT_ELF}"
 [ -f "${HOST_ELF}" ] || die "host ELF missing: ${HOST_ELF}"
 
 # Auto-build any requested benches that aren't in `all`. rebuild_all.sh
-# only builds the validated benchmarks (`make all` in host/taclebench);
-# the paper apps (ndes/dijkstra/statemate) live in
-# host/taclebench/blob_src/ with explicit Makefile targets but aren't
-# in `all` until validated. Build them on demand here.
+# only builds the validated benchmarks (`make all` in
+# host/stm32l552/taclebench); the paper apps (ndes/dijkstra/statemate)
+# live in host/stm32l552/taclebench/blob_src/ with explicit Makefile
+# targets but aren't in `all` until validated. Build them on demand here.
 for bench in ${PHASE5_BENCHES}; do
     if [ ! -f "${APP_DIR}/${bench}.bin" ]; then
         echo "    -- ${bench}.bin missing; building..."
-        if ! make -C "${ROOT_DIR}/host/taclebench" "${bench}" >>"${BUILD_LOG}" 2>&1; then
+        if ! make -C "${ROOT_DIR}/host/stm32l552/taclebench" "${bench}" >>"${BUILD_LOG}" 2>&1; then
             echo "FAIL: build of ${bench} failed — see ${BUILD_LOG}"
             tail -40 "${BUILD_LOG}"
             exit 1
@@ -497,7 +497,7 @@ expected_r0_for() {
 # ── All-at-once pass: fib + every stateful enclave flashed simultaneously
 #
 # Flashes fib (bundled in host) + binarysearch/bsort/countnegative to
-# 0x08079000/0x0807A000/0x0807B000 respectively. Host (bare_metal_arm)
+# 0x08079000/0x0807A000/0x0807B000 respectively. Host (stm32l552/bare_metal)
 # round-robins through all 4 with MAX_ENCLAVES=4 enclave_ids[]. Validates
 # all 4 expected R0 values + final "All enclaves done" appear in one
 # trace. Exercises the multi-enclave coexistence path that the original

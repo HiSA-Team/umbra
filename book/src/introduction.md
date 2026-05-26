@@ -44,11 +44,14 @@ umbra/
       platform/stm32n657/         # STM32N6 platform (boot + drivers, FSBL model)
   host/
     common/                       # Shared C helpers (umbra_hex, umbra_mem)
-    bare_metal_arm/               # Bare-metal NS host for L5
-    freertos_arm/                 # FreeRTOS NS host for L5
-    bare_metal_n657/              # Bare-metal NS host for N657
-    freertos_n657/                # FreeRTOS NS host for N657
-    object_detection_n657/        # NPU object-detection enclave (N657 only)
+    stm32l552/                    # STM32L5 family (L552 + L562 via MCU_VARIANT)
+      bare_metal/                 #   Bare-metal NS host
+      freertos/                   #   FreeRTOS NS host
+      taclebench/                 #   Standalone TACLeBench enclave blobs
+    stm32n657/                    # STM32N6
+      bare_metal/                 #   Bare-metal NS host
+      freertos/                   #   FreeRTOS NS host
+      object_detection/           #   NPU object-detection enclave
   tools/                          # Enclave protection, key gen, flash_n657.sh, smoke tests
   linker/                         # Kernel linker scripts
   book/                           # This documentation (mdBook)

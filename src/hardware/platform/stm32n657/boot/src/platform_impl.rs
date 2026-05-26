@@ -1024,7 +1024,7 @@ impl PlatformBoot for Stm32n657Platform {
             sau_driver.create_region(&r2);
 
             // Region 3: AXISRAM2-6 NS aliases (0x24100000 - 0x243BFFE0, ~3 MB).
-            //           Required for object_detection_n657 host so the Cube-AI
+            //           Required for object_detection host so the Cube-AI
             //           runtime can access NPU activation buffers (the network
             //           model places activations in AXISRAM5 etc.). Without
             //           this, NS reads of 0x24[1-3]xxxxx fault at SAU
@@ -1056,7 +1056,7 @@ impl PlatformBoot for Stm32n657Platform {
         // enclave region pinned at offset 0x10000 in host.ld (header +
         // up to 1 KB code). Larger copies are also fine — AXISRAM1 NS
         // has 896 KB available — but 128 KB is the minimum that lets the
-        // FreeRTOS NS host (`freertos_n657`) scan AXISRAM1 for UMBR
+        // FreeRTOS NS host (`stm32n657/freertos`) scan AXISRAM1 for UMBR
         // enclave magic at 0x24010000+. The bare-metal host doesn't need
         // the scan path (uses linker symbol directly) but copying the
         // extra bytes is harmless.
