@@ -126,7 +126,8 @@ export UMBRA_ESS_MISS_RECOVERY=1
 case "${HOST_APP:-bare_metal}" in
     bare_metal)  HOST_LOG_PREFIX="[USER]" ;;
     freertos)    HOST_LOG_PREFIX="[FREERTOS]" ;;
-    *)           die "Unsupported HOST_APP=${HOST_APP} for taclebench harness (expected bare_metal or freertos)" ;;
+    tock)        HOST_LOG_PREFIX="[TOCK]" ;;
+    *)           die "Unsupported HOST_APP=${HOST_APP} for taclebench harness (expected bare_metal, freertos, or tock)" ;;
 esac
 echo "==> HOST_APP=${HOST_APP:-bare_metal} (HOST_LOG_PREFIX='${HOST_LOG_PREFIX}')"
 
@@ -371,7 +372,7 @@ run_pass() {
     local HEARTBEAT_COUNT=0
     local DRIFT_MAX_DEC=0
     local HEALTHY_PCT=0
-    if [ "${HOST_APP:-bare_metal}" = "freertos" ]; then
+    if [ "${HOST_APP:-bare_metal}" = "freertos" ] || [ "${HOST_APP:-bare_metal}" = "tock" ]; then
         # Heartbeat liveness: >=5 [HEARTBEAT] over the run.
         # Heartbeat is vTaskDelay(100 ms FreeRTOS) → ~325 ms wall under
         # enclave load (effective NS tick rate ~250-300 Hz).
@@ -392,7 +393,7 @@ run_pass() {
         # "[DRIFT] max=0xHHHHHHHH total=0xHHHHHHHH".
         # Match the first [DRIFT] max= line (the end-of-run snapshot is
         # printed exactly once by vEnclaveTask before vTaskDelete).
-        DRIFT_MAX_HEX=$(awk '/\[DRIFT\] max=/ {
+        DRIFT_MAX_HEX=$(LC_ALL=C awk '/\[DRIFT\] max=/ {
             for (i=1; i<=NF; i++) if ($i ~ /^max=/) { sub(/^max=/, "", $i); print $i; exit }
         }' "${UART_LOG}" | head -1)
         if [ -n "${DRIFT_MAX_HEX}" ]; then
@@ -410,7 +411,7 @@ run_pass() {
         # Format: "[DRIFT] b0=0xHHH b1=0xHHH b2=0xHHH b3=0xHHH b4=0xHHH b5=0xHHH"
         # Parse with process substitution + read (no eval, no shell injection).
         # awk-side regex validates each token is `bN=0xHHH...` before emitting.
-        read -r B0_HEX B1_HEX B2_HEX B3_HEX B4_HEX B5_HEX < <(awk '
+        read -r B0_HEX B1_HEX B2_HEX B3_HEX B4_HEX B5_HEX < <(LC_ALL=C awk '
             /\[DRIFT\] b0=/ {
                 delete v
                 for (i=1; i<=NF; i++)

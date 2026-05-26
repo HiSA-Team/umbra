@@ -1,0 +1,16 @@
+[package]
+name = "stm32l552"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+kernel    = { workspace = true }
+cortexm33 = { workspace = true }
+stm32l5xx = { path = "../stm32l5xx" }
+
+[lib]
+name = "stm32l552"
+path = "src/lib.rs"

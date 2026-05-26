@@ -47,6 +47,7 @@ umbra/
     stm32l552/                    # STM32L5 family (L552 + L562 via MCU_VARIANT)
       bare_metal/                 #   Bare-metal NS host
       freertos/                   #   FreeRTOS NS host
+      tock/                       #   Tock NS host (L552 only)
       taclebench/                 #   Standalone TACLeBench enclave blobs
     stm32n657/                    # STM32N6
       bare_metal/                 #   Bare-metal NS host

@@ -1,0 +1,28 @@
+[package]
+name = "enclave_demo"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# board_l552 is the default so `cargo check --workspace` (no explicit features)
+# satisfies the per-board `compile_error!` guard in src/main.rs. Real builds
+# pass --features via the Makefile.
+default = ["board_l552"]
+board_l552 = []
+board_l562 = []
+board_n657 = []
+
+[dependencies]
+libtock = { path = "../../lib/libtock-rs" }
+
+[build-dependencies]
+# Wires libtock_layout.ld into the link via build.rs::auto_layout(); without
+# it the linker has no ENTRY anchor and --gc-sections discards everything.
+libtock_build_scripts = { path = "../../lib/libtock-rs/build_scripts" }
+
+[[bin]]
+name = "enclave_demo"
+path = "src/main.rs"

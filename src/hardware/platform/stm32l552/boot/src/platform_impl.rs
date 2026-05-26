@@ -3,6 +3,83 @@
 use arm::mmio::{NVIC_ISER0, NVIC_ISER1, SCB_SHCSR, SYST_CSR};
 use kernel::platform::PlatformBoot;
 
+// ─── Static NS-MPU layout (Tock-host-port spec §4.2) ──────────────────────
+//
+// Six regions plus the PPB region (7 total) describing the Non-Secure MPU
+// layout Umbra Secure programs once during configure_ns_boot(), then leaves
+// immutable for the lifetime of the system. Tock runs in NS with a NoopMpu
+// stub that never rewrites these registers; the actual memory protection
+// lives here.
+//
+// Region 3/4 split (kernel-RAM 64K / app-RAM 128K at 0x20010000) is mirrored
+// by a linker ASSERT in
+// host/stm32l552/tock/boards/nucleo_l552ze_q_umbra/layout.ld — if Tock's
+// kernel-RAM footprint grows past 64K, the assert fires AND this constant
+// must be rebalanced in lockstep.
+//
+// Spec: docs/superpowers/specs/2026-05-26-tock-host-port-umbra-owned-mpu-design.md
+
+use arm::mpu::{NsMpuRegion, MpuAccessPermission, MpuExecuteNever};
+
+const NS_MPU_LAYOUT_L552: [NsMpuRegion; 7] = [
+    // Region 0: Tock kernel flash + vectors — priv-RX
+    NsMpuRegion {
+        base_addr:  0x0804_0000,
+        limit_addr: 0x0806_FFFF,
+        ap: MpuAccessPermission::ROPrivilegedOnly,
+        xn: MpuExecuteNever::ExecutionPermitted,
+        attr_index: 0,
+    },
+    // Region 1: TBF apps flash — unpriv-RX
+    NsMpuRegion {
+        base_addr:  0x0807_0000,
+        limit_addr: 0x0807_7FFF,
+        ap: MpuAccessPermission::ROAny,
+        xn: MpuExecuteNever::ExecutionPermitted,
+        attr_index: 0,
+    },
+    // Region 2: Enclave NS flash — unpriv-RX (Tock app reads when calling umbra_create)
+    NsMpuRegion {
+        base_addr:  0x0807_8000,
+        limit_addr: 0x0807_FFFF,
+        ap: MpuAccessPermission::ROAny,
+        xn: MpuExecuteNever::ExecutionPermitted,
+        attr_index: 0,
+    },
+    // Region 3: Tock kernel RAM — priv-RW, XN
+    NsMpuRegion {
+        base_addr:  0x2000_0000,
+        limit_addr: 0x2000_FFFF,
+        ap: MpuAccessPermission::RWPrivilegedOnly,
+        xn: MpuExecuteNever::ExecutionNever,
+        attr_index: 0,
+    },
+    // Region 4: App RAM (PSP stacks, grants, heap) — unpriv-RW, XN
+    NsMpuRegion {
+        base_addr:  0x2001_0000,
+        limit_addr: 0x2002_FFFF,
+        ap: MpuAccessPermission::RWAny,
+        xn: MpuExecuteNever::ExecutionNever,
+        attr_index: 0,
+    },
+    // Region 5: NS peripherals (LPUART1, RCC, GPIO …) — priv-RW, XN, Device
+    NsMpuRegion {
+        base_addr:  0x4000_0000,
+        limit_addr: 0x5FFF_FFFF,
+        ap: MpuAccessPermission::RWPrivilegedOnly,
+        xn: MpuExecuteNever::ExecutionNever,
+        attr_index: 1,
+    },
+    // Region 6: PPB (SCB, SysTick, NVIC) — priv-RW, XN, Device
+    NsMpuRegion {
+        base_addr:  0xE000_0000,
+        limit_addr: 0xE00F_FFFF,
+        ap: MpuAccessPermission::RWPrivilegedOnly,
+        xn: MpuExecuteNever::ExecutionNever,
+        attr_index: 1,
+    },
+];
+
 pub struct Stm32l5Platform;
 
 impl Stm32l5Platform {
@@ -545,6 +622,13 @@ impl PlatformBoot for Stm32l5Platform {
         // classifies 0x08040000 as Secure for data reads, so the hardware
         // vector fetch fails if VTOR points to flash.  SRAM is genuinely NS.
         drivers::rcc::Rcc::set_vtor_ns(0x20000000);
+
+        // Hand Tock a pre-configured Non-Secure MPU per spec §4.2.
+        // After this call the NS-MPU is locked: nothing in NS rewrites it.
+        // (Tock's cortexm33::mpu is replaced with NoopMpu in the board crate.)
+        unsafe {
+            arm::mpu::program_ns_mpu(&NS_MPU_LAYOUT_L552);
+        }
     }
 
     fn jump_to_ns(&self) -> ! {

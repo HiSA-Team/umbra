@@ -401,9 +401,9 @@ if [ "$MCU_VARIANT" = "stm32n657" ]; then
     esac
 else
     case "$HOST_APP" in
-        bare_metal|freertos) ;;
+        bare_metal|freertos|tock) ;;
         *)
-            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for L5: $HOST_APP (expected bare_metal or freertos)${VANILLA}"
+            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for L5: $HOST_APP (expected bare_metal, freertos, or tock)${VANILLA}"
             return 1
             ;;
     esac

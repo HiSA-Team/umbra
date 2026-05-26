@@ -19,6 +19,10 @@ use peripheral_regs::*;
 //////////////////////////////////////////////////
 
 const MPU_BASE_ADDR: u32 = 0xE000ED90;
+/// NS-alias of the MPU registers. Accessible from Secure-state code; writes
+/// configure the Non-Secure MPU view of memory. Used by `program_ns_mpu()`
+/// to set up Tock's static memory protection layout (spec §4.2).
+const NS_MPU_BASE_ADDR: u32 = 0xE002ED90;
 type MpuRegisters = u32;
 
 //////////////////////////////////////////////
@@ -144,6 +148,14 @@ impl MpuDriver {
         Self { regs }
     }
 
+    /// Construct an `MpuDriver` bound to an arbitrary base address.
+    /// Used by NS-MPU programming from Secure-state code (pass
+    /// `NS_MPU_BASE_ADDR`).
+    pub fn new_with_base(base_addr: u32) -> Self {
+        let regs = unsafe { &mut *(base_addr as *mut MpuRegisters) };
+        Self { regs }
+    }
+
     // Initialize MPU: Disable and clear all regions
     pub unsafe fn init(&mut self) {
         let regs_base_address = self.regs as *const MpuRegisters as *const u32;
@@ -171,6 +183,24 @@ impl MpuDriver {
         // Enable PRIVDEFENA (Bit 2)
         set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_PRIVDEFENA_FIELD, 1);
         // Enable MPU (Bit 0)
+        set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_ENABLE_FIELD, 1);
+    }
+
+    /// Enable the MPU with `PRIVDEFENA=0` and `HFNMIENA=0` — strict deny-by-default
+    /// even for privileged accesses, but bypass in HardFault/NMI handlers so the
+    /// fault dumper can always reach LPUART1.
+    ///
+    /// This is the policy for the NS-MPU per spec §4.2: any kernel access outside
+    /// the explicitly whitelisted regions is a MemFault, acting as a sentinel
+    /// against kernel bugs that would otherwise stomp memory silently.
+    pub unsafe fn enable_strict(&mut self) {
+        let regs_base_address = self.regs as *const MpuRegisters as *const u32;
+        // Clear PRIVDEFENA (bit 2)
+        set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_PRIVDEFENA_FIELD, 0);
+        // HFNMIENA (bit 1) defaults to 0 → MPU bypassed in HF/NMI; no write needed
+        // unless a previous configure left it set. Be defensive:
+        clear_register_bit(regs_base_address, MPU_CTRL_REG, 1);
+        // Enable MPU (bit 0)
         set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_ENABLE_FIELD, 1);
     }
 
@@ -218,4 +248,53 @@ impl MpuDriver {
 
         write_register(regs_base_address, MPU_RLAR_REG, rlar);
     }
+}
+
+/// One entry in a static NS-MPU layout. Fully fixed — programmed once at
+/// boot, never modified at runtime. See spec §4.2 for the L552 layout.
+pub struct NsMpuRegion {
+    pub base_addr: u32,
+    pub limit_addr: u32,
+    pub ap: MpuAccessPermission,
+    pub xn: MpuExecuteNever,
+    pub attr_index: u8,  // 0 = Normal WB-RW-allocate, 1 = Device-nGnRE
+}
+
+/// Program the NS-MPU with a static layout. Called exactly once during
+/// Secure boot (from `platform_impl::configure_ns_boot`). After this call
+/// the NS-MPU is locked: nothing in NS — Tock kernel, capsules, apps —
+/// rewrites MPU registers.
+///
+/// MAIR0 is initialized with two attributes:
+///   - attr 0: 0xFF — Normal memory, Inner/Outer Write-Back, RW-allocate
+///   - attr 1: 0x04 — Device-nGnRE (for MMIO peripheral regions)
+///
+/// Per spec §4.2 the layout MUST have at most 16 regions (PMSAv8 hard limit
+/// on M33); the L552 layout uses 7 (indices 0..=6).
+pub unsafe fn program_ns_mpu(regions: &[NsMpuRegion]) {
+    let mut mpu = MpuDriver::new_with_base(NS_MPU_BASE_ADDR);
+
+    mpu.init();   // disable + zero all regions
+
+    // MAIR setup — common to both Normal and Device attributes.
+    mpu.set_mair(0, 0xFF);
+    mpu.set_mair(1, 0x04);
+
+    // Configure each region.
+    for (idx, region) in regions.iter().enumerate() {
+        assert!(idx < 16, "NS-MPU layout exceeds PMSAv8 16-region limit");
+        let cfg = MpuRegionConfig {
+            rnum: idx as u8,
+            base_addr: region.base_addr,
+            limit_addr: region.limit_addr,
+            ap: region.ap,
+            sh: MpuShareability::NonShareable,
+            xn: region.xn,
+            attr_index: region.attr_index,
+            enable: true,
+        };
+        mpu.configure_region(&cfg);
+    }
+
+    mpu.enable_strict();
 }

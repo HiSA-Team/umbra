@@ -1,0 +1,21 @@
+[package]
+name = "nucleo_l552ze_q_umbra"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+kernel          = { workspace = true }
+cortexm         = { workspace = true }
+cortexm33       = { workspace = true }
+capsules-core   = { workspace = true }
+capsules-system = { workspace = true }
+components      = { workspace = true }
+stm32l552       = { path = "../../chips/stm32l552" }
+capsule_umbra   = { path = "../../capsules/umbra" }
+
+[[bin]]
+name = "nucleo_l552ze_q_umbra"
+path = "src/main.rs"

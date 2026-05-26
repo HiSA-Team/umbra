@@ -15,6 +15,7 @@
 - [Overview](examples/README.md)
 - [Bare-Metal](examples/bare-metal.md)
 - [FreeRTOS](examples/freertos.md)
+- [Tock](examples/tock.md)
 - [NPU Object Detection](examples/object-detection.md)
 
 # Architecture

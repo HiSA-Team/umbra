@@ -4,3 +4,9 @@
 [submodule "host/stm32l552/taclebench/lib/tacle-bench"]
 	path = host/stm32l552/taclebench/lib/tacle-bench
 	url = https://github.com/tacle/tacle-bench.git
+[submodule "host/stm32l552/tock/lib/tock"]
+	path = host/stm32l552/tock/lib/tock
+	url = https://github.com/tock/tock.git
+[submodule "host/stm32l552/tock/lib/libtock-rs"]
+	path = host/stm32l552/tock/lib/libtock-rs
+	url = https://github.com/tock/libtock-rs.git

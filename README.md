@@ -58,10 +58,11 @@ to one of `stm32l552`, `stm32l562`, or `stm32n657`, then source the script:
 ```
 source settings.sh
 ```
-Optionally pick a non-default host application (only `bare_metal` is the
-default; the other options vary per MCU — see the table below):
+Optionally pick a non-default host application (`bare_metal` is the default;
+other options vary per MCU):
 ```
-export HOST_APP=freertos        # STM32L5 + STM32N6
+export HOST_APP=freertos         # STM32L5 + STM32N6
+export HOST_APP=tock             # STM32L552 only
 export HOST_APP=object_detection # STM32N6 only
 source settings.sh
 ```
@@ -112,6 +113,6 @@ Topics covered:
 - Architecture (Secure boot, ESS demand-paged enclave cache, NSC veneers)
 - FSBL boot model for STM32N6 (Boot ROM, signing, AXISRAM layout)
 - Per-board hardware setup (L552, L562, N657)
-- Host examples (bare-metal, FreeRTOS, NPU object detection)
+- Host examples (bare-metal, FreeRTOS, Tock, NPU object detection)
 - Formal verification of the integrity model (ProVerif)
 - **Porting to a new board** — step-by-step using the `PlatformBoot` trait

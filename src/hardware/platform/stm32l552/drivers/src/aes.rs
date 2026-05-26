@@ -358,6 +358,7 @@ impl AesEmulated {
         }
     }
     
+    #[allow(dead_code)]  // forward AES round; ESS path is decrypt-only on L552
     fn sub_bytes(&self, state: &mut [u8; 16]) {
         for i in 0..16 {
             state[i] = self.sbox[state[i] as usize];
@@ -370,6 +371,7 @@ impl AesEmulated {
         }
     }
 
+    #[allow(dead_code)]  // forward AES round; ESS path is decrypt-only on L552
     fn shift_rows(state: &mut [u8; 16]) {
         // Row 0 is unchanged
         // Row 1 rotated left by 1
@@ -408,6 +410,7 @@ impl AesEmulated {
         p
     }
 
+    #[allow(dead_code)]  // forward AES round; ESS path is decrypt-only on L552
     fn mix_columns(state: &mut [u8; 16]) {
         // Use column-major order indexing since state is byte array 128-bit linear
         // Standard AES defines state as column-major matrix of bytes. 

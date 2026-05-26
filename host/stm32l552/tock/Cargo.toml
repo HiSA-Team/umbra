@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "chips/stm32l5xx",
+    "chips/stm32l552",
+    "capsules/umbra",
+    "boards/nucleo_l552ze_q_umbra",
+    "apps/enclave_demo",
+]
+exclude = [
+    "lib",  # Tock and libtock-rs each have their own root workspaces.
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Salvatore Bramante <salvatore.bramante@yahoo.it>"]
+publish = false
+
+[workspace.dependencies]
+# Path-deps into the Tock submodule pinned at b35fad8 in host/stm32l552/tock/lib/tock.
+# Bump the submodule SHA only when intentionally upgrading.
+kernel         = { path = "lib/tock/kernel" }
+cortexm        = { path = "lib/tock/arch/cortex-m" }
+cortexm33      = { path = "lib/tock/arch/cortex-m33" }
+capsules-core   = { path = "lib/tock/capsules/core" }
+capsules-extra  = { path = "lib/tock/capsules/extra" }
+capsules-system = { path = "lib/tock/capsules/system" }
+components      = { path = "lib/tock/boards/components" }
+
+[profile.dev]
+panic = "abort"
+opt-level = "z"
+debug = true
+lto = false
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+debug = true
+lto = true
+codegen-units = 1
