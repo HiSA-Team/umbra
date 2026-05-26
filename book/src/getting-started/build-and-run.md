@@ -25,14 +25,16 @@ export MCU_VARIANT=stm32n657
 
 `HOST_APP` selects the Non-Secure host built into the final image.
 
-| `HOST_APP` | L552 / L562 | N657 |
-|---|---|---|
-| `bare_metal` *(default)* | `host/stm32l552/bare_metal` | `host/stm32n657/bare_metal` |
-| `freertos` | `host/stm32l552/freertos` | `host/stm32n657/freertos` |
-| `object_detection` | — | `host/stm32n657/object_detection` |
+| `HOST_APP` | L552 | L562 | N657 |
+|---|---|---|---|
+| `bare_metal` *(default)* | `host/stm32l552/bare_metal` | `host/stm32l552/bare_metal` | `host/stm32n657/bare_metal` |
+| `freertos` | `host/stm32l552/freertos` | `host/stm32l552/freertos` | `host/stm32n657/freertos` |
+| `tock` | `host/stm32l552/tock` | — | — |
+| `object_detection` | — | — | `host/stm32n657/object_detection` |
 
 ```bash
-export HOST_APP=freertos            # any platform
+export HOST_APP=freertos            # STM32L5 + STM32N6
+export HOST_APP=tock                # STM32L552 only — Tock kernel + libtock-rs
 export HOST_APP=object_detection    # N657 only — Tiny YOLO v2 on the NPU
 source ./settings.sh
 ```

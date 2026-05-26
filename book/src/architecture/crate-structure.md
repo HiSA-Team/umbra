@@ -102,9 +102,11 @@ The binary crate for each MCU:
 
 Shared C helpers that landed during the N657 port:
 
-- `umbra_hex.{c,h}` — `umbra_u32_to_hex()` formatter used by all NS hosts.
+- `umbra_hex.{c,h}` — `umbra_u32_to_hex()` formatter used by C NS hosts.
 - `umbra_mem.c` — minimal `memset` / `memcpy` for `-nostdlib` builds.
 
-Both are included from every host crate: `host/stm32l552/bare_metal`,
+Both are included from every C host crate: `host/stm32l552/bare_metal`,
 `host/stm32l552/freertos`, `host/stm32n657/bare_metal`,
-`host/stm32n657/freertos`, and `host/stm32n657/object_detection`.
+`host/stm32n657/freertos`, and `host/stm32n657/object_detection`. The
+[`host/stm32l552/tock/`](../examples/tock.md) host is Rust and uses
+libtock-rs's own formatting + alloc primitives instead.

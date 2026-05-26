@@ -248,6 +248,10 @@ fn panic_dump(sp: u32, cfsr: u32, reason: &str) -> ! {
         let bfar  = ptr::read_volatile(SCB_BFAR);
         print_str("MMFAR: 0x"); print_hex(mmfar); print_str("\n");
         print_str("BFAR:  0x"); print_hex(bfar);  print_str("\n");
+        let sfar = ptr::read_volatile(SCB_SFAR);
+        let sfsr = ptr::read_volatile(SCB_SFSR);
+        print_str("SFAR:  0x"); print_hex(sfar); print_str("\n");
+        print_str("SFSR:  0x"); print_hex(sfsr); print_str("\n");
     }
     print_str("Reason: ");
     print_str(reason);
