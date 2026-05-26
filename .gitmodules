@@ -1,3 +1,6 @@
 [submodule "host/stm32l552/freertos/lib/FreeRTOS-Kernel"]
 	path = host/stm32l552/freertos/lib/FreeRTOS-Kernel
 	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "host/stm32l552/taclebench/lib/tacle-bench"]
+	path = host/stm32l552/taclebench/lib/tacle-bench
+	url = https://github.com/tacle/tacle-bench.git
