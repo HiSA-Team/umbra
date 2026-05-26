@@ -7,22 +7,24 @@ scripts, and startup code.
 
 | Example | Path | Platforms | Scheduler | Use case |
 |---|---|---|---|---|
-| [Bare-Metal](bare-metal.md) | `host/bare_metal_arm/` | STM32L5 | Hand-rolled round-robin | Minimal footprint, no dependencies |
-| Bare-Metal (N6) | `host/bare_metal_n657/` | STM32N657 | Single re-entry loop | N6 mirror of the L5 bare-metal example |
-| [FreeRTOS](freertos.md) | `host/freertos_arm/` | STM32L5 | FreeRTOS V11.1.0 preemptive | RTOS coexistence proof |
-| FreeRTOS (N6) | `host/freertos_n657/` | STM32N657 | FreeRTOS V11.1.0 preemptive | N6 mirror of the FreeRTOS example |
-| [NPU Object Detection](object-detection.md) | `host/object_detection_n657/` | STM32N657 | FreeRTOS task | Tiny YOLO v2 person detector running on the NPU **inside the enclave** |
+| [Bare-Metal](bare-metal.md) | `host/stm32l552/bare_metal/` | STM32L5 | Hand-rolled round-robin | Minimal footprint, no dependencies |
+| Bare-Metal (N6) | `host/stm32n657/bare_metal/` | STM32N657 | Single re-entry loop | N6 mirror of the L5 bare-metal example |
+| [FreeRTOS](freertos.md) | `host/stm32l552/freertos/` | STM32L5 | FreeRTOS V11.1.0 preemptive | RTOS coexistence proof |
+| FreeRTOS (N6) | `host/stm32n657/freertos/` | STM32N657 | FreeRTOS V11.1.0 preemptive | N6 mirror of the FreeRTOS example |
+| [NPU Object Detection](object-detection.md) | `host/stm32n657/object_detection/` | STM32N657 | FreeRTOS task | Tiny YOLO v2 person detector running on the NPU **inside the enclave** |
 
 ## Selecting an Example
 
-`HOST_APP` selects the host. The resolved directory depends on the
-active `MCU_VARIANT`:
+`HOST_APP` selects the host. The host tree is organized by target
+platform (`host/<platform>/<app>/`), and `HOST_DIR` resolves to
+`host/$MCU/$HOST_APP` (`$MCU` is `stm32l552` for both L552 and L562, or
+`stm32n657`):
 
 | `HOST_APP` | STM32L5 | STM32N657 |
 |---|---|---|
-| `bare_metal` (default) | `bare_metal_arm` | `bare_metal_n657` |
-| `freertos` | `freertos_arm` | `freertos_n657` |
-| `object_detection` | *(unsupported)* | `object_detection_n657` |
+| `bare_metal` (default) | `host/stm32l552/bare_metal` | `host/stm32n657/bare_metal` |
+| `freertos` | `host/stm32l552/freertos` | `host/stm32n657/freertos` |
+| `object_detection` | *(unsupported)* | `host/stm32n657/object_detection` |
 
 ```bash
 # Bare-metal on the active MCU (default)
@@ -43,9 +45,9 @@ source ./settings.sh
 tools/flash_n657.sh
 ```
 
-`settings.sh` maps `HOST_APP` × `MCU_VARIANT` to the corresponding
-directory and exports `HOST_DIR`, `HOST_NAME`, and `HOST_ELF`. These
-variables are consumed by `rebuild_all.sh`, `debug.sh`,
+`settings.sh` resolves `HOST_DIR = host/$MCU/$HOST_APP` and exports
+`HOST_NAME = $HOST_APP` plus `HOST_ELF = $HOST_DIR/bin/$HOST_APP.elf`.
+These variables are consumed by `rebuild_all.sh`, `debug.sh`,
 `tools/flash_n657.sh`, and the root Makefile targets
 (`program_elf_host`, `program_enclaves_extload`).
 
@@ -66,7 +68,7 @@ Tiny YOLO v2 INT8 inference on the NPU; see
 
 All hosts include `host/common/inc/umbra_hex.h` (`umbra_u32_to_hex`)
 and `host/common/src/umbra_mem.c` (minimal `memset`/`memcpy` for
-`-nostdlib` builds), so each host's `Makefile` adds `../common/{inc,src}`
+`-nostdlib` builds), so each host's `Makefile` adds `../../common/{inc,src}`
 to its include / source paths.
 
 ## UART Output

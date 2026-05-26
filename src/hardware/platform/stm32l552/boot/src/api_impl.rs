@@ -449,7 +449,7 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         // AP=0b01 (RW, all privilege levels). XN=0 (executable). Under
         // `-fpic -mpic-data-is-text-relative`, the enclave's .data/.bss
         // are emitted into the same ._enclave_code section as code (see
-        // host/taclebench/linker/enclave_blob.ld) and loaded into ESS,
+        // host/stm32l552/taclebench/linker/enclave_blob.ld) and loaded into ESS,
         // so the region must permit writes for any enclave that touches
         // a global. RO+X (AP=0b11) was the original intent but trips
         // MemManage.DACCVIOL on the first global store, which the

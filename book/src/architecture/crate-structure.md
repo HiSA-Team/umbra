@@ -105,6 +105,6 @@ Shared C helpers that landed during the N657 port:
 - `umbra_hex.{c,h}` — `umbra_u32_to_hex()` formatter used by all NS hosts.
 - `umbra_mem.c` — minimal `memset` / `memcpy` for `-nostdlib` builds.
 
-Both are included from `host/bare_metal_arm`, `host/freertos_arm`,
-`host/bare_metal_n657`, `host/freertos_n657`, and
-`host/object_detection_n657`.
+Both are included from every host crate: `host/stm32l552/bare_metal`,
+`host/stm32l552/freertos`, `host/stm32n657/bare_metal`,
+`host/stm32n657/freertos`, and `host/stm32n657/object_detection`.

@@ -26,7 +26,7 @@ fi
 # manually for individual blobs and is known to work reliably.
 #
 # Sectors 240-255 = 0x08078000..0x0807FFFF (16 × 2 KB pages = 32 KB,
-# the full enclave scan range that bare_metal_arm host iterates). The
+# the full enclave scan range that the L5 bare_metal host iterates). The
 # host's bundled fib enclave at 0x08078000 is overwritten by
 # `make program_elf_host` below, so erasing sector 240 is safe.
 #

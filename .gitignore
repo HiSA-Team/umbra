@@ -13,7 +13,7 @@ __pycache__/
 lib/*
 
 # Explicitly track FreeRTOS-Kernel submodule despite lib/* rule
-!host/freertos_arm/lib/FreeRTOS-Kernel
+!host/stm32l552/freertos/lib/FreeRTOS-Kernel
 
 # Ignore deprecated
 deprecated
@@ -22,22 +22,20 @@ deprecated
 tmp
 todo
 
-# Ignore builds for bare_metal_arm
-host/bare_metal_arm/bin/*
-host/bare_metal_arm/obj/*
-host/freertos_arm/bin/*
-host/freertos_arm/obj/*
-
-# N657 host build artifacts
-host/bare_metal_n657/bin/*
-host/bare_metal_n657/obj/*
-host/freertos_n657/bin/*
-host/freertos_n657/obj/*
-host/object_detection_n657/bin/*
-host/object_detection_n657/obj/*
+# Host build artifacts (per platform/app)
+host/stm32l552/bare_metal/bin/*
+host/stm32l552/bare_metal/obj/*
+host/stm32l552/freertos/bin/*
+host/stm32l552/freertos/obj/*
+host/stm32n657/bare_metal/bin/*
+host/stm32n657/bare_metal/obj/*
+host/stm32n657/freertos/bin/*
+host/stm32n657/freertos/obj/*
+host/stm32n657/object_detection/bin/*
+host/stm32n657/object_detection/obj/*
 
 # ST upstream clone — vendored subset is committed under
-# host/object_detection_n657/{Application,Middlewares,STM32Cube_FW_N6,Model}
+# host/stm32n657/object_detection/{Application,Middlewares,STM32Cube_FW_N6,Model}
 host/STM32N6-GettingStarted-ObjectDetection/
 
 # T3 smoke-test transient output (golden_uart.log is tracked)

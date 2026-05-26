@@ -317,7 +317,7 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         }
         // Region 6: INPUT_SHARED (host writes 224×224×3 image, enclave
         // reads). RW unprivileged, no execute. Backed by the INPUT_SHARED
-        // MEMORY entry in object_detection_n657/linker/memory.ld.
+        // MEMORY entry in host/stm32n657/object_detection/linker/memory.ld.
         core::ptr::write_volatile(mpu_rnr, 6);
         core::ptr::write_volatile(
             mpu_rbar,

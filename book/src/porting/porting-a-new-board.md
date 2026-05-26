@@ -270,7 +270,8 @@ override (`STM32CUBE_PROG_DIR`, `STM32_SIGNING_TOOL`,
 
 ## Step 6 — Add a Non-Secure host
 
-Mirror `host/bare_metal_arm/` into `host/bare_metal_<mcu>/`. Adjust:
+Mirror `host/stm32l552/bare_metal/` into `host/stm32<xxx>/bare_metal/`.
+Adjust:
 
 - `linker/memory.ld` for the new MCU's memory map.
 - `linker/host.ld` for the new NSC veneer addresses.
@@ -280,11 +281,11 @@ Mirror `host/bare_metal_arm/` into `host/bare_metal_<mcu>/`. Adjust:
   from the linker-known `_enclave_start` and the AXISRAM1 NS base,
   instead of scanning bytes.
 - `Makefile` — point `CFLAGS` at the new `mcpu`, include
-  `../common/{inc,src}` so `umbra_hex.h` / `umbra_mem.c` are available.
+  `../../common/{inc,src}` so `umbra_hex.h` / `umbra_mem.c` are available.
 
-For a FreeRTOS variant, copy `host/freertos_arm/` and apply the same
-adjustments. Re-use the FreeRTOS-Kernel submodule already cloned into
-`host/freertos_arm/lib/` — don't add a second submodule.
+For a FreeRTOS variant, copy `host/stm32l552/freertos/` and apply the
+same adjustments. Re-use the FreeRTOS-Kernel submodule already cloned
+into `host/stm32l552/freertos/lib/` — don't add a second submodule.
 
 ## Step 7 — Bring up incrementally
 

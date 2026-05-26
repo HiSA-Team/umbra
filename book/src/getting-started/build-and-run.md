@@ -27,9 +27,9 @@ export MCU_VARIANT=stm32n657
 
 | `HOST_APP` | L552 / L562 | N657 |
 |---|---|---|
-| `bare_metal` *(default)* | `host/bare_metal_arm` | `host/bare_metal_n657` |
-| `freertos` | `host/freertos_arm` | `host/freertos_n657` |
-| `object_detection` | — | `host/object_detection_n657` |
+| `bare_metal` *(default)* | `host/stm32l552/bare_metal` | `host/stm32n657/bare_metal` |
+| `freertos` | `host/stm32l552/freertos` | `host/stm32n657/freertos` |
+| `object_detection` | — | `host/stm32n657/object_detection` |
 
 ```bash
 export HOST_APP=freertos            # any platform

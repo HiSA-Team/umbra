@@ -1,6 +1,6 @@
 # FreeRTOS Example
 
-The FreeRTOS host (`host/freertos_arm/`) demonstrates that Umbra's TrustZone isolation works transparently with a standard RTOS. A single FreeRTOS task manages the entire enclave lifecycle, proving that the Secure SysTick (enclave preemption) and the NS SysTick (FreeRTOS tick) operate independently on the dual-SysTick Cortex-M33 architecture.
+The FreeRTOS host (`host/stm32l552/freertos/`) demonstrates that Umbra's TrustZone isolation works transparently with a standard RTOS. A single FreeRTOS task manages the entire enclave lifecycle, proving that the Secure SysTick (enclave preemption) and the NS SysTick (FreeRTOS tick) operate independently on the dual-SysTick Cortex-M33 architecture.
 
 ## How It Works
 
@@ -35,7 +35,7 @@ source ./settings.sh
 The first build will clone the FreeRTOS-Kernel submodule automatically if needed:
 
 ```bash
-git submodule update --init host/freertos_arm/lib/FreeRTOS-Kernel
+git submodule update --init host/stm32l552/freertos/lib/FreeRTOS-Kernel
 ```
 
 ## Expected UART Output
@@ -54,7 +54,7 @@ git submodule update --init host/freertos_arm/lib/FreeRTOS-Kernel
 ## File Structure
 
 ```
-host/freertos_arm/
+host/stm32l552/freertos/
   ├── lib/
   │   └── FreeRTOS-Kernel/    Git submodule (V11.1.0, ARM_CM33_NTZ port)
   ├── src/

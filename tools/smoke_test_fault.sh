@@ -30,7 +30,7 @@ LOG="tools/last_uart_fault.log"
 # target_reset_run, plus UMBRA_OOCD_HOST/PORT/WAIT_MS defaults).
 source "$(cd "$(dirname "$0")" && pwd)/smoke_test_lib.sh"
 
-HOST_ELF="host/bare_metal_arm/bin/bare_metal_arm.elf"
+HOST_ELF="host/stm32l552/bare_metal/bin/bare_metal.elf"
 BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
 
 # Corruption target: first ciphertext byte of block 0.

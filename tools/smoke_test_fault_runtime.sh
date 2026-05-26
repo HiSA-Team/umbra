@@ -40,7 +40,7 @@ ATTACK="${UMBRA_ATTACK:?Set UMBRA_ATTACK to ciphertext|hmac|swap}"
 # target_reset_run, plus UMBRA_OOCD_HOST/PORT/WAIT_MS defaults).
 source "$(cd "$(dirname "$0")" && pwd)/smoke_test_lib.sh"
 
-HOST_ELF="host/bare_metal_arm/bin/bare_metal_arm.elf"
+HOST_ELF="host/stm32l552/bare_metal/bin/bare_metal.elf"
 BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
 SECTION="._enclave_code"
 
@@ -79,7 +79,7 @@ l562_extload_and_restart_oocd() {
     sleep 0.5
 
     echo "[fault-rt] L562: flashing tampered enclaves_plain.bin to OCTOSPI..."
-    if ! make -C host/bare_metal_arm enclaves_plain.bin >/dev/null 2>&1; then
+    if ! make -C host/stm32l552/bare_metal enclaves_plain.bin >/dev/null 2>&1; then
         echo "ERROR: make enclaves_plain.bin failed" >&2
         return 1
     fi

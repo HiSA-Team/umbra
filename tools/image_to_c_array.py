@@ -6,7 +6,7 @@ Usage:
     image_to_c_array.py <input_image> <output_header>
 
 Examples:
-    image_to_c_array.py person.jpg host/object_detection_n657/inc/test_image.h
+    image_to_c_array.py person.jpg host/stm32n657/object_detection/inc/test_image.h
 
 The output header defines:
     extern const uint8_t test_image_rgb888[224 * 224 * 3];
