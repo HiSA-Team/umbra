@@ -4,7 +4,19 @@ set -eo pipefail
 source ./settings.sh
 export UMBRA_ESS_MISS_RECOVERY=1
 
-make secureboot_clean && make secureboot_build && make umbra_clean && make umbra_build && cd ${HOST_DIR} && make clean && make && cd ${ROOT_DIR}
+# Secure boot kernel build.
+make secureboot_clean
+make secureboot_build
+
+# Umbra library build.
+make umbra_clean
+make umbra_build
+
+# Host (NS) build.
+cd "${HOST_DIR}"
+make clean
+make
+cd "${ROOT_DIR}"
 
 # Re-sign all standalone TACLeBench enclave blobs against the freshly-built
 # master_key.bin. Without this, blobs from previous sessions (still on disk

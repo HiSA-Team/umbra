@@ -173,7 +173,7 @@ unsafe fn start() -> (
 
     // Clock tree: HSI16 → SYSCLK, then enable PWR (DBP unlock), LSE, GPIOG,
     // LPUART1. CCIPR1 selects LSE as LPUART1's input clock; the LPUART BRR
-    // formula (256 × f_ck / baud) then yields BRR = 0x369 for 9600 baud.
+    // formula (256 X f_ck / baud) then yields BRR = 0x369 for 9600 baud.
     rcc::init();
     rcc::enable_pwr();
     rcc::enable_lse();

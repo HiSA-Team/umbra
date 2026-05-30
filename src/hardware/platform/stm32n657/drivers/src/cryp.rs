@@ -56,9 +56,8 @@ const CR_CRYPEN: u32 = 1 << 15;
 const CR_FFLUSH: u32 = 1 << 14;
 // ALGOMODE is bits [5:3] (with bit 19 as extension). Per §49.8.1:
 //   0x4 = ECB, 0x5 = CBC, 0x6 = CTR, 0x7 = AES key prep
-//   Others (including 0x0) are RESERVED — undefined behavior!
-// Initial bringup had ALGOMODE=0x0 (reserved) which left CRYP unconfigured;
-// no encryption happened.
+//   Others (including 0x0) are RESERVED — leaving the field clear
+//   silently no-ops the engine with no encryption.
 const CR_ALGOMODE_ECB: u32 = 0b100 << 3;   // 0x00000020
 const CR_ALGOMODE_CTR: u32 = 0b110 << 3;   // 0x00000030
 // const CR_ALGOMODE_CBC: u32 = 0b101 << 3;

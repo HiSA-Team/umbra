@@ -30,6 +30,14 @@ const UMBRA_CMD_EXIT: u32 = 3;
 const UMBRA_CMD_STATUS: u32 = 4;
 const UMBRA_CMD_PROBE: u32 = 5;
 const UMBRA_CMD_DUMP_DRIFT: u32 = 6;
+// NS-side runtime cycles accumulator
+// + Secure-side boot/switch dump.
+const UMBRA_CMD_GET_RUNTIME_CYCLES: u32 = 7;
+const UMBRA_CMD_BENCH_DUMP: u32 = 8;
+// TrustZone null-SVC cost.
+const UMBRA_CMD_MEASURE_NULL_SVC: u32 = 9;
+// .
+const UMBRA_CMD_GET_BOOT_NS_CYCLES: u32 = 10;
 const UMBRA_SUBSCRIBE_RESULT: u32 = 0;
 
 // Status nibble in `umbra_enclave_enter`'s return value (bits 15..8).
@@ -114,6 +122,33 @@ fn main() {
     // One-shot heartbeat + drift snapshot via the capsule's raw_print path,
     // matching FreeRTOS's pre-`vTaskDelete` dump.
     umbra_cmd(UMBRA_CMD_DUMP_DRIFT, 0);
+
+    // Sentinels make it cheap
+    // for the sweep parser to slice this region out of the
+    // UART log without confusing it with heartbeat / drift noise. Two
+    // EVAL rows:
+    //   - runtime: total cycles spent in CMD_ENTER calls (NS-side
+    //     accumulator, sum across all entered enclaves since boot)
+    //   - boot/switch: printed by the Secure side via the
+    //     `umbra_bench_dump` NSC veneer — empty on stock kernels, two
+    //     rows on `bench-eval` kernels.
+    let _ = writeln!(con, "[EVAL_DUMP_BEGIN]");
+    let runtime_cycles = umbra_cmd(UMBRA_CMD_GET_RUNTIME_CYCLES, 0);
+    let _ = writeln!(con, "[EVAL]\truntime\tcycles=0x{:08X}", runtime_cycles);
+    // NS-side boot bracket — pairs with the Secure-side row
+    // emitted by `umbra_bench_dump` below. The difference (ns - sec)
+    // gives the TrustZone fixed cost.
+    let boot_ns_cycles = umbra_cmd(UMBRA_CMD_GET_BOOT_NS_CYCLES, 0);
+    let _ = writeln!(con, "[EVAL]\tboot_ns\tcycles=0x{:08X}", boot_ns_cycles);
+    // baseline: measure the null-SVC cost so the switch plot can be
+    // normalized against the TrustZone fixed overhead. Single-shot —
+    // the capsule brackets a single null call. Repeated invocations
+    // would only add jitter; the value is config-independent and the
+    // sweep parser uses the median across cells.
+    let null_svc_cycles = umbra_cmd(UMBRA_CMD_MEASURE_NULL_SVC, 0);
+    let _ = writeln!(con, "[EVAL]\tnull_svc\tcycles=0x{:08X}", null_svc_cycles);
+    umbra_cmd(UMBRA_CMD_BENCH_DUMP, 0);
+    let _ = writeln!(con, "[EVAL_DUMP_END]");
 
     let _ = writeln!(con, "[TOCK] All enclaves done");
     idle();

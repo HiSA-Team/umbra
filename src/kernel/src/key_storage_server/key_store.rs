@@ -16,7 +16,8 @@ impl Key {
     }
 }
 
-pub const MAX_KEYS: usize = 8;
+
+pub use crate::common::ess::MAX_KEYS;
 
 pub struct KeyStore {
     pub keys: [Option<Key>; MAX_KEYS],

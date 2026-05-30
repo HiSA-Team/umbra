@@ -17,9 +17,9 @@
 # Meaningful only once Task 2.5 has wired the `chained-measurement FAIL`
 # marker.
 #
-# Historical note: openocd `flash fillw` is broken under STM32L5 TZEN=1
-# (double-faults the target), which is why we patch the ELF and reflash via
-# GDB rather than poking flash at runtime.
+# openocd `flash fillw` is broken under STM32L5 TZEN=1 (double-faults the
+# target), so we patch the ELF and reflash via GDB rather than poking flash
+# at runtime.
 
 set -uo pipefail
 

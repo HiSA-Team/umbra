@@ -80,7 +80,7 @@ fn print_header(uart: &Uart, board: &str, aes_impl: &str) {
 }
 
 /// SYSCLK used by the secure boot. Set by init_clocks() to PLL 110 MHz
-/// (was MSI 4 MHz before the 2026-05-24 PLL bring-up). At 110 MHz,
+///. At 110 MHz,
 /// 1 cycle = 1000/110 ns ≈ 9.0909 ns.
 const CPU_FREQ_MHZ: u32 = 110;
 

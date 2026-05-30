@@ -43,6 +43,12 @@ mod platform_impl;
 #[cfg(feature = "benchmark")]
 mod benchmark;
 
+// the NSC veneer `umbra_bench_dump` references `umbra_bench_dump_imp`
+// regardless of the feature flag — without bench-eval enabled, the
+// module exports no-op stubs so the linker sees a defined symbol and
+// the Secure side carries zero overhead per call.
+mod bench_eval;
+
 // Global statics for Kernel dependencies
 static mut GLOBAL_CRYPTO: Option<crypto_impl::UmbraCryptoEngine> = None;
 
@@ -83,6 +89,12 @@ pub unsafe fn secure_boot() -> !{
     platform.init_kernel();
 
     platform.init_external_flash();
+
+    // §Evaluation: enable the DWT cycle counter so the boot bracket in
+    // umbra_enclave_create_imp + the switch bracket (Step 4) start
+    // reading meaningful values. Idempotent no-op when bench-eval is
+    // disabled — the bench_eval module stub returns immediately.
+    bench_eval::init();
 
     platform.configure_ns_boot();
     platform.jump_to_ns();

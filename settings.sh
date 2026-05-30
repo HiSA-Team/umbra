@@ -163,6 +163,51 @@ if [ "$UMBRA_BENCHMARK" = "1" ]; then
     echo -e "${SUCCESS}[benchmark] CHES26 EFB crypto benchmark ENABLED${VANILLA}"
 fi
 
+export UMBRA_CACHE_ZERO_MODE=${UMBRA_CACHE_ZERO_MODE:-0}
+if [ "$UMBRA_CACHE_ZERO_MODE" = "1" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features cache-zero-mode"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},cache-zero-mode"
+    fi
+    echo -e "${SUCCESS}[cache-zero-mode] ESS=0 mode ENABLED${VANILLA}"
+fi
+
+# runtime instrumentation
+export UMBRA_BENCH_EVAL=${UMBRA_BENCH_EVAL:-0}
+if [ "$UMBRA_BENCH_EVAL" = "1" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features bench-eval,i_acknowledge_benchmark_is_research_only"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},bench-eval,i_acknowledge_benchmark_is_research_only"
+    fi
+    echo -e "${SUCCESS}[bench-eval] instrumentation ENABLED${VANILLA}"
+fi
+
+# switch plot baseline . `umbra-speculation`
+# sets UMBRA_SPECULATION=0 for spec-OFF cells to build
+# `--no-default-features` plus the original default features minus
+# umbra-speculation. Default value here is empty so the no-knob case
+# does NOT touch BOOT_FEATURES — only the explicit "0" disables.
+export UMBRA_SPECULATION=${UMBRA_SPECULATION:-}
+if [ "$UMBRA_SPECULATION" = "0" ]; then
+    # Use --no-default-features + explicit feature list to OMIT
+    # umbra-speculation. The list mirrors boot/Cargo.toml's default
+    # set minus the speculation feature. The L552 case has empty
+    # BOOT_FEATURES; the L562/benchmark/bench-eval cases append.
+    DEFAULTS_WITHOUT_SPEC="chained_measurement,ess_miss_recovery,boot_tests"
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--no-default-features --features ${DEFAULTS_WITHOUT_SPEC}"
+    else
+        # Already has --features; rebuild as --no-default-features.
+        # Extract user-set extras after the existing `--features `
+        # token and merge.
+        EXTRAS=$(echo "$BOOT_FEATURES" | sed -E 's/^.*--features //; s/^/,/')
+        export BOOT_FEATURES="--no-default-features --features ${DEFAULTS_WITHOUT_SPEC}${EXTRAS}"
+    fi
+    echo -e "${SUCCESS}[umbra-speculation] G3 prefetch DISABLED (spec=off cell)${VANILLA}"
+fi
+
 if [ "$MCU_VARIANT" = "stm32n657" ]; then
     export OPENOCD_CONFIG=./openocd_scripts/stm32n6x.cfg
     export TARGET_FLASH_START=0x30000000

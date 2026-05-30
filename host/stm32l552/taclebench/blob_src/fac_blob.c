@@ -5,9 +5,9 @@
 // We call fac_fac(n) directly instead of the canonical fac_init/main/return
 // triplet. The canonical path accesses globals (`fac_s`, `fac_n`); on this
 // kernel that path runs slow enough to cross a SysTick window, exposing the
-// open multi-enclave save/restore bug tracked in
-// project_c_phase2_preemption_bug. The bypass is algorithmically equivalent:
-// TACLeBench's fac_return checks `fac_s == 154` (sum of 0!..5! = 1+1+2+6+24+120).
+// open multi-enclave save/restore preemption-restore bug. The bypass is
+// algorithmically equivalent: TACLeBench's fac_return checks `fac_s == 154`
+// (sum of 0!..5! = 1+1+2+6+24+120).
 extern int fac_fac(int n);
 
 // 48-byte enclave header. The HMAC field is rewritten by protect_enclave.py.

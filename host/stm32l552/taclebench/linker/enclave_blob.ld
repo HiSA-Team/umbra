@@ -20,11 +20,10 @@
 ENTRY(enclave_entry)
 
 MEMORY {
-    /* 32 KB window: was 16 KB. Bumped 2026-05-23 to fit the paper apps
-     * (ndes ~7 KB protected, statemate ~13 KB protected). The
-     * ._enclave_code reservation below stays at 0x4000 (16 KB plaintext);
-     * the extra room in FLASH_BLOB is headroom for objcopy's section
-     * extraction step.
+    /* 32 KB window sized to fit the paper apps (ndes ~7 KB protected,
+     * statemate ~13 KB protected). The ._enclave_code reservation below
+     * stays at 0x4000 (16 KB plaintext); the extra room in FLASH_BLOB is
+     * headroom for objcopy's section extraction.
      *
      * Caveat: bare_metal (L5) scans on 4 KB boundaries, so any enclave
      * whose protected .bin exceeds 4 KB will overlap with the next scan
@@ -66,6 +65,25 @@ SECTIONS {
         *(.data*)
         *(.rodata*)
 
+        /* GCC emits .got / .got.plt for PIC code that references global
+         * symbols (heavy paper-apps: anagram, statemate, dijkstra,
+         * huff_dec, cjpeg_wrbmp). Without explicit absorption here, ld
+         * places them as ORPHAN sections AFTER ._enclave_code's padding
+         * (i.e. at `_enclave_code_start + 0x5000` thanks to the trailing
+         * `. = _enclave_code_start + 0x5000` below). `objcopy
+         * --only-section=._enclave_code` then extracts JUST ._enclave_code,
+         * leaving the GOT entries off the blob. At runtime the enclave's
+         * `add rN, pc, #imm` PIC fixups compute target addresses inside
+         * the (absent) GOT — those land past the last allocated EFBC slot
+         * and trap with MemManage "addr outside any enclave" (R0=0x0,
+         * MMFAR≈ess_base+0x5000+). Pulling them inside ._enclave_code
+         * makes the offsets resolve to bytes that ARE in the blob.
+         *
+         * KEEP() is required because the symbols inside .got might not
+         * have explicit references that survive --gc-sections. */
+        KEEP(*(.got))
+        KEEP(*(.got.plt))
+
         /* Marker for the end of actual content (code + data + bss),
          * BEFORE the reservation padding below. `protect_enclave.py`
          * reads this symbol via `nm` to size the protected blob so it
@@ -82,15 +100,18 @@ SECTIONS {
          * MUST be ≥ that output, otherwise objcopy truncates the
          * ciphertext on extraction (silently corrupting the blob).
          *
-         * 0x4000 (was 0x1000) gives headroom for ~50 protected blocks
-         * (~12.5 KB plaintext). Sized to fit the paper apps:
-         *   ndes:        15 blocks → 4800 B protected  (4 KB plaintext)
-         *   statemate:   ~41 blocks → ~13 KB protected (~10 KB plaintext)
-         *   dijkstra:    NOT VIABLE — 28 KB plaintext (AdjMatrix[100][100]
-         *                in .rodata) → ~35 KB protected, exceeds the
-         *                28 KB NS-flash slot available at 0x08079000.
-         *                Would need either a smaller input or a host
-         *                flash-layout change to put it lower-aligned.
+         * 0x5000 gives headroom for ~64
+         * protected blocks (~16 KB plaintext). Sized to fit the paper-
+         * extension app set ):
+         *   ndes:         15 blocks → 4800 B protected   (4 KB plaintext)
+         *   statemate:    ~41 blocks → ~13 KB protected  (~10 KB plaintext)
+         *   anagram-200:  ~50 blocks → ~16 KB protected  (~12 KB plaintext)
+         *   cjpeg_wrbmp:  ~38 blocks → ~11 KB protected  (~10 KB plaintext)
+         *   dijkstra-64:  ~64 blocks → ~20 KB protected  (~16 KB plaintext)
+         *
+         * Upstream dijkstra (100X100, QUEUE=1000) is NOT VIABLE — 28 KB
+         * plaintext exceeds the 28 KB NS-flash slot. The reduced 64X64
+         * variant in blob_src/dijkstra_input_small.c stays within budget.
          *
          * If you hit "cannot move location counter backwards" here, the
          * benchmark plaintext is too large — bump this AND FLASH_BLOB
@@ -101,7 +122,7 @@ SECTIONS {
          * (one bench at a time, NS-flash erased between passes) works
          * for any blob size up to the FLASH_BLOB reservation.
          */
-        . = _enclave_code_start + 0x4000;
+        . = _enclave_code_start + 0x5000;
     } > FLASH_BLOB
 
     /DISCARD/ : {

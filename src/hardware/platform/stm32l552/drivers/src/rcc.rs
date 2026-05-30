@@ -195,7 +195,7 @@ impl Rcc {
         unsafe { write_register(vtor_ns_addr as *const u32, 0, vtor_ns); }
     }
 
-    // ─── HSI16 + PLL + SYSCLK switch (added 2026-05-24) ─────────────────
+    // ─── HSI16 + PLL + SYSCLK switch ────────────────────────────────────
     //
     // Reference RM0438 §9.4.1 (RCC_CR), §9.4.4 (PLLCFGR), §9.4.3 (CFGR).
     //

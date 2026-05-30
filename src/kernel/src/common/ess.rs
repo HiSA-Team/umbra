@@ -10,17 +10,10 @@ compile_error!("Enable exactly ONE of kernel features platform-l552 or platform-
 //
 // PSP stacks live just above .bss, well below the MSP. The MSP starts at
 // _umb_estack (0x3003DFFC) and can grow 24 KB down to 0x30038000 before
-// touching the PSP ceiling (was 32 KB before the 2026-05-23 expansion).
-//
-// PSP region expanded 2026-05-23 from 8 KB ([0x30034000, 0x30036000]) to
-// 16 KB ([0x30034000, 0x30038000]) to give each enclave a 8 KB stack.
-// Paper-app `ndes` uses ~5 KB of stack (DES key schedule + two
-// `volatile char ip[65]` literal-array initialisers per ndes_des() call
-// + nested cyfun/ks calls), overflowing the previous 2 KB ceiling and
-// causing CFSR.MUNSTKERR on the next exception return. To keep the 4×
-// PSP layout within the new region, MAX_ENCLAVES_CTX dropped to 2 —
-// sequential paper-app testing only needs fib + 1 enclave coexistent
-// at any moment, so this is fine for the §Evaluation runtime plot.
+// touching the PSP ceiling. Each enclave gets an 8 KB PSP stack: paper-
+// app `ndes` uses ~5 KB (DES key schedule + two `volatile char ip[65]`
+// literal-array initialisers per ndes_des() call + nested cyfun/ks
+// calls), and a smaller stack causes CFSR.MUNSTKERR on exception return.
 #[cfg(feature = "platform-l552")]
 pub const ESS_BASE: u32 = 0x30032000;        // SRAM2 (Structures, Secure alias)
 #[cfg(feature = "platform-l552")]
@@ -43,8 +36,9 @@ pub const ENCLAVE_PSP_TOP: u32 = 0x30038000;
 // Layout summary (Secure alias):
 //   0x34064000–0x340DFFFF  ~496 KB  NS host (RISAF2 region 1 SEC=0)
 //   0x340E0000–0x340EFFFF   64 KB   EFBC — enclave code blocks (Secure)
-//   0x340F0000–0x340F1FFF    8 KB   PSP stacks (4 enclaves × 2 KB)
-//   0x340F2000–0x340FFFFF   56 KB   reserved for ESS metadata / future use
+//   0x340F0000–0x340F3FFF   16 KB   PSP stacks (sized to match L552: 2 × 8 KB
+//                                   or 4 × 4 KB — ndes needs ~5 KB per enclave)
+//   0x340F4000–0x340FFFFF   48 KB   reserved for ESS metadata / future use
 #[cfg(feature = "platform-n657")]
 pub const ESS_BASE: u32 = 0x340E0000;
 #[cfg(feature = "platform-n657")]
@@ -54,33 +48,35 @@ pub const EFBC_BASE: u32 = 0x340E0000;       // Secure alias — RISAF2 default 
 #[cfg(feature = "platform-n657")]
 pub const ENCLAVE_PSP_BASE: u32 = 0x340F0000;
 #[cfg(feature = "platform-n657")]
-pub const ENCLAVE_PSP_TOP: u32 = 0x340F2000;
+pub const ENCLAVE_PSP_TOP: u32 = 0x340F4000;
 
 // ── Platform-agnostic constants ──────────────────────────────────────
-pub const SLOT_SIZE: u32 = 256;
-// MAX_EFBS bumped 32 → 64 (2026-05-23) to cover paper-app `statemate`
-// (41 blocks). The `loaded_mask` bitmap in api_impl.rs MUST stay wide
-// enough to track every block index; u32 was only sufficient for
-// ≤32 blocks. Now uses u64 — the kernel-side ceiling is 64 blocks.
+// Build-time knobs : SLOT_SIZE, CACHE_LIMIT_PER_ENCLAVE,
+// MAX_ENCLAVES_CTX, ENCLAVE_PSP_STACK_SIZE, MAX_KEYS. Defaults live
+// in .cargo/config.toml [env]; override per build:
+//   UMBRA_SLOT_SIZE_BYTES=2048 UMBRA_CACHE_LIMIT=8 \
+//     UMBRA_MAX_ENCLAVES_CTX=4 UMBRA_ENCLAVE_PSP_STACK_BYTES=4096 \
+//     ./rebuild_all.sh
+// See src/kernel/build.rs for the generation logic.
+include!(concat!(env!("OUT_DIR"), "/sizes_generated.rs"));
+
+// MAX_EFBS covers paper-app `statemate` (41 blocks). The `loaded_mask`
+// bitmap in api_impl.rs is u64 — its width MUST match this ceiling.
 // For larger enclaves (susan / cjpeg territory), switch to a
-// `[u32; (MAX_EFBS+31)/32]` chunked bitmap.
+// `[u32; (MAX_EFBS+31)/32]` chunked bitmap. NOT moved to env: silently
+// breaking the bitmap-bit-width invariant is too dangerous.
 pub const MAX_EFBS: usize = 64;
-// MAX_ENCLAVES_CTX dropped 4 → 2 (2026-05-23) to fit the bumped
-// per-enclave PSP stack (was 2 KB, now 8 KB) into the 16 KB PSP
-// region — see ENCLAVE_PSP_TOP comment. Sequential paper-app testing
-// only needs fib + 1 coexistent enclave; the 4-enclave round-robin
-// mode in tools/test_taclebench.sh no longer fits.
-pub const MAX_ENCLAVES_CTX: usize = 2;
-pub const ENCLAVE_PSP_STACK_SIZE: u32 = 0x2000; // 8KB per enclave (was 2KB)
-// CACHE_LIMIT_PER_ENCLAVE bumped 24 → 64 (2026-05-23) so that paper
-// apps `ndes` (26 blocks under ess_miss_recovery) and `statemate`
-// (41 blocks) fit entirely without eviction-induced thrashing. With
-// the cap at 24, the next-block-needed-after-eviction pattern
-// produces UDF reads (R0=0xDEDEDEDE in MemManage dumps) → wild
-// pointer dereference → MemManage `addr outside any enclave`. EFBC
-// has 256 slots total; 2 enclaves × 64 = 128 slots fits with 50%
-// headroom for future workloads.
-pub const CACHE_LIMIT_PER_ENCLAVE: usize = 64;
+
+// Static guard: MAX_ENCLAVES_CTX × ENCLAVE_PSP_STACK_SIZE must fit in
+// the platform PSP region (ENCLAVE_PSP_TOP − ENCLAVE_PSP_BASE). This
+// catches knob mis-configurations at build time instead of letting an
+// out-of-region PSP top corrupt MSP at the first SVC.
+const _: () = assert!(
+    MAX_ENCLAVES_CTX * (ENCLAVE_PSP_STACK_SIZE as usize)
+        <= (ENCLAVE_PSP_TOP - ENCLAVE_PSP_BASE) as usize,
+    "UMBRA_MAX_ENCLAVES_CTX x UMBRA_ENCLAVE_PSP_STACK_BYTES exceeds the \
+platform PSP region: either reduce a knob or bump the platform layout.",
+);
 
 pub fn enclave_psp_top(enclave_idx: usize) -> u32 {
     ENCLAVE_PSP_TOP - (enclave_idx as u32) * ENCLAVE_PSP_STACK_SIZE
@@ -140,7 +136,11 @@ impl EnclaveSwapSpace {
         let slots_needed = (size + SLOT_SIZE - 1) / SLOT_SIZE;
         if slots_needed == 0 { return None; }
 
-        let total_slots = 256;
+        // Total ESS slots = ESS_SIZE / SLOT_SIZE. With SLOT_SIZE knob
+        // (1024…8192) the value varies 8…256. The bitmap stays sized
+        // for 256 slots = 8 u32 (worst case), with unused trailing
+        // bits when SLOT_SIZE > 256.
+        let total_slots = (ESS_SIZE / SLOT_SIZE) as usize;
         let mut found_start = 0;
         let mut found_count = 0;
 
@@ -172,16 +172,14 @@ impl EnclaveSwapSpace {
         None
     }
 
-    /// Release a previously-allocated slot run back to the free bitmap.
-    /// `address` must be the value returned by `allocate`; `size` must be the
-    /// same byte length that was originally requested.
+    /// Release an allocated slot run back to the free bitmap.
+    /// `address` must be the value returned by `allocate`; `size` must
+    /// match the byte length passed to that allocate call.
     ///
-    /// Used by `umbra_enclave_create_imp` to roll back ESS slots when the
-    /// create path bails out (chained-measurement FAIL, register_enclave
-    /// failure, BFS error). Without this, a tampered or stale enclave blob
-    /// (`chained-measurement FAIL` line on UART) silently leaks its slot
-    /// run on every boot, eventually starving the allocator for legitimate
-    /// enclaves.
+    /// Roll-back path for `umbra_enclave_create_imp` when create bails out
+    /// (chained-measurement FAIL, register_enclave failure, BFS error).
+    /// Without this, a tampered or stale enclave blob silently leaks its
+    /// slot run on every boot and eventually starves the allocator.
     pub fn release(&mut self, address: u32, size: u32) {
         if address < EFBC_BASE { return; }
         let slot_offset = (address - EFBC_BASE) / SLOT_SIZE;
@@ -189,7 +187,13 @@ impl EnclaveSwapSpace {
         let mut k: u32 = 0;
         while k < slots {
             let idx = (slot_offset + k) as usize;
-            if idx < 256 {
+            // Bound check against the bitmap capacity (8 u32 = 256 bits).
+            // This is independent of the live slot count (ESS_SIZE/SLOT_SIZE)
+            // — it's a guard against arithmetic mistakes by the caller.
+            // The bitmap is sized for the worst case SLOT_SIZE=256;
+            // larger SLOT_SIZE values use the lower bits only.
+            const BITMAP_CAPACITY: usize = 256;
+            if idx < BITMAP_CAPACITY {
                 self.bitmap[idx / 32] &= !(1u32 << (idx % 32));
             }
             k += 1;

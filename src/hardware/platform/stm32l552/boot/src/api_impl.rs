@@ -3,7 +3,11 @@ use kernel::common::enclave::UmbraEnclaveHeader;
 use crate::secure_kernel::{Kernel, CODE_BLOCK_SIZE, TOTAL_BLOCK_SIZE};
 use drivers::dma::Dma;
 use kernel::common::enclave::EnclaveDescriptor;
-use kernel::common::ess::{CACHE_LIMIT_PER_ENCLAVE, MAX_EFBS};
+// CACHE_LIMIT_PER_ENCLAVE is read inside the ess_miss_recovery force-load
+// (as a no-op marker via `let _ = ...`).
+#[cfg(feature = "ess_miss_recovery")]
+use kernel::common::ess::CACHE_LIMIT_PER_ENCLAVE;
+use kernel::common::ess::MAX_EFBS;
 use kernel::common::enclave::{EnclaveContext, EnclaveState};
 use kernel::common::ess::{enclave_psp_top, MAX_ENCLAVES_CTX};
 
@@ -19,6 +23,15 @@ static mut NEXT_ENCLAVE_ID: u32 = 1;
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]
 pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
+    // Secure-side DWT start. Captures the full
+    // create cost (validation + BFS load + chained measurement + force-
+    // load + register + context init). Only the success path records;
+    // error paths bail out early and would return a meaningless 'cycles
+    // until failure' value. NS-side bracket is independent and lives
+    // in the Tock host.
+    #[cfg(feature = "bench-eval")]
+    let bench_create_start = crate::bench_eval::read_cycles();
+
     let enclave_flash_addr: u32 = base_addr;
 
     let kernel = unsafe {
@@ -155,6 +168,25 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
 
                         // Parse Reachable
                         // Meta format: [Count][Idx...]
+                        //
+                        // BFS enqueue runs in every config, including
+                        // cache-zero-mode. The original "ESS=0" design
+                        // wanted no pre-loading past block 0 so every
+                        // code access faults into handle_ess_miss — but
+                        // L552 has no hardware trap for data reads to
+                        // unloaded slots (MPCBB only gates DMA writes and
+                        // cross-alias accesses; intra-alias LDR is silent
+                        // and returns whatever bytes — typically the UDF
+                        // pattern 0xDEDEDEDE — land in SRAM). Benchmarks
+                        // with cross-block PIC literals or GOT entries
+                        // (anagram, dijkstra, cjpeg_wrbmp, …) then
+                        // MemManage on a wild pointer instead of hitting
+                        // handle_ess_miss. So we pre-load everything
+                        // BFS-reachable here; cache-zero-mode is then
+                        // realised at *runtime* via the effective_limit=1
+                        // gate in secure_kernel.rs::handle_ess_miss,
+                        // which forces eviction-to-1 the first time a
+                        // real cache miss fires.
                         if count > 0 {
                             for i in 0..count {
                                 let next_blk = *meta_ptr.add(1 + i as usize);
@@ -179,6 +211,45 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
 
     } else {
         ess_fail!(0xFFFFFFFB);
+    }
+
+    // Fold the on-flash static-PIE reloc table into the chained measurement.
+    // protect_enclave.py emits exactly this step at sign time AFTER the
+    // BFS-ordered block fold: feeding the raw u32 reloc-offset bytes as a
+    // final HMAC update. Doing the same here makes the kernel detect
+    // on-flash tampering of the reloc list BEFORE `apply_relocs_to_block`
+    // is ever called (BFS install path already trusted the offsets to
+    // point at valid 32-bit slots within freshly-decrypted blocks; the
+    // catch happens at finalize, the BFS work is wasted but no security
+    // breach). reloc_count = 0 is the light-app case → no-op.
+    #[cfg(feature = "chained_measurement")]
+    {
+        // Pack-misalign copy-out (avoid pack-field reference aliasing).
+        let n_relocs = { header.reloc_count } as u32;
+        if n_relocs > 0 {
+            use kernel::common::enclave::UMBRA_HEADER_SIZE;
+            let code_size = { header.code_size };
+            let reloc_table_flash =
+                enclave_flash_addr + UMBRA_HEADER_SIZE + code_size;
+            let reloc_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    reloc_table_flash as *const u8,
+                    (n_relocs as usize) * 4,
+                )
+            };
+            if let Some(crypto_engine) = kernel.crypto.as_mut() {
+                use kernel::key_storage_server::key_generator::KeyGenerator;
+                let mut generator = KeyGenerator::new(*crypto_engine);
+                if generator
+                    .update_chain(&mut kernel.chain_state, reloc_bytes)
+                    .is_err()
+                {
+                    ess_fail!(0xFFFFFFFA);
+                }
+            } else {
+                ess_fail!(0xFFFFFFF9);
+            }
+        }
     }
 
     // Finalize the chained measurement: compare against the reference HMAC in
@@ -237,6 +308,16 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
     // gives us "all blocks loaded after create" with the same security
     // properties: chained-measurement covers BFS-reachable graph,
     // per-block HMAC covers disconnected components.
+    // Force-load runs in every config, including cache-zero-mode. Same
+    // reasoning as the BFS enqueue above: without a HW data-read trap
+    // we cannot let any block stay UDF-filled at boot, because the first
+    // cross-block PIC/GOT literal read would walk into wild-pointer
+    // MemManage instead of hitting handle_ess_miss. Cache-zero-mode is
+    // realised purely at runtime via effective_limit=1 in
+    // secure_kernel.rs::handle_ess_miss (first real miss forces
+    // eviction-to-1; benchmarks whose BFS already covers everything
+    // never actually hit a runtime miss, so cache=0 collapses into
+    // cache=N for them — a measurement caveat documented in the paper).
     #[cfg(feature = "ess_miss_recovery")]
     unsafe {
         let _ = CACHE_LIMIT_PER_ENCLAVE;
@@ -345,12 +426,33 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32{
         };
     }
 
+    // Secure-side DWT end + record. Only fires
+    // on the success path (assigned_id below is the implicit return).
+    // u32 wrap at 110 MHz happens every ~39 s; create is well under
+    // that even for the largest paper-app blobs (~60 ms = 6.6M cycles
+    // for statemate per pre-Stage-A measurements).
+    #[cfg(feature = "bench-eval")]
+    {
+        let end = crate::bench_eval::read_cycles();
+        let delta = end.wrapping_sub(bench_create_start);
+        crate::bench_eval::record_boot_sec_cycles(delta);
+    }
+
     assigned_id
 }
 
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]
 pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
+    // switch bracket: scope-guard pattern so we record
+    // on EVERY return path (incl. early-exit errors and the long
+    // post-enclave-execution path) without sprinkling boilerplate. The
+    // `Drop` impl fires at function exit regardless of how we get
+    // there. The accumulator distinguishes "fast error" calls from
+    // legitimate switches by min vs max spread.
+    #[cfg(feature = "bench-eval")]
+    let _bench_switch_guard = crate::bench_eval::SwitchGuard::start();
+
     let kernel = unsafe {
         match Kernel::get() {
             Some(k) => k,
@@ -426,7 +528,11 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
     // Region 5 marks the EFBC as RO+Execute (AP=0b11) which blocks ALL
     // writes, even privileged. The prefetch must write to the EFBC, so
     // it runs before the MPU locks it down.
-    #[cfg(feature = "ess_miss_recovery")]
+    //
+    // also gated by `umbra-speculation` so spec-OFF
+    // sweep cells bypass the prefetch entirely — every code fetch past
+    // the entry block then triggers a synchronous miss + validation.
+    #[cfg(all(feature = "ess_miss_recovery", feature = "umbra-speculation"))]
     unsafe { crate::prefetch::prefetch_reachables(enclave_id); }
 
     // Reconfigure MPU for this enclave (after prefetch)

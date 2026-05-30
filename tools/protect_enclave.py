@@ -9,8 +9,12 @@ import binascii
 import tempfile
 
 # --- Configuration ---
-# Size of the executable code block (in bytes) that is loaded into RAM
-CODE_BLOCK_SIZE = 256 
+# Size of the executable code block (in bytes) that is loaded into RAM.
+#: build-time knob via UMBRA_SLOT_SIZE_BYTES env var
+# (default supplied by .cargo/config.toml [env]). Must match the kernel
+# build for the same target — the sweep harness runs ./rebuild_all.sh
+# under the same env so both sides observe the same value.
+CODE_BLOCK_SIZE = int(os.environ.get("UMBRA_SLOT_SIZE_BYTES", "256"))
 # Size of the metadata header per block (excluding the data itself)
 # We will define this dynamically or fixed.
 
@@ -59,6 +63,70 @@ def update_section(elf_path, section_name, input_file):
         "--update-section", f"{section_name}={input_file}",
         elf_path
     ])
+
+def extract_static_pie_reloc_vmas(elf_path, section_name, section_vma, section_bytes):
+    """Return a sorted set of elements within `section_name` that hold absolute
+    addresses needing runtime relocation. Two sources:
+
+    (1) R_ARM_ABS32 — pointer-array initialisers like
+        `char const *dict[2279] = {"a","b",...}`. The reloc OFFSET itself
+        is the slot VMA: the linker has resolved the absolute address
+        in-place, and we just need its location.
+
+    (2) R_ARM_GOT_BREL — GOT-relative loads in code reference GOT slots
+        that the linker (static-PIE) has filled with absolute addresses.
+        The reloc OFFSET is the CODE site, not the GOT slot, so we read
+        the 4-byte literal there (= section-relative offset of the GOT
+        entry from section start) and translate to a VMA.
+
+    Without (2), heavy paper-apps with GOT-routed `extern` references
+    (anagram → `anagram_dictionary`, dijkstra → adjacency tables, …)
+    MemManage with R3 holding the slot's compile-time address (e.g.
+    `0x2270`) the moment the enclave first dereferences a pointer the
+    linker baked into the GOT.
+
+    Requires the ELF to be linked with `--emit-relocs` so the `.rel.*`
+    sections survive the static link.
+
+    NOTE: We DELIBERATELY ignore R_ARM_REL32 / R_ARM_THM_CALL /
+    R_ARM_BASE_PREL — those are PC-relative encodings and resolve
+    correctly at runtime without any fixup.
+    """
+    output = run_cmd(["arm-none-eabi-readelf", "-W", "-r", elf_path])
+    rel_section_header = f".rel{section_name}"
+    in_target = False
+    vmas = set()
+    for line in output.splitlines():
+        if line.startswith("Relocation section"):
+            in_target = rel_section_header in line
+            continue
+        if not in_target:
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        # Lines look like:
+        #   "00002264  00000202 R_ARM_ABS32       00000030  ._enclave_code"
+        #   "00000214  0000591a R_ARM_GOT_BREL    00002270  anagram_dictionary"
+        try:
+            reloc_offset = int(parts[0], 16)
+        except ValueError:
+            continue
+        rtype = parts[2]
+        if rtype == "R_ARM_ABS32":
+            vmas.add(reloc_offset)
+        elif rtype == "R_ARM_GOT_BREL":
+            # The 4-byte literal at the code site is the section-relative
+            # offset of the symbol's GOT slot. Translate to a VMA.
+            sec_off = reloc_offset - section_vma
+            if 0 <= sec_off and sec_off + 4 <= len(section_bytes):
+                lit = struct.unpack(
+                    "<I", section_bytes[sec_off : sec_off + 4]
+                )[0]
+                got_slot_vma = section_vma + lit
+                vmas.add(got_slot_vma)
+    return sorted(vmas)
+
 
 def parse_disassembly(elf_path, section_name):
     """
@@ -555,6 +623,73 @@ def main():
             block_blob = entry['sig'] + entry['meta'] + entry['ciphertext']
         final_blob += block_blob
         print(f"Block {entry['id']}: Size={len(block_blob)}, Reachable={entry['reachable_display']}")
+    code_blob_size = len(final_blob)  # encrypted-blocks region; written to header.code_size
+
+    # extract static-PIE relocations.
+    # Two reloc families produce slots holding compile-time absolute
+    # addresses that the kernel must translate to runtime addresses
+    #   - R_ARM_ABS32     → pointer-array initialisers like
+    #                       `char const *dict[2279] = {"a","b",...}`
+    #   - R_ARM_GOT_BREL  → GOT slots filled with absolute addresses for
+    #                       extern symbols (anagram_dictionary, …)
+    #
+    # Without R_ARM_GOT_BREL coverage, heavy paper-apps MemManage on the
+    # first GOT-routed load (R3 ends up holding e.g. 0x2270, the compile-
+    # time address of anagram_dictionary, which the next instruction
+    # tries to dereference as a runtime pointer → fault outside any
+    # enclave).
+    #
+    # The kernel works with PLAINTEXT-RELATIVE offsets (0-indexed from
+    # `_enclave_code_start`, i.e. block 0's first byte), so we translate
+    # by subtracting `start_addr` (= the section's VMA, typically 0x30).
+    #
+    # To resolve GOT_BREL we need to peek at the LITERALS in the
+    # unmodified `._enclave_code` plaintext — extract it now (we'll
+    # overwrite this section with encrypted content via update_section
+    # below, so do it BEFORE that step).
+    _tmp_code_path = "_relocs_code_snapshot.bin"
+    extract_section(elf_file, "._enclave_code", _tmp_code_path)
+    with open(_tmp_code_path, "rb") as f:
+        _code_snapshot_bytes = f.read()
+    os.remove(_tmp_code_path)
+    abs32_vmas = extract_static_pie_reloc_vmas(
+        elf_file, "._enclave_code", start_addr, _code_snapshot_bytes
+    )
+    # readelf prints each R_ARM_ABS32 offset as a VMA (compile-time virtual
+    # address). The kernel works with PLAINTEXT-RELATIVE offsets (0-indexed
+    # from `_enclave_code_start`, i.e. block 0's first byte), so we
+    # translate by subtracting `start_addr` (= the section's VMA, typically
+    # 0x30).
+    #
+    # The kernel computes `block_idx = O / CODE_BLOCK_SIZE` and
+    # `intra = O % CODE_BLOCK_SIZE` to locate each fixup slot at runtime
+    # address `(ess_base|0x10000000) + O`. Clamp out any reloc whose
+    # translated offset falls past the actual signed code size — those
+    # live inside the linker's `.= _enclave_code_start + 0x5000` padding
+    # and have no runtime effect, but inflate the table for no reason.
+    reloc_entries = []
+    for vma in abs32_vmas:
+        off = vma - start_addr
+        if off < 0 or off >= num_blocks * CODE_BLOCK_SIZE:
+            continue
+        reloc_entries.append(off)
+    reloc_count = len(reloc_entries)
+    print(f"[Protect] Static-PIE relocs (R_ARM_ABS32 + R_ARM_GOT_BREL): "
+          f"{reloc_count} entries (plaintext-relative offsets, fixed up at block install).")
+
+    # Pack the reloc table — `[u32 offset_0][u32 offset_1]...`. Append
+    # immediately after the encrypted blocks. The kernel locates it at
+    # `enclave_flash_base + UMBRA_HEADER_SIZE + header.code_size` and reads
+    # `header.reserved1` (renamed reloc_count) entries.
+    reloc_table_bytes = b"".join(struct.pack("<I", o) for o in reloc_entries)
+    final_blob += reloc_table_bytes
+
+    # Fold the reloc table into the chained measurement so the kernel can
+    # detect on-flash tampering of the reloc list. Non-chained mode signs
+    # `final_blob` directly (further down) which already includes the table
+    # — no extra step needed there.
+    if chained_mode and reloc_count > 0:
+        chain_state = hmac.new(chain_state, reloc_table_bytes, hashlib.sha256).digest()
 
     # 7. Write Output to Section
     # Check if it fits? 
@@ -606,10 +741,23 @@ def main():
         if len(hdr_bytes) >= 48:
             # Offset 16 is HMAC
             hdr_bytes[16:48] = measurement
-            
-            # Patch Code Size (Total blob size) -> Offset 10 (u32)
-            struct.pack_into("<I", hdr_bytes, 10, len(final_blob))
-            
+
+            # Patch Code Size = encrypted-blocks size ONLY (NOT including
+            # the appended reloc table). The kernel uses this to compute
+            # num_blocks = code_size / TOTAL_BLOCK_SIZE; including reloc
+            # bytes here would inflate num_blocks and the BFS loop would
+            # walk past the actual block region into the reloc table.
+            struct.pack_into("<I", hdr_bytes, 10, code_blob_size)
+
+            # Patch reloc_count into the formerly-reserved1 u16 field at
+            # offset 14. The kernel reads (header_flash_base + 48 +
+            # code_size) for `reloc_count` u32 entries.
+            if reloc_count > 0xFFFF:
+                print(f"[Protect] ERROR: reloc_count={reloc_count} exceeds u16 "
+                      f"capacity; widen the header field.")
+                sys.exit(1)
+            struct.pack_into("<H", hdr_bytes, 14, reloc_count)
+
             # Patch EFBC Size / ESS Blocks if needed
             # For now leave defaults.
             

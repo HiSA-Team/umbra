@@ -1,0 +1,6 @@
+[env]
+UMBRA_SLOT_SIZE_BYTES         = { value = "256",    force = false }
+UMBRA_CACHE_LIMIT             = { value = "64",     force = false }
+UMBRA_MAX_ENCLAVES_CTX        = { value = "2",      force = false }
+UMBRA_ENCLAVE_PSP_STACK_BYTES = { value = "8192",   force = false }
+UMBRA_MAX_KEYS                = { value = "8",      force = false }

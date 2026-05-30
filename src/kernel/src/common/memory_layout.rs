@@ -18,7 +18,9 @@
 //                                                                              //
 //////////////////////////////////////////////////////////////////////////////////
 
-pub const MEMORY_BLOCK_SIZE: u32 = 256;
+// Alias to the single-source-of-truth SLOT_SIZE in ess.rs (Stage A
+// build-time knob via .cargo/config.toml [env]).
+pub use crate::common::ess::SLOT_SIZE as MEMORY_BLOCK_SIZE;
 pub const MEMORY_SUPER_BLOCK_SIZE: u32 = MEMORY_BLOCK_SIZE*16;
 
 //////////////////
