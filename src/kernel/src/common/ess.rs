@@ -36,8 +36,9 @@ pub const ENCLAVE_PSP_TOP: u32 = 0x30038000;
 // Layout summary (Secure alias):
 //   0x34064000–0x340DFFFF  ~496 KB  NS host (RISAF2 region 1 SEC=0)
 //   0x340E0000–0x340EFFFF   64 KB   EFBC — enclave code blocks (Secure)
-//   0x340F0000–0x340F1FFF    8 KB   PSP stacks (4 enclaves × 2 KB)
-//   0x340F2000–0x340FFFFF   56 KB   reserved for ESS metadata / future use
+//   0x340F0000–0x340F3FFF   16 KB   PSP stacks (sized to match L552: 2 × 8 KB
+//                                   or 4 × 4 KB — ndes needs ~5 KB per enclave)
+//   0x340F4000–0x340FFFFF   48 KB   reserved for ESS metadata / future use
 #[cfg(feature = "platform-n657")]
 pub const ESS_BASE: u32 = 0x340E0000;
 #[cfg(feature = "platform-n657")]
@@ -47,7 +48,7 @@ pub const EFBC_BASE: u32 = 0x340E0000;       // Secure alias — RISAF2 default 
 #[cfg(feature = "platform-n657")]
 pub const ENCLAVE_PSP_BASE: u32 = 0x340F0000;
 #[cfg(feature = "platform-n657")]
-pub const ENCLAVE_PSP_TOP: u32 = 0x340F2000;
+pub const ENCLAVE_PSP_TOP: u32 = 0x340F4000;
 
 // ── Platform-agnostic constants ──────────────────────────────────────
 // Build-time knobs : SLOT_SIZE, CACHE_LIMIT_PER_ENCLAVE,
