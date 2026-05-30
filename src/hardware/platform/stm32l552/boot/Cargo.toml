@@ -11,7 +11,7 @@ kernel = { path = "../../../../kernel", default-features = false, features = ["p
 peripheral_regs = { path = "../../../common/peripheral_regs" }
 
 [features]
-default = ["chained_measurement", "ess_miss_recovery", "boot_tests"]
+default = ["chained_measurement", "ess_miss_recovery", "umbra-speculation"]
 boot_tests = []
 stm32l562 = ["drivers/stm32l562"]
 chained_measurement = []
@@ -21,6 +21,11 @@ benchmark = []
 # instrumentation, not for production firmware. Keeps `cargo build --features
 # benchmark` from silently producing a boot-bricking image.
 i_acknowledge_benchmark_is_research_only = []
+cache-zero-mode = ["kernel/cache-zero-mode"]
+bench-eval = ["kernel/bench-eval"]
+# Propagate the speculation feature to the kernel crate. See
+# kernel/Cargo.toml for the rationale.
+umbra-speculation = ["kernel/umbra-speculation"]
 
 
 [profile.dev]

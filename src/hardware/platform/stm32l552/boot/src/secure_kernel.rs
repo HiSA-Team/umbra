@@ -45,7 +45,8 @@ use kernel::key_storage_server::key_store::Key;
 use kernel::common::enclave::UMBRA_HEADER_SIZE;
 
 // --- CONSTANTS ---
-pub const CODE_BLOCK_SIZE: u32 = 256;
+// Alias to the single-source-of-truth SLOT_SIZE in the kernel // build-time knob via .cargo/config.toml [env]).
+pub use kernel::common::ess::SLOT_SIZE as CODE_BLOCK_SIZE;
 
 pub const BLOCK_META_SIZE: u32 = 32;
 
@@ -72,6 +73,75 @@ pub const BLOCK_META_OFFSET: u32 = 32;
 pub const BLOCK_HEADER_SIZE: u32 = 64;
 
 pub const TOTAL_BLOCK_SIZE: u32 = CODE_BLOCK_SIZE + BLOCK_HEADER_SIZE;
+
+/// Apply the on-flash R_ARM_ABS32 static-PIE relocation table to a
+/// freshly decrypted ESS block. Adds `(enclave_runtime_secure_base -
+/// 0x30)` to every 32-bit slot whose plaintext-relative offset falls
+/// inside this block.
+///
+/// Why this exists: heavy paper-apps (anagram, dijkstra, huff_dec,
+/// cjpeg_wrbmp) declare `char const *table[N] = {"a", "b", ...}`. The
+/// linker writes COMPILE-TIME absolute addresses into those slots; at
+/// runtime the enclave is mapped at an arbitrary EFBC base, so a
+/// `table[i]` deref would otherwise treat e.g. `0x2270` as an absolute
+/// pointer and MemManage with "addr outside any enclave" on the first
+/// load. `tools/protect_enclave.py` extracts every R_ARM_ABS32 from the
+/// ELF (`--emit-relocs`-preserved `.rel._enclave_code`), translates the
+/// offsets to plaintext-relative (subtract `_enclave_code_start` VMA =
+/// 0x30), and appends a flat u32 offset table after the encrypted
+/// blocks. `header.reloc_count` records how many entries the table holds.
+///
+/// We patch PER-BLOCK rather than once-globally because each block has
+/// its own install lifetime: some blocks come in via BFS
+/// (`load_and_verify_block`), others via boot-time force-load or
+/// runtime ESS-miss recovery (`handle_ess_miss`). An evicted block
+/// reloaded later must re-apply the relocations its plaintext carries.
+///
+/// Tamper resistance: `protect_enclave.py` folds the reloc-table bytes
+/// into the chained measurement immediately after the BFS-ordered block
+/// fold. `api_impl.rs` mirrors that on the kernel side before
+/// `finalize_measurement`, so any tampering with the reloc table on
+/// flash causes the measurement to mismatch BEFORE any pointer is
+/// patched.
+#[inline(never)]
+unsafe fn apply_relocs_to_block(
+    enclave_flash_base: u32,
+    block_runtime_secure_addr: u32,
+    enclave_runtime_secure_base: u32,
+    block_idx: u32,
+) {
+    use kernel::common::enclave::{UmbraEnclaveHeader, UMBRA_HEADER_SIZE};
+    let hdr = match UmbraEnclaveHeader::from_address(enclave_flash_base) {
+        Some(h) => h,
+        None => return,
+    };
+    // Pack-misaligned u16 read: copy out before use so the next access
+    // doesn't fault on platforms that don't permit unaligned u16 loads.
+    let n_relocs = { hdr.reloc_count } as u32;
+    if n_relocs == 0 {
+        return;
+    }
+    let code_size = { hdr.code_size };
+    let reloc_table_flash = enclave_flash_base + UMBRA_HEADER_SIZE + code_size;
+    let block_lo = block_idx * CODE_BLOCK_SIZE;
+    let block_hi = block_lo + CODE_BLOCK_SIZE;
+    let runtime_delta = enclave_runtime_secure_base.wrapping_sub(0x30);
+    let table_ptr = reloc_table_flash as *const u32;
+    let mut i: u32 = 0;
+    while i < n_relocs {
+        let off = core::ptr::read_volatile(table_ptr.add(i as usize));
+        if off >= block_lo && off < block_hi {
+            let intra = off - block_lo;
+            let slot = (block_runtime_secure_addr + intra) as *mut u32;
+            let cur = core::ptr::read_volatile(slot);
+            let fixed = cur.wrapping_add(runtime_delta);
+            core::ptr::write_volatile(slot, fixed);
+        }
+        i += 1;
+    }
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+}
 
 impl Kernel {
     pub fn new(guards: &'static mut [&'static mut dyn MemorySecurityGuardTrait], crypto: Option<&'static mut dyn CryptoEngine>) -> Self {
@@ -233,7 +303,17 @@ impl Kernel {
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        drivers::gtzc::mpcbb_set_slot_secure(slot_addr_ns, false);
+        // Flip every 256-B MPCBB block covered by this ESS slot to NS so the
+        // next install (DMA) can write the entire slot. See SLOT_SIZE > 256
+        // rationale in handle_ess_miss.
+        {
+            let mut addr = slot_addr_ns;
+            let end = slot_addr_ns + SLOT_SIZE;
+            while addr < end {
+                drivers::gtzc::mpcbb_set_slot_secure(addr, false);
+                addr += 256;
+            }
+        }
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
@@ -429,11 +509,45 @@ impl Kernel {
         }
 
         // 7. Eviction check
-        {
+        //
+        // SCOPE: only at runtime ESS-miss recovery (MemManage handler context,
+        // `polling == true`). At create-time force-load (`polling == false`)
+        // skip eviction unconditionally — the goal of force-load is to bring
+        // ALL non-BFS-visited blocks resident before the enclave first runs,
+        // so evicting another block here defeats the entire purpose and
+        // breaks cross-block PIC literal reads (UDF poisoning of the literal
+        // pool produces wild-pointer dereferences once the enclave starts).
+        //
+        // Concretely on STM32L552 with CACHE_LIMIT_PER_ENCLAVE=1: BFS visits
+        // 5/6 statemate blocks; force-load handles block 5; without this
+        // guard the eviction check sees `loaded_count=5 >= 1`, picks a
+        // non-entry victim (e.g. block 2), UDF-fills its slot, then installs
+        // block 5. Now block 1's `ldr r3, [pc, #N]` PIC literal read targets
+        // block 2's slot and returns `0xDEDEDEDE` (UDF_PATTERN). `add r3, pc`
+        // computes a wild address (0x0EE0EFxx in the observed instance) and
+        // the next `ldrb r3, [r3, #13]` MemManages with MMFAR pointing
+        // outside any enclave.
+        //
+        // Once execution begins (and the MemManage handler starts dispatching
+        // genuine cache misses), `polling == true` re-enables eviction so the
+        // configured CACHE_LIMIT semantics still hold for the runtime
+        // benchmark sweep.
+        if polling {
+            // Under cache-zero-mode the effective cache size is 1 (single
+            // block of headroom past the entry). The configured
+            // CACHE_LIMIT_PER_ENCLAVE is still 64 in the build, but every
+            // additional block load past the first triggers eviction so
+            // the cache never grows beyond one resident block at a time.
+            // Models the paper's "ESS=0" data point — see             // grilling notes on the C0-approx methodology.
+            #[cfg(feature = "cache-zero-mode")]
+            let effective_limit: usize = 1;
+            #[cfg(not(feature = "cache-zero-mode"))]
+            let effective_limit: usize = kernel::common::ess::CACHE_LIMIT_PER_ENCLAVE;
+
             let needs_eviction = self.ess.loaded_enclaves.iter()
                 .flatten()
                 .find(|e| e.descriptor.id == enclave_id)
-                .map(|e| e.loaded_count() >= kernel::common::ess::CACHE_LIMIT_PER_ENCLAVE)
+                .map(|e| e.loaded_count() >= effective_limit)
                 .unwrap_or(false);
 
             if needs_eviction {
@@ -456,7 +570,7 @@ impl Kernel {
         //    during the DMA, the transfer succeeds.  The CPU (Secure world)
         //    can access NS memory through either alias for the AES decrypt.
         //
-        // ROOT CAUSE FIX 2026-05-24: For ESS-miss recovery (the runtime
+        // For ESS-miss recovery (the runtime
         // miss path) the block was already flipped to NS by `evict_block`,
         // so the DMA worked. But FORCE-LOAD (called at create-time from
         // api_impl.rs to load blocks BFS didn't visit) calls this same
@@ -468,8 +582,30 @@ impl Kernel {
         //
         // Explicit flip to NS here makes the precondition unconditional.
         // Idempotent for the recovery path (already NS) and correct for
-        // the force-load path (was Secure, now NS for the DMA).
-        drivers::gtzc::mpcbb_set_slot_secure(ess_target_addr, false);
+        // the force-load path.
+        //
+        // SLOT_SIZE > MPCBB block size (256 B): mpcbb_set_slot_secure only
+        // flips ONE 256-B MPCBB slot per call. At SLOT_SIZE=1024 each ESS
+        // slot covers 4 MPCBB blocks; at SLOT_SIZE=2048, 8. Flipping just
+        // the first 256 B then DMA-installing the full 1024/2048 B leaves
+        // the latter 3/4 (or 7/8) of the block as MPCBB-Secure → NS DMA
+        // writes there are silently dropped, leaving garbage plaintext at
+        // every offset past 256. Heavy paper-apps with cross-block PIC
+        // literals (cjpeg_wrbmp at SLOT=1024 — block 0 reachable=[], so
+        // every block 1-9 takes the force-load path) then deref the
+        // garbage as a pointer and MemManage with "addr outside any
+        // enclave".
+        //
+        // Flip EVERY MPCBB-block covered by this ESS slot so the entire
+        // DMA target is NS-accessible.
+        {
+            let mut addr = ess_target_addr;
+            let end = ess_target_addr + CODE_BLOCK_SIZE;
+            while addr < end {
+                drivers::gtzc::mpcbb_set_slot_secure(addr, false);
+                addr += 256;
+            }
+        }
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
@@ -537,8 +673,40 @@ impl Kernel {
             let _ = crypto.aes_decrypt(&self.enc_key, &iv, ess_slice);
         }
 
+        // Static-PIE relocation fixup — same call as the BFS install path
+        // in `load_and_verify_block`. Required for evicted-then-reloaded
+        // blocks whose pointer slots otherwise revert to compile-time
+        // values. Mirrors `apply_relocs_to_block` doc.
+        //
+        // The enclave's runtime Secure-alias base is
+        // `enclave.start_address | 0x1000_0000`. We compute it from the
+        // descriptor here rather than re-deriving from `ess_target_addr`
+        // (which is the block, not the enclave start).
+        {
+            let enclave_secure_base = self.ess.loaded_enclaves.iter()
+                .flatten()
+                .find(|e| e.descriptor.id == enclave_id)
+                .map(|e| e.start_address | 0x1000_0000)
+                .unwrap_or(ess_write_addr); // unreachable if ess.allocate succeeded
+            apply_relocs_to_block(
+                enclave_flash_base,
+                ess_write_addr,
+                enclave_secure_base,
+                block_idx,
+            );
+        }
+
         // MPCBB flip to Secure — AFTER data is installed and decrypted.
-        drivers::gtzc::mpcbb_set_slot_secure(ess_target_addr, true);
+        // Flip every 256-B MPCBB block covered by this ESS slot (see the
+        // flip-to-NS comment above for the SLOT_SIZE > 256 rationale).
+        {
+            let mut addr = ess_target_addr;
+            let end = ess_target_addr + CODE_BLOCK_SIZE;
+            while addr < end {
+                drivers::gtzc::mpcbb_set_slot_secure(addr, true);
+                addr += 256;
+            }
+        }
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
@@ -617,9 +785,17 @@ impl Kernel {
         if let Some(crypto_engine) = self.crypto.as_mut() {
             let mut generator = KeyGenerator::new(*crypto_engine);
 
-            // Build a block-binding buffer [BlockID(4) | Ciphertext | Meta] in a
-            // scratch region at +0x400. Used as the HMAC input for both schemes.
-            let verify_buf = (scratch_addr + 0x400) as *mut u8;
+            // Build a block-binding buffer [BlockID(4) | Ciphertext | Meta] in
+            // a scratch region clear of the fetched HMAC/meta/CT layout.
+            // Fetch lays them out as [HMAC(32) | Meta(32) | CT(CODE_BLOCK_SIZE)]
+            // starting at `scratch_addr`, ending at scratch+64+CODE_BLOCK_SIZE.
+            // verify_buf must sit well past the CT region with headroom for
+            // the largest swept SLOT_SIZE (8192). A small offset (e.g. 0x400)
+            // overlaps CT when SLOT_SIZE ≥ 1024 — the `copy_nonoverlapping`
+            // would then read its own writes once dst caught up to src,
+            // corrupting the HMAC input and causing `chained-measurement FAIL`.
+            const VERIFY_BUF_OFFSET: u32 = 0x4000;   // 16 KB, fits SLOT_SIZE ≤ 8192
+            let verify_buf = (scratch_addr + VERIFY_BUF_OFFSET) as *mut u8;
             let block_id_bytes = block_idx.to_le_bytes();
             core::ptr::copy_nonoverlapping(block_id_bytes.as_ptr(), verify_buf, 4);
             core::ptr::copy_nonoverlapping(ct_src, verify_buf.add(4), CODE_BLOCK_SIZE as usize);
@@ -676,6 +852,23 @@ impl Kernel {
             }
             #[cfg(feature = "stm32l562")]
             let _ = crypto_engine;
+
+            // Static-PIE relocation fixup: patch every R_ARM_ABS32 pointer
+            // that falls inside this freshly-decrypted block. See
+            // `apply_relocs_to_block` doc for the why; in short, anagram /
+            // dijkstra / huff_dec / cjpeg_wrbmp embed pointer-array
+            // initialisers whose compile-time addresses would otherwise
+            // alias outside the enclave's runtime EFBC slots and MemManage.
+            //
+            // `ess_target_addr` here is already the Secure alias (`ess_base
+            // | 0x1000_0000 + block_idx * SLOT_SIZE`), and the enclave's
+            // secure-alias base is `ess_base | 0x1000_0000`.
+            apply_relocs_to_block(
+                enclave_flash_base,
+                ess_target_addr,
+                ess_base | 0x1000_0000,
+                block_idx,
+            );
 
             // Invalidate D-cache for the freshly-written ESS line, then I-cache
             // (the enclave will execute from here). Note: L552 Cortex-M33 has

@@ -5,9 +5,8 @@
 //
 // Insertsort's runtime cost (~1500 cycles for the triangular loop +
 // ~200 each for init/return) is small enough to fit inside one SysTick
-// window (RVR=39999), so we expect the canonical path to succeed without
-// triggering the preemption-restore kernel bug tracked in
-// project_c_phase2_preemption_bug.
+// window (RVR=39999), so the canonical path avoids the multi-enclave
+// save/restore preemption-restore bug.
 //
 // Insertsort_return checks `sum(insertsort_a) == 52`, which is the sum of
 // the sorted-or-unsorted values {0, 11, 10, ..., 2} → 0+2+3+...+11 = 65

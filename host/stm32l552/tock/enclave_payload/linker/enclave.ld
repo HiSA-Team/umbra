@@ -29,10 +29,26 @@ SECTIONS {
         _enclave_code_start = .;
         KEEP(*(.app.enclave_code))
         KEEP(*(.app.*))
-        /* Reserve 0x400 bytes total for code (matches code_size in the header).
-         * protect_enclave.py reads _enclave_code_end to know the exact extent. */
-        . = _enclave_code_start + 0x400;
+        /* `_enclave_code_end` marks the END OF ACTUAL CODE (before
+         * any padding). protect_enclave.py reads this symbol to size
+         * the encrypted region and split into blocks. If we set it
+         * after a `. = ... + 0xN` reservation, protect.py would treat
+         * the padding zeros as code, split them into spurious blocks,
+         * generate a fake reachability chain, and the kernel would
+         * fail to validate the chained HMAC at create-time.
+         *
+         * At SLOT_SIZE=1024 a reservation+end-after-padding layout
+         * would inflate fib's blob to 9 blocks of ~zero data and trip
+         * `chained-measurement FAIL`. Splitting the end-marker from
+         * the reservation keeps each blob block-count accurate.
+         *
+         * `_enclave_blob_max` = section size = end-of-actual + max
+         * protected overhead. Worst case at SLOT_SIZE=8192:
+         *   1 block X (32 HMAC + 32 meta + 8192 CT) + 48 hdr = 8304 B.
+         * Round up to 0x2400 = 9216 for headroom. */
         _enclave_code_end = .;
+        . = _enclave_code_start + 0x2400;
+        _enclave_blob_max = .;
     } > FLASH
 
     /DISCARD/ : {

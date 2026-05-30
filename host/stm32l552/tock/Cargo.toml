@@ -6,6 +6,7 @@ members = [
     "capsules/umbra",
     "boards/nucleo_l552ze_q_umbra",
     "apps/enclave_demo",
+    "apps/native_bench",
 ]
 exclude = [
     "lib",  # Tock and libtock-rs each have their own root workspaces.

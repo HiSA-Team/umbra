@@ -6,7 +6,10 @@
 //                                                                                  //
 //////////////////////////////////////////////////////////////////////////////////////
 
-pub const EFB_SIZE: u32 = 256;
+// Alias to the single-source-of-truth SLOT_SIZE in ess.rs (Stage A
+// Step 1: build-time knob via .cargo/config.toml [env]). The previous
+// hardcoded 256 was duplicated; keeping the alias preserves callers.
+pub use crate::common::ess::SLOT_SIZE as EFB_SIZE;
 pub const UMBRA_HEADER_SIZE: u32 = 48;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -17,10 +20,9 @@ pub enum EnclaveTrustLevel {
 }
 
 /// Header EFB
-/// 
-/// 
+///
 ///     +---------------------------+
-///     |  magic (4 bytes)          |  
+///     |  magic (4 bytes)          |
 ///     +---------------------------+
 ///     |  trust_level (1 byte)     |
 ///     +---------------------------+
@@ -30,12 +32,20 @@ pub enum EnclaveTrustLevel {
 ///     +---------------------------+
 ///     |  ess_blocks (2 bytes)     |
 ///     +---------------------------+
-///     |  code_size (4 bytes)      | 
+///     |  code_size (4 bytes)      |  encrypted blocks only, NOT incl. reloc table
 ///     +---------------------------+
-///     |  reserved (2 bytes)       |
-///     +---------------------------+
+///     |  reloc_count (2 bytes)    |  static-PIE R_ARM_ABS32 reloc entries
+///     +---------------------------+  appended after the encrypted blocks
 ///     |  hmac (32 bytes)          |
 ///     +---------------------------+
+///
+/// On-flash blob layout (post protect_enclave.py):
+///   [0..48)                          : this header
+///   [48..48+code_size)               : `code_size / TOTAL_BLOCK_SIZE` encrypted blocks
+///   [48+code_size..48+code_size+4*N) : `N == reloc_count` u32 plaintext-relative
+///                                       byte offsets, each marking a 32-bit slot
+///                                       to be patched with the runtime-delta on
+///                                       block install (see secure_kernel.rs).
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct UmbraEnclaveHeader {
@@ -45,7 +55,12 @@ pub struct UmbraEnclaveHeader {
     pub efbc_size: u16,
     pub ess_blocks: u16,
     pub code_size: u32,
-    pub reserved1: u16,
+    /// Number of `R_ARM_ABS32` reloc offsets appended after the encrypted
+    /// blocks. The kernel reads exactly this many u32 entries starting at
+    /// `header_flash_base + UMBRA_HEADER_SIZE + code_size`. Each entry is
+    /// a plaintext-relative byte offset of a 32-bit word to be rewritten
+    /// post-AES-decrypt: `*(u32*)slot += runtime_base - 0x30`.
+    pub reloc_count: u16,
     pub hmac: [u8; 32],
 }
 

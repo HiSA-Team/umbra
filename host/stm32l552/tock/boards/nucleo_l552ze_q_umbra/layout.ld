@@ -31,13 +31,21 @@ MEMORY {
  *   2  0x0803c020  umbra_enclave_enter
  *   3  0x0803c030  umbra_enclave_exit
  *   4  0x0803c040  umbra_enclave_status
- * Each provides a Thumb function pointer (low bit set).
+ *   5  0x0803c050  umbra_bench_dump
+ *   6  0x0803c060  umbra_null_call
+ * Each provides a Thumb function pointer (low bit set). Slots 5 & 6
+ * are always emitted by nsc_veneers.s; the Secure imp of slot 5 is a
+ * no-op stub when the kernel lacks the `bench-eval` feature, so
+ * linking succeeds in every build. Slot 6 is unconditionally a no-op
+ * Secure SG+bxns — only the TrustZone round-trip is measured.
  */
 PROVIDE(umbra_enclave_create = 0x0803c001);
 PROVIDE(umbra_debug_print    = 0x0803c011);
 PROVIDE(umbra_enclave_enter  = 0x0803c021);
 PROVIDE(umbra_enclave_exit   = 0x0803c031);
 PROVIDE(umbra_enclave_status = 0x0803c041);
+PROVIDE(umbra_bench_dump     = 0x0803c051);
+PROVIDE(umbra_null_call      = 0x0803c061);
 
 /* Tock's reset path: initialize_ram_jump_to_main reads ENTRY from the vector
  * table's reset slot. */
@@ -125,16 +133,48 @@ SECTIONS {
         _ezero = .;
     } > SRAM_NS
 
-    /* App RAM forced to start at the NS-MPU region-3/region-4 boundary
-     * (0x20010000). Region 3 (kernel-RAM, priv-RW) covers 0x20000000-0x2000FFFF;
-     * region 4 (app-RAM, unpriv-RW) starts at 0x20010000. If `_sappmem` falls
-     * in region 3 the first user-mode PSP push faults.
+    /* App RAM starts at SRAM_NS + 0x18000 (= 0x20018000), NOT at the
+     * NS-MPU region-3/region-4 boundary (0x20010000).
      *
-     * Explicit VMA `(ORIGIN(SRAM_NS) + 0x10000)` in the header is required —
-     * `> SRAM_NS` uses the region cursor and would ignore any `. = expr;`
-     * assignment between sections.
+     * Why the carve-out at 0x20010000-0x20018000 (32 KB):
+     *
+     *   The Umbra Secure boot uses a fixed scratch buffer at the SRAM
+     *   Secure alias `0x30010000`, which is physically the SAME bytes
+     *   as `0x20010000` (NS alias). The BFS-time DMA writes
+     *   `64 + UMBRA_SLOT_SIZE_BYTES` per block into that scratch, plus a
+     *   second `verify_buf` at `scratch + 0x4000`. With SLOT_SIZE = 8192
+     *   the worst-case scratch footprint reaches `0x4000 + 8192 + 36 ≈
+     *   24 KB`, i.e. 0x20010000-0x20016024.
+     *
+     *   The Umbra DMA channel is NS by default on STM32L5 (DMA1 CCR
+     *   bits 17-19 SECM/SSEC/DSEC are RESERVED on this silicon, so the
+     *   driver's writes to them are silently dropped). Therefore the
+     *   scratch MUST live in MPCBB-NS-marked SRAM — moving it into
+     *   SRAM2 (Secure-only) would silently drop every DMA write.
+     *
+     *   If Tock's `.app_memory` started at 0x20010000 (the old layout),
+     *   the per-process `CortexMStoredState` of the first running
+     *   process landed at offset ≈ 0x500-0x5C0 of `.app_memory` — i.e.
+     *   exactly inside the scratch window once SLOT_SIZE >= 2048. The
+     *   scratch DMA would silently overwrite `state.psp` / `state.regs`,
+     *   and the next `switch_to_user_arm_v7m` HardFaulted on a
+     *   corrupted PSP.
+     *
+     *   Skipping the first 32 KB of app-RAM is the surgical fix: the
+     *   scratch window 0x20010000-0x20016024 becomes a no-man's land
+     *   that Tock never touches, and the host's process state lands at
+     *   ≥ 0x20018000 — well clear of any SLOT_SIZE-dependent scratch
+     *   footprint. NS-MPU region 4 (app-RAM, unpriv-RW) still spans
+     *   `0x20010000..end_of_SRAM_NS`, so no MPU change is needed.
+     *
+     *   Cost: Tock's `.app_memory` shrinks from 64 KB to 32 KB. The
+     *   `enclave_demo` app (the only one bundled) fits easily.
+     *
+     * Explicit VMA `(ORIGIN(SRAM_NS) + 0x18000)` in the header is
+     * required — `> SRAM_NS` uses the region cursor and would ignore
+     * any `. = expr;` assignment between sections.
      */
-    .app_memory (ORIGIN(SRAM_NS) + 0x10000) (NOLOAD) : {
+    .app_memory (ORIGIN(SRAM_NS) + 0x18000) (NOLOAD) : {
         _sappmem = .;
         *(.app_memory)
     } > SRAM_NS

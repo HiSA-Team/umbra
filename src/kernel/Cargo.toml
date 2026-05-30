@@ -14,6 +14,12 @@ default = ["platform-l552"]
 platform-l552 = []
 platform-n657 = []
 
+cache-zero-mode = []
+
+bench-eval = []
+
+umbra-speculation = []
+
 [lib]
 name = "kernel"
 path = "src/lib.rs"

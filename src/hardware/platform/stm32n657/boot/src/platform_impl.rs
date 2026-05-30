@@ -59,7 +59,7 @@ impl PlatformBoot for Stm32n657Platform {
             // All subsequent peripheral access uses Secure alias to work either way.
         }
 
-        // G.2.b — re-secure RISUP 106 (NPU configuration port).
+        // Re-secure RISUP 106 (NPU configuration port).
         //
         // The unlock loop above cleared every SECCFGR bit so the NS host can
         // touch any peripheral. But per RM0486 §6.3.4, the NPU has a "secure
@@ -137,7 +137,7 @@ impl PlatformBoot for Stm32n657Platform {
             let rcc_s = 0x5602_8000usize;
             let gpiob_s = 0x5602_0400usize; // GPIOB Secure alias
 
-            // Step 1 — Switch USART1 kernel clock to HSI (64 MHz) BEFORE PLL1
+            // Switch USART1 kernel clock to HSI (64 MHz) BEFORE PLL1
             // changes, so the post-bump banner survives. Boot ROM defaults USART1
             // to IC9-from-PLL1 (= 150 MHz), which would retune to a garbled
             // value when we reprogram PLL1 below.
@@ -146,16 +146,16 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((rcc_s + 0x174) as *mut u32,
                 (ccipr13 & !0x7) | 6);
 
-            // Step 2 — SMPS overdrive: PB12 mode = output, drive high.
+            // SMPS overdrive: PB12 mode = output, drive high.
             let moder = core::ptr::read_volatile(gpiob_s as *const u32);
             core::ptr::write_volatile(gpiob_s as *mut u32,
                 (moder & !(0b11 << 24)) | (0b01 << 24)); // PB12 = output
             core::ptr::write_volatile((gpiob_s + 0x18) as *mut u32, 1 << 12); // BS12
 
-            // Step 3 — HSI sanity (Boot ROM should leave HSIRDY=1).
+            // HSI sanity (Boot ROM should leave HSIRDY=1).
             while core::ptr::read_volatile((rcc_s + 0x004) as *const u32) & (1 << 3) == 0 {}
 
-            // Step 4 — Switch CPUSW + SYSSW to HSI BEFORE disabling PLL1.
+            // Switch CPUSW + SYSSW to HSI BEFORE disabling PLL1.
             // Boot ROM has PLL1 ≈ 1200 MHz feeding CPU via IC1 (PLL1/3 = 400 MHz)
             // and USART1 via IC9 (PLL1/8 = 150 MHz). Writing PLL1ONC while PLL1
             // is the active CPU clock source halts the core mid-instruction
@@ -170,11 +170,11 @@ impl PlatformBoot for Stm32n657Platform {
             while (core::ptr::read_volatile((rcc_s + 0x020) as *const u32) >> 28) & 0x3 != 0 {}
             // CPU + AXI now on HSI = 64 MHz. Safe to disable PLL1.
 
-            // Step 5 — Disable PLL1 before reconfig. CCR is clear-only.
+            // Disable PLL1 before reconfig. CCR is clear-only.
             core::ptr::write_volatile((rcc_s + 0x1000) as *mut u32, 1 << 8); // PLL1ONC
             while core::ptr::read_volatile((rcc_s + 0x004) as *const u32) & (1 << 8) != 0 {}
 
-            // Step 6 — Program PLL1 dividers/multiplier (HSI / M=2 × N=25 = 800 MHz VCO,
+            // Program PLL1 dividers/multiplier (HSI / M=2 × N=25 = 800 MHz VCO,
             // P1=P2=1 → 800 MHz output). Integer mode (MODSSDIS=1, MODDSEN=0, frac=0).
             // PLL1CFGR3 mode bit FIRST (rcc.c:2139).
             core::ptr::write_volatile((rcc_s + 0x088) as *mut u32, 1 << 2); // MODSSDIS=1
@@ -187,20 +187,20 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((rcc_s + 0x088) as *mut u32,
                 (1u32 << 27) | (1u32 << 24) | (1u32 << 30) | (1u32 << 2) | (1u32 << 0));
 
-            // Step 7 — Enable PLL1, wait for lock. CSR is set-only.
+            // Enable PLL1, wait for lock. CSR is set-only.
             core::ptr::write_volatile((rcc_s + 0x800) as *mut u32, 1 << 8); // PLL1ONS
             while core::ptr::read_volatile((rcc_s + 0x004) as *const u32) & (1 << 8) == 0 {}
 
-            // Step 8 — Configure IC1 (CPU = PLL1/1 = 800 MHz) and IC2 (AXI = PLL1/2 = 400 MHz).
+            // Configure IC1 (CPU = PLL1/1 = 800 MHz) and IC2 (AXI = PLL1/2 = 400 MHz).
             // Encoding: SEL[29:28] | ((divider-1) << 16). PLL1 = SEL 0.
             core::ptr::write_volatile((rcc_s + 0x0C4) as *mut u32, (0u32 << 28) | (0u32 << 16)); // IC1 div 1
             core::ptr::write_volatile((rcc_s + 0x0C8) as *mut u32, (0u32 << 28) | (1u32 << 16)); // IC2 div 2
 
-            // Step 9 — Enable IC2 output (DIVENSR is set-only). IC1 always-enabled
+            // Enable IC2 output (DIVENSR is set-only). IC1 always-enabled
             // when CPUSW selects it; IC11/IC6 left disabled (used in G.1).
             core::ptr::write_volatile((rcc_s + 0xA40) as *mut u32, 1 << 1); // IC2ENS
 
-            // Step 10 — Bus prescalers: HPRE=001 (HCLK = AXI/2 = 200 MHz). PPRE=000 (DIV1).
+            // Bus prescalers: HPRE=001 (HCLK = AXI/2 = 200 MHz). PPRE=000 (DIV1).
             // Matches ST main.c:667 RCC_HCLK_DIV2.
             //
             // We tried HPRE=000 (HCLK = 400 MHz) once to halve NPU poll-loop
@@ -210,13 +210,13 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((rcc_s + 0x024) as *mut u32,
                 (cfgr2 & !((0x7 << 20) | (0x7 << 4) | 0x7)) | (0x1 << 20));
 
-            // Step 11 — Switch CPUCLK to IC1 (CPUSW=3 in CFGR1[17:16]; readback CPUSWS at [21:20]).
+            // Switch CPUCLK to IC1 (CPUSW=3 in CFGR1[17:16]; readback CPUSWS at [21:20]).
             let cfgr1 = core::ptr::read_volatile((rcc_s + 0x020) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x020) as *mut u32,
                 (cfgr1 & !(0x3 << 16)) | (0x3 << 16));
             while (core::ptr::read_volatile((rcc_s + 0x020) as *const u32) >> 20) & 0x3 != 0x3 {}
 
-            // Step 12 — Switch SYSCLK to IC2/IC6/IC11 mux (SYSSW=3 at [25:24]; readback SYSSWS at [29:28]).
+            // Switch SYSCLK to IC2/IC6/IC11 mux (SYSSW=3 at [25:24]; readback SYSSWS at [29:28]).
             let cfgr1 = core::ptr::read_volatile((rcc_s + 0x020) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x020) as *mut u32,
                 (cfgr1 & !(0x3 << 24)) | (0x3 << 24));
@@ -236,11 +236,11 @@ impl PlatformBoot for Stm32n657Platform {
             // Source: ST `SystemClock_Config` main.c:620-627 + register layout
             // mirrors PLL1's at offsets 0x0A0/0x0A4/0x0A8 (vs 0x080/0x084/0x088).
 
-            // Step 13 — Disable PLL3 (CCR write-1-clear, bit 10).
+            // Disable PLL3 (CCR write-1-clear, bit 10).
             core::ptr::write_volatile((rcc_s + 0x1000) as *mut u32, 1 << 10); // PLL3ONC
             while core::ptr::read_volatile((rcc_s + 0x004) as *const u32) & (1 << 10) != 0 {}
 
-            // Step 14 — Program PLL3 dividers/multiplier.
+            // Program PLL3 dividers/multiplier.
             // Force MODSSDIS=1 first (rcc.c:2139 ordering).
             core::ptr::write_volatile((rcc_s + 0x0A8) as *mut u32, 1 << 2); // MODSSDIS
             // PLL3CFGR1: SEL[30:28]=0 (HSI), DIVM[25:20]=8, DIVN[19:8]=225, BYP=0
@@ -252,22 +252,22 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((rcc_s + 0x0A8) as *mut u32,
                 (1u32 << 27) | (2u32 << 24) | (1u32 << 30) | (1u32 << 2) | (1u32 << 0));
 
-            // Step 15 — Enable PLL3, wait for lock (bit 10 in CSR/SR).
+            // Enable PLL3, wait for lock (bit 10 in CSR/SR).
             core::ptr::write_volatile((rcc_s + 0x800) as *mut u32, 1 << 10); // PLL3ONS
             while core::ptr::read_volatile((rcc_s + 0x004) as *const u32) & (1 << 10) == 0 {}
 
-            // Step 16 — IC11: SEL=PLL3 (0x2 << 28 = 0x2000_0000), divider=1
+            // IC11: SEL=PLL3 (0x2 << 28 = 0x2000_0000), divider=1
             // (write 0 to INT field). Output = PLL3/1 = 900 MHz.
             core::ptr::write_volatile((rcc_s + 0x0EC) as *mut u32,
                 (0x2u32 << 28) | (0u32 << 16));
 
-            // Step 17 — Enable IC11 in DIVENSR (set-only, bit 10).
-            // No SYSSW change needed: SYSSW=3 (IC2/IC6/IC11) was set in step 12,
-            // and the NPU peripheral will source IC11 when it comes online in G.1.a.3.
+            // Enable IC11 in DIVENSR (set-only, bit 10).
+            // SYSSW=3 (IC2/IC6/IC11) was already selected above;
+            // the NPU peripheral will source IC11 when it comes online.
             core::ptr::write_volatile((rcc_s + 0xA40) as *mut u32, 1 << 10); // IC11ENS
 
-            // Step 17a — IC6 = PLL3 / 1 = 900 MHz, drives sysc_ck (NPU compute
-            // clock) when SYSSW=3 (already selected at Step 12). Without this
+            // IC6 = PLL3 / 1 = 900 MHz, drives sysc_ck (NPU compute
+            // clock) when SYSSW=3 (already selected above). Without this
             // IC6 stays disabled and sysc_ck falls back to its prior source
             // (HSI ≈ 64 MHz), running NPU compute at ~14× below spec.
             // IC6 register at RCC + 0x0D8 (= 0x0C4 + 4 × (6-1)). Enable bit
@@ -290,53 +290,47 @@ impl PlatformBoot for Stm32n657Platform {
             // weight cache — without it, weight reads from XSPI2 would not be
             // cached → 10-50× perf drop per ST audit notes.
 
-            // Step 17b — RIMC: tag NPU bus master with CID=1, SEC, PRIV.
+            // RIMC: tag NPU bus master with CID=1, SEC, PRIV.
             //   When NPU acts as bus master (reading/writing model buffers and
             //   scratch in AXISRAM), RIFSC stamps each access with the master
             //   CID + security attribute.
             //
-            //   G.2.b (enclave-driven inference): the enclave runs Secure-side
-            //   and keeps model I/O buffers at 0x342E0000 (Secure-aliased
-            //   AXISRAM). The NPU blob's hardcoded references are all 0x34xxxxxx
-            //   Secure addresses, so the NPU master must also be Secure for IDAU
-            //   to permit those accesses. {CID=1, SEC, PRIV} matches ST's
-            //   all-Secure reference design (SystemClock_Config).
-            //
-            //   Historical note: G.1.b.3 attempted NS-host inference with NPU
-            //   tagged NS (bit[8]=0) and model addresses patched to 0x24xxxxxx,
-            //   but the NPU IRQ never fired — dead end documented in
-            //   project_n657_npu_ns_dead_end.md. Reverting to SEC here.
+            //   The enclave runs Secure-side and keeps model I/O buffers at
+            //   0x342E0000 (Secure-aliased AXISRAM). The NPU blob's hardcoded
+            //   references are all 0x34xxxxxx Secure addresses, so the NPU
+            //   master must also be Secure for IDAU to permit those accesses.
+            //   {CID=1, SEC, PRIV} matches ST's all-Secure reference design.
             //
             //   RIMC_ATTR layout (stm32n657xx.h):
             //     bits [6:4] MCID, bit [8] MSEC, bit [9] MPRIV
             //   Address: RIFSC_S + 0xC10 + 4*master_idx; NPU master_idx = 1.
             core::ptr::write_volatile(0x5402_4C14 as *mut u32,
-                (1u32 << 4) | (1u32 << 8) | (1u32 << 9)); /* CID=1 SEC PRIV — G.2.b */
+                (1u32 << 4) | (1u32 << 8) | (1u32 << 9)); /* CID=1 SEC PRIV */
 
-            // Step 18 — NPU peripheral clock (AHB5ENR bit 31).
+            // NPU peripheral clock (AHB5ENR bit 31).
             let ahb5 = core::ptr::read_volatile((rcc_s + 0x260) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x260) as *mut u32, ahb5 | (1u32 << 31));
 
-            // Step 19 — NPU reset pulse. AHB5RSTSR (0x0A20) is set-only;
+            // NPU reset pulse. AHB5RSTSR (0x0A20) is set-only;
             // AHB5RSTCR (0x1220) is clear-only. Bit 31 = NPURSTS/NPURSTC.
             core::ptr::write_volatile((rcc_s + 0x0A20) as *mut u32, 1u32 << 31); // assert reset
             cortex_m::asm::dsb();
             core::ptr::write_volatile((rcc_s + 0x1220) as *mut u32, 1u32 << 31); // release reset
             cortex_m::asm::dsb();
 
-            // Step 20 — AXISRAM3..6 + CACHEAXIRAM bank clocks (MEMENR @ 0x024C).
+            // AXISRAM3..6 + CACHEAXIRAM bank clocks (MEMENR @ 0x024C).
             // AXISRAM3EN..6EN at bits 0..3; CACHEAXIRAMEN at bit 10.
             let memenr = core::ptr::read_volatile((rcc_s + 0x24C) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x24C) as *mut u32,
                 memenr | 0xF | (1 << 10));
 
-            // Step 21 — RAMCFG controller clock (AHB2ENR @ 0x0254 bit 12).
+            // RAMCFG controller clock (AHB2ENR @ 0x0254 bit 12).
             let ahb2 = core::ptr::read_volatile((rcc_s + 0x254) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x254) as *mut u32,
                 ahb2 | (1u32 << 12));
             cortex_m::asm::dsb();
 
-            // Step 22 — Power on AXISRAM3..6 by clearing RAMCFG.CR.SRAMSD (bit 20)
+            // Power on AXISRAM3..6 by clearing RAMCFG.CR.SRAMSD (bit 20)
             // for each bank. Banks default to power-down after reset; clearing
             // SRAMSD wakes them. Per-bank RAMCFG bases (Secure alias):
             //   SRAM3_AXI = 0x5202_3100, SRAM4 = 0x5202_3180,
@@ -348,11 +342,11 @@ impl PlatformBoot for Stm32n657Platform {
             }
             cortex_m::asm::dsb();
 
-            // Step 23 — CACHEAXI peripheral clock (AHB5ENR bit 30).
+            // CACHEAXI peripheral clock (AHB5ENR bit 30).
             let ahb5 = core::ptr::read_volatile((rcc_s + 0x260) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x260) as *mut u32, ahb5 | (1u32 << 30));
 
-            // Step 24 — CACHEAXI reset pulse (AHB5RSTSR/CR bit 30).
+            // CACHEAXI reset pulse (AHB5RSTSR/CR bit 30).
             core::ptr::write_volatile((rcc_s + 0x0A20) as *mut u32, 1u32 << 30); // assert
             cortex_m::asm::dsb();
             core::ptr::write_volatile((rcc_s + 0x1220) as *mut u32, 1u32 << 30); // release
@@ -366,20 +360,20 @@ impl PlatformBoot for Stm32n657Platform {
             // 423`). NVIC-side IRQ enable and a trap handler are not wired
             // yet — they're only needed once RIF violations actually fire.
             //
-            // RIMC NPU master config is at Step 17b above; SECCFGR3 bit 10
+            // RIMC NPU master config is handled above; SECCFGR3 bit 10
             // re-secure of RISUP 106 (NPU) happens at the top of init_clocks.
 
-            // Step 25 — IAC clock enable (AHB3ENR @ 0x258 bit 10).
+            // IAC clock enable (AHB3ENR @ 0x258 bit 10).
             let ahb3 = core::ptr::read_volatile((rcc_s + 0x258) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x258) as *mut u32, ahb3 | (1 << 10));
 
-            // Step 26 — IAC reset pulse (AHB3RSTSR @ 0xA18 / RSTCR @ 0x1218 bit 10).
+            // IAC reset pulse (AHB3RSTSR @ 0xA18 / RSTCR @ 0x1218 bit 10).
             core::ptr::write_volatile((rcc_s + 0x0A18) as *mut u32, 1 << 10); // assert
             cortex_m::asm::dsb();
             core::ptr::write_volatile((rcc_s + 0x1218) as *mut u32, 1 << 10); // release
             cortex_m::asm::dsb();
 
-            // Step 27 — Sleep-mode bits so FreeRTOS WFE-idle doesn't gate the
+            // Sleep-mode bits so FreeRTOS WFE-idle doesn't gate the
             // NPU subsystem mid-inference (CPU sleeps but NPU keeps running).
             //   AHB5LPENR (0x2A0): bit 30 CACHEAXI, bit 31 NPU
             //   MEMLPENR  (0x28C): bits 0-3 AXISRAM3..6, bit 10 CACHEAXIRAM
@@ -503,8 +497,8 @@ impl PlatformBoot for Stm32n657Platform {
     }
 
     fn init_uart(&self) {
-        // USART1 via Secure alias. Kernel clock = HSI = 64 MHz (set in init_clocks
-        // step 1: CCIPR13.USART1SEL = 6). BRR = 64_000_000 / 115200 ≈ 555.5 → 556
+        // USART1 via Secure alias. Kernel clock = HSI = 64 MHz (CCIPR13.USART1SEL = 6,
+        // set in init_clocks). BRR = 64_000_000 / 115200 ≈ 555.5 → 556
         // (0.08% baud error, well within UART receiver tolerance).
         unsafe {
             let u1 = 0x5200_1000usize;
@@ -736,7 +730,7 @@ impl PlatformBoot for Stm32n657Platform {
             let xspi2 = 0x5802_A000usize;
             let xspim = 0x5802_B400usize;
 
-            // ── Step 1: Reset XSPI1 + XSPI2 + XSPIM via RSTSR/RSTCR ─────────
+            // ── Reset XSPI1 + XSPI2 + XSPIM via RSTSR/RSTCR ─────────
             // N6 uses split reset registers (NOT the single AHB5RSTR at 0x220):
             //   AHB5RSTSR (0xA20)  — write-1-to-SET (assert reset)
             //   AHB5RSTCR (0x1220) — write-1-to-CLEAR (release reset)
@@ -752,7 +746,7 @@ impl PlatformBoot for Stm32n657Platform {
             while d < 1_000 { core::hint::spin_loop(); d = d.wrapping_add(1); }
             core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
 
-            // ── Step 2: Enable clocks (XSPIM first, then XSPI2 — ST's order) ─
+            // ── Enable clocks (XSPIM first, then XSPI2 — ST's order) ─
             let ahb5 = core::ptr::read_volatile((rcc_s + 0x260) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x260) as *mut u32,
                 ahb5 | (1 << 13) | (1 << 5)); // XSPIMEN + XSPI1EN first
@@ -760,7 +754,7 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((rcc_s + 0x260) as *mut u32,
                 ahb5_2 | (1 << 12) | (1 << 15)); // then XSPI2EN + MCE2EN
 
-            // ── Step 3: Kernel clock = IC3 from PLL1 (like ST's XSPI_NOR) ───
+            // ── Kernel clock = IC3 from PLL1 (like ST's XSPI_NOR) ───
             // hclk5 (SEL=00) and per_ck (SEL=01) don't reach XSPI2 — N6 kernel
             // clocks require explicitly configured IC dividers.
             // ST's XSPI_NOR_MemoryMapped_DTR uses IC3 from PLL1 with divider=6.
@@ -784,7 +778,7 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((rcc_s + 0x158) as *mut u32,
                 (ccipr6 & !(0b11 << 4)) | (0b10 << 4)); // XSPI2SEL=10 (ic3_ck)
 
-            // ── Step 4: VDDIO3 supply for Port N I/Os ────────────────────────
+            // ── VDDIO3 supply for Port N I/Os ────────────────────────
             let pwr = 0x5602_4800usize;
             let svmcr3 = core::ptr::read_volatile((pwr + 0x03C) as *const u32);
             core::ptr::write_volatile((pwr + 0x03C) as *mut u32,
@@ -799,7 +793,7 @@ impl PlatformBoot for Stm32n657Platform {
                 (0x7 << 4) | (0x8 << 8) | (1 << 1));
             core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
 
-            // ── Step 5: GPIO Port N for XSPI Port2 (AF9, very high speed) ────
+            // ── GPIO Port N for XSPI Port2 (AF9, very high speed) ────
             let gpion = 0x5602_3400usize;
             let ahb4 = core::ptr::read_volatile((rcc_s + 0x25C) as *const u32);
             core::ptr::write_volatile((rcc_s + 0x25C) as *mut u32, ahb4 | (1 << 13));
@@ -834,12 +828,12 @@ impl PlatformBoot for Stm32n657Platform {
             core::ptr::write_volatile((gpion + 0x24) as *mut u32, afrh);
             core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
 
-            // ── Step 6: XSPIM config (MODE=0, CSSEL_OVR_EN, REQ2ACK_TIME) ───
+            // ── XSPIM config (MODE=0, CSSEL_OVR_EN, REQ2ACK_TIME) ───
             // MODE=0 (direct: XSPI2→Port2), NCS1 override, req2ack=1
             core::ptr::write_volatile(xspim as *mut u32,
                 (1u32 << 16) | (1u32 << 4)); // REQ2ACK_TIME=1, CSSEL_OVR_EN=1
 
-            // ── Step 7: Configure XSPI2 (while disabled) ─────────────────────
+            // ── Configure XSPI2 (while disabled) ─────────────────────
             // DCR1: MTYP=Macronix(001), DEVSIZE=25, CSHT=1
             core::ptr::write_volatile((xspi2 + 0x008) as *mut u32,
                 (0b001 << 24) | (25 << 16) | (1 << 8));
@@ -851,14 +845,14 @@ impl PlatformBoot for Stm32n657Platform {
                 bw = bw.wrapping_add(1);
             }
 
-            // ── Step 8: Enable XSPI2 ─────────────────────────────────────────
+            // ── Enable XSPI2 ─────────────────────────────────────────
             core::ptr::write_volatile(xspi2 as *mut u32, 1); // EN=1
             cortex_m::asm::dsb();
             cortex_m::asm::isb();
             d = 0;
             while d < 5_000 { core::hint::spin_loop(); d = d.wrapping_add(1); }
 
-            // ── Step 9: SPI flash reset (0x66 + 0x99) ────────────────────────
+            // ── SPI flash reset (0x66 + 0x99) ────────────────────────
             core::ptr::write_volatile((xspi2 + 0x100) as *mut u32, 0b001); // IMODE=1line
             core::ptr::write_volatile((xspi2 + 0x108) as *mut u32, 0);
             core::ptr::write_volatile((xspi2 + 0x110) as *mut u32, 0x66);
@@ -879,7 +873,7 @@ impl PlatformBoot for Stm32n657Platform {
             while d < 50_000 { core::hint::spin_loop(); d = d.wrapping_add(1); }
             core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
 
-            // ── Step 10: READ_ID (0x9F) ──────────────────────────────────────
+            // ── READ_ID (0x9F) ──────────────────────────────────────
             core::ptr::write_volatile(xspi2 as *mut u32, (0b01u32 << 28) | 1);
             cortex_m::asm::dsb(); cortex_m::asm::isb();
             core::ptr::write_volatile((xspi2 + 0x040) as *mut u32, 2);
@@ -906,7 +900,7 @@ impl PlatformBoot for Stm32n657Platform {
                 // will surface the issue.
             }
 
-            // ── Step 11: Memory-mapped mode ──────────────────────────────────
+            // ── Memory-mapped mode ──────────────────────────────────
             let cr_cur = core::ptr::read_volatile(xspi2 as *const u32);
             core::ptr::write_volatile(xspi2 as *mut u32, cr_cur | (1 << 1));
             bw = 0;
@@ -928,7 +922,7 @@ impl PlatformBoot for Stm32n657Platform {
             // host/enclave lifecycle running successfully.
             let _probe = core::ptr::read_volatile(0x7000_0000 as *const u32);
 
-            // ── Step 12: XSPI2 layout (plaintext-flash model) ────────────────
+            // ── XSPI2 layout (plaintext-flash model) ────────────────
             // MCE2 encryption-at-rest is not enabled. Confidentiality comes
             // from the inner enclave encryption applied by
             // `protect_enclave.py --hmac-over-plaintext`; integrity comes
@@ -946,7 +940,7 @@ impl PlatformBoot for Stm32n657Platform {
             // chip-side issue documented in the design notes).
             core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
 
-            // ── Step 13: Disable MCE2 region 1 (passthrough on AXI reads) ────
+            // ── Disable MCE2 region 1 (passthrough on AXI reads) ────
             // Boot ROM may leave MCE2 region 1 enabled in Fast Block mode.
             // Explicitly disable to guarantee plaintext reads from XSPI2 at
             // 0x70080000+. No key/nonce config — MCE2 stays inert.

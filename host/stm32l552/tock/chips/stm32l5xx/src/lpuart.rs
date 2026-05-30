@@ -5,7 +5,7 @@
 //!   - Peripheral: LPUART1, NS base 0x40008000 (Secure alias 0x50008000)
 //!   - TX: PG7 / AF8; RX: PG8 / AF8
 //!   - Clock source: LSE (32.768 kHz external crystal), selected via CCIPR1
-//!   - 9600 baud → BRR = 256 × 32768 / 9600 ≈ 873 = 0x369
+//!   - 9600 baud → BRR = 256 X 32768 / 9600 ≈ 873 = 0x369
 //!     (LPUART BRR formula differs from USART; see RM0438 §47.5.3.)
 //!
 //! Per RM0438 §47.5.2, CR1.UE must be 0 while writing BRR. `init()` enforces

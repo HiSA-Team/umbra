@@ -1,0 +1,45 @@
+[package]
+name = "native_bench"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# board_l552 is the default for `cargo check --workspace`. Real builds
+# pass --features=board_l552,bench_<name> via tools/run_native_baseline.sh.
+default = ["board_l552", "bench_fib"]
+board_l552 = []
+board_l562 = []
+board_n657 = []
+
+# One feature per TACLeBench bench in the 13-app set. Exactly ONE bench
+# feature MUST be enabled per build — the harness rebuilds + reflashes
+# the TBF for each bench so the binary fits comfortably in the
+# standard 32 KB APPS_NS region and we don't have to merge 13 sets of
+# global state into a single firmware.
+bench_fib           = []
+bench_bsort         = []
+bench_countnegative = []
+bench_crc           = []
+bench_md5           = []
+bench_insertsort    = []
+bench_ndes          = []
+bench_statemate     = []
+bench_petrinet     = []
+bench_adpcm_dec     = []
+bench_anagram       = []
+bench_cjpeg_wrbmp   = []
+bench_dijkstra      = []
+
+[dependencies]
+libtock = { path = "../../lib/libtock-rs" }
+
+[build-dependencies]
+libtock_build_scripts = { path = "../../lib/libtock-rs/build_scripts" }
+cc = "1.0"
+
+[[bin]]
+name = "native_bench"
+path = "src/main.rs"

@@ -115,13 +115,11 @@ impl OspiDriver {
             // --- 4. DCR2: prescaler = 7 → OCTOSPI = SYSCLK/8 = 13.75 MHz @ 110 MHz SYSCLK.
             //     PRESCALER field bits [7:0] encode divider as (N+1).
             //
-            //     Was prescaler=2 (SYSCLK/3 ≈ 36.7 MHz) before 2026-05-24. With PLL
-            //     bringing SYSCLK from MSI 4 MHz to PLL 110 MHz, the OCTOSPI clock
-            //     jumped 27.5× from ~1.3 MHz to ~36.7 MHz. MX25LM51245G in 1-1-1
-            //     SPI mode handles Page Program / Sector Erase reliably below
-            //     ~20 MHz; above ~30 MHz the cold-path OFD encrypt + Page Program
-            //     starts failing silently (reset back to RSS via TZ fault) on the
-            //     STM32L562E-DK. /8 = 13.75 MHz leaves a 2× margin to the safe
+            //     MX25LM51245G in 1-1-1 SPI mode handles Page Program / Sector
+            //     Erase reliably below ~20 MHz; above ~30 MHz the cold-path OFD
+            //     encrypt + Page Program starts failing silently (reset back to
+            //     RSS via TZ fault) on the STM32L562E-DK. /8 = 13.75 MHz leaves
+            //     a 2× margin to the safe
             //     ceiling and keeps memory-mapped reads fast enough that they
             //     don't dominate the L562 enclave fetch path.
             write_register(self.regs, OCTOSPI_DCR2_OFFSET, 0x0000_0007);

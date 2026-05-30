@@ -19,6 +19,21 @@
 //! | 4   | `umbra_enclave_status(enclave_id)`   | enclave id    | return code        |
 //! | 5   | probe `UMBR` magic at flash addr     | flash addr    | 1 if magic, else 0 |
 //! | 6   | dump DWT drift stats over raw_print  | (ignored)     | (none)             |
+//! | 7   | read accumulated runtime cycles      | (ignored)     | DWT cycles sum     |
+//! | 8   | call `umbra_bench_dump()` NSC veneer | (ignored)     | (none)             |
+//! | 9   | measure null-SVC baseline (S3)       | (ignored)     | TrustZone cycles   |
+//! | 10  | read NS-side boot cycles             | (ignored)     | CMD 1 wall-clock   |
+//!
+//! Commands 7+8 are part of theinstrumentation
+//!. The capsule transparently brackets every CMD 2 (ENTER)
+//! call with DWT reads and accumulates into a per-driver static — cmd
+//! 7 returns that accumulator (NS-side runtime measurement, R1 from
+//! Q2a). Cmd 8 invokes the Secure-side `umbra_bench_dump` veneer which
+//! prints the Secure accumulators (boot + switch) when the kernel is
+//! built with `bench-eval`; on a stock kernel it is a no-op. NS
+//! user-apps wrap the pair with `[EVAL_DUMP_BEGIN]/[EVAL_DUMP_END]`
+//! sentinels so the parser de-interleaves Secure prints from heartbeat
+//! noise.
 //!
 //! Every command beyond the presence check returns `CommandReturn::success()`
 //! and delivers its result through subscribe slot 0; the synchronous
@@ -34,6 +49,7 @@
 
 pub mod noop_mpu;
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::{ErrorCode, ProcessId};
@@ -56,6 +72,43 @@ extern "C" {
     /// Board-provided drift-stats dump (boards/.../src/heartbeat.rs).
     /// Writes `[HEARTBEAT]` / `[DRIFT]` lines on LPUART1 NS, then returns.
     fn _umbra_drift_dump();
+
+    /// . Always linkable — when the
+    /// kernel is built without `bench-eval` the Secure imp is a no-op
+    /// stub. Invoked by CMD 8.
+    fn umbra_bench_dump();
+
+    /// . Empty NSC veneer used to
+    /// measure the TrustZone round-trip fixed cost. Always emitted.
+    fn umbra_null_call();
+}
+
+/// cycle accumulator for CMD 2 (ENTER) calls. Reset to 0
+/// only on hardware reset (lives in .bss); each successful ENTER adds
+/// `end - start` DWT cycles. Read via CMD 7. The single-process sweep
+/// harness +) keys the value to (bench, slot, cache,
+/// spec) tuples via UART sentinels — no per-app reset needed because
+/// each sweep cell runs a fresh boot.
+static BENCH_RUNTIME_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+/// NS-side boot bracket around CMD 1 (CREATE). Pairs
+/// with the Secure-side `boot_sec_cycles` from `bench_eval` to give
+/// the B3 measurement (Q2b): TrustZone fixed cost = ns - sec. Single-
+/// shot per process; expects exactly one CREATE call per sweep cell.
+static BENCH_BOOT_NS_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+/// DWT cycle counter MMIO (System Control Space). Tock NS-privileged
+/// code has access to 0xE000_xxxx; enable lives in the board's
+/// heartbeat.rs (already on by the time the capsule runs).
+const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
+
+#[inline(always)]
+fn dwt_read() -> u32 {
+    // SAFETY: DWT_CYCCNT is a read-only 32-bit hardware register in the
+    // System Control Space. NS access is granted on Cortex-M33 and the
+    // board enables the counter via heartbeat::enable_dwt_and_systick()
+    // before user apps run.
+    unsafe { core::ptr::read_volatile(DWT_CYCCNT) }
 }
 
 /// Invoke one of the Umbra NSC veneers with a full callee-saved register
@@ -84,6 +137,30 @@ fn nsc_call(base_addr: u32, veneer: unsafe extern "C" fn(u32) -> u32) -> u32 {
         );
     }
     result
+}
+
+/// Invoke a void→void NSC veneer with the same callee-saved register
+/// barrier as `nsc_call`. Used by CMD 8 (`umbra_bench_dump`) which has
+/// no input args and discards the return value. We still spill r4-r11
+/// because the Secure side may have clobbered them between the SG and
+/// the BXNS return.
+#[inline(never)]
+fn nsc_call_void(veneer: unsafe extern "C" fn()) {
+    // SAFETY: `veneer` is `umbra_bench_dump`, a valid NSC SG entry point
+    // in Secure flash; the Secure imp is either the bench_eval dump
+    // (under `bench-eval`) or a no-op stub (otherwise).
+    unsafe {
+        core::arch::asm!(
+            "push {{r4, r5, r6, r7, r8, r9, r10, r11}}",
+            "blx {f}",
+            "pop {{r4, r5, r6, r7, r8, r9, r10, r11}}",
+            f = in(reg) veneer,
+            out("r0") _, out("r1") _, out("r2") _, out("r3") _,
+            out("r4") _, out("r5") _,
+            out("r8") _, out("r9") _, out("r10") _, out("r11") _,
+            out("r12") _, out("lr") _,
+        );
+    }
 }
 
 /// `UMBR` magic in little-endian — first word of every Umbra enclave blob.
@@ -132,8 +209,35 @@ impl SyscallDriver for UmbraDriver {
     ) -> CommandReturn {
         let result: u32 = match command_num {
             0 => return CommandReturn::success(),
-            1 => nsc_call(arg1 as u32, umbra_enclave_create),
-            2 => nsc_call(arg1 as u32, umbra_enclave_enter),
+            1 => {
+                // B3 NS bracket (Q2b): mirror of the
+                // Secure-side boot bracket. Records the wall-clock
+                // cost as seen by the host (TrustZone overhead +
+                // Secure work). Single-shot; expects 1 CREATE per
+                // sweep cell. Wrapping unconditional (cheap), the
+                // value is meaningful only when bench-eval is on.
+                let start = dwt_read();
+                let ret = nsc_call(arg1 as u32, umbra_enclave_create);
+                let end = dwt_read();
+                BENCH_BOOT_NS_CYCLES.store(end.wrapping_sub(start), Ordering::Relaxed);
+                ret
+            }
+            2 => {
+                // R1 bracket (NS-side): accumulate cycles
+                // across every ENTER call. The cost is ~10 cycles per
+                // ENTER (2 MMIO reads + 1 atomic add) vs ~1000s of
+                // cycles for the call itself — negligible. Wrapping
+                // is unconditional because the cfg gate lives on the
+                // Secure side only; querying CMD 7 from a non-eval
+                // build still returns a meaningful number (sum of all
+                // ENTER costs since boot).
+                let start = dwt_read();
+                let ret = nsc_call(arg1 as u32, umbra_enclave_enter);
+                let end = dwt_read();
+                let delta = end.wrapping_sub(start);
+                BENCH_RUNTIME_CYCLES.fetch_add(delta, Ordering::Relaxed);
+                ret
+            }
             3 => nsc_call(arg1 as u32, umbra_enclave_exit),
             4 => nsc_call(arg1 as u32, umbra_enclave_status),
             5 => probe_enclave_magic(arg1 as u32),
@@ -143,6 +247,47 @@ impl SyscallDriver for UmbraDriver {
                 // raw_print.
                 unsafe { _umbra_drift_dump(); }
                 0
+            }
+            7 => {
+                // — sum of DWT
+                // deltas around every CMD 2 (ENTER) call since boot.
+                BENCH_RUNTIME_CYCLES.load(Ordering::Relaxed)
+            }
+            8 => {
+                // — invokes the NSC
+                // veneer that prints the boot + switch accumulators
+                // (or nothing, when the Secure side lacks bench-eval).
+                nsc_call_void(umbra_bench_dump);
+                0
+            }
+            9 => {
+                // — bracket the null-SVC
+                // round-trip and return the cycle delta. The capsule
+                // (NS-privileged) is the only place we can both read
+                // DWT and make an NSC call in tight sequence; a NS
+                // user-app would add yield+syscall noise to the
+                // measurement.
+                let start = dwt_read();
+                nsc_call_void(umbra_null_call);
+                let end = dwt_read();
+                end.wrapping_sub(start)
+            }
+            10 => {
+                // .
+                BENCH_BOOT_NS_CYCLES.load(Ordering::Relaxed)
+            }
+            11 => {
+                // Stage A Step 7c — raw DWT_CYCCNT read for native
+                // baseline bracket. DWT registers in the PPB
+                // (0xE000_xxxx) are NS-privileged on Cortex-M33;
+                // libtock-rs userspace apps (unprivileged NS) BusFault
+                // on direct reads. native_bench calls this cmd before
+                // and after each TACLeBench main; the two-call delta
+                // is the bench's native cycle count. Per-call overhead
+                // is one Tock SVC + capsule dispatch (~500-1000
+                // cycles), negligible vs the millions of cycles each
+                // bench takes.
+                dwt_read()
             }
             _ => return CommandReturn::failure(ErrorCode::NOSUPPORT),
         };

@@ -6,7 +6,7 @@
 //
 // Algorithmic identity: TACLeBench's prime_main computes
 //   prime_result = !(!prime_prime(2759) && !prime_prime(81))
-// 2759 = 31 × 89 (composite) and 81 = 3⁴ (composite), so both primality
+// 2759 = 31 X 89 (composite) and 81 = 3⁴ (composite), so both primality
 // checks return 0, and prime_result = !(1 && 1) = 0. We match by
 // returning the same expression directly.
 extern unsigned char prime_prime(unsigned int n);
@@ -20,14 +20,12 @@ const unsigned char enclave_header[48] = {
     0x00, 0x00,             // ess_blocks
     0x00, 0x02, 0x00, 0x00, // code_size = 0x200 (will be patched by protect)
     0x00, 0x00,             // reserved
-    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
-    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+    0,    0,    0,    0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0,    0,    0,    0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
 
-__attribute__((section(".app.enclave_code"), used))
-int enclave_entry(void)
-{
-    unsigned char a = prime_prime(2759);   // 31 × 89 → 0
-    unsigned char b = prime_prime(81);     // 3⁴   → 0
-    return !(!a && !b);                     // 0 on success
+__attribute__((section(".app.enclave_code"), used)) int enclave_entry(void) {
+  unsigned char a = prime_prime(2759); // 31 X 89 → 0
+  unsigned char b = prime_prime(81);   // 3⁴   → 0
+  return !(!a && !b);                  // 0 on success
 }
