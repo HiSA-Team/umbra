@@ -1,0 +1,21 @@
+[package]
+name                   = "umbra-pal-test"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish                = false
+
+# Host-side test harness. Provides software stand-ins for the HAL traits
+# (TestHash via the sha2 crate) and an in-memory MMIO backend
+# (MmioMem + MmioHandle) so driver `#[cfg(test)] mod tests` blocks can
+# exercise the register-write recipe of a `Driver<M: MmioAccess>` without
+# silicon attached.
+
+[dependencies]
+sha2            = "0.10"
+umbra-hal       = { path = "../umbra-hal" }
+# Implements peripheral_regs::MmioAccess for MmioHandle so driver host-tests
+# can drop an in-memory backend into a `Driver<M: MmioAccess>` generic.
+peripheral_regs = { path = "../../src/hardware/common/peripheral_regs" }

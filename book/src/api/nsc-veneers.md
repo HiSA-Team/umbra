@@ -1,8 +1,16 @@
 # NSC API Reference
 
-Umbra exposes 5 Non-Secure Callable (NSC) functions. These are the **only** way the host application can interact with the Secure World.
+Umbra exposes seven Non-Secure Callable (NSC) functions. These are the **only** way the host application can interact with the Secure World. Five are the functional enclave-lifecycle entry points; two are baseline / instrumentation veneers used to measure or exercise the round-trip path.
 
 Each function is implemented as an assembly veneer containing a `SG` (Secure Gateway) instruction, followed by a branch to the Rust implementation. The veneers are placed in the `.umbra_nsc_api` section at fixed addresses starting at `0x0803C000`.
+
+## Functional veneers
+
+`umbra_enclave_create`, `umbra_debug_print`, `umbra_enclave_enter`, `umbra_enclave_exit`, `umbra_enclave_status` — documented in the sections below.
+
+## Instrumentation veneers
+
+`umbra_bench_dump` and `umbra_null_call` are emitted unconditionally so the round-trip cost of the NSC boundary can be measured even in production builds. They are documented at the end of this chapter.
 
 ## umbra_enclave_create
 
@@ -63,3 +71,23 @@ void umbra_debug_print(const char* str_ptr);
 ```
 
 Prints a null-terminated string from Non-Secure memory to the Secure UART. Useful for host-side debug logging via the Secure World UART driver.
+
+## umbra_bench_dump
+
+```c
+void umbra_bench_dump(void);
+```
+
+Instrumentation veneer. Dumps the Secure-side benchmark counters (if `bench-eval` was enabled at build time) to the Secure UART. With `bench-eval` disabled the body is empty and the veneer measures only the round-trip overhead (one `SG` plus one `BXNS`).
+
+- **Returns**: (none)
+
+## umbra_null_call
+
+```c
+void umbra_null_call(void);
+```
+
+Baseline veneer. The body is a single `SG` followed by an immediate `BXNS`. Used by host-side benchmarks to characterise the fixed cost of an NSC round-trip on the target silicon. Production overhead is identical to any other zero-arg veneer.
+
+- **Returns**: (none)

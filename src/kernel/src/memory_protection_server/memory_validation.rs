@@ -8,15 +8,14 @@ impl MemoryValidator {
     pub fn validate_block(
         generator: &mut KeyGenerator,
         data: &[u8],
-        expected_measurement: &Key
+        expected_measurement: &Key,
     ) -> bool {
         // Using a zero key to derive a measurement from the data block
         let base_key = Key::zero();
         if let Ok(computed) = generator.derive_key(&base_key, data) {
-             generator.verify_measurement(&computed.value, &expected_measurement.value)
+            generator.verify_measurement(&computed.value, &expected_measurement.value)
         } else {
             false
         }
     }
-
 }

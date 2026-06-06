@@ -1,15 +1,22 @@
 [package]
-name = "drivers"
+name = "umbra-l552-drivers"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 arm = { path = "../../../architecture/arm" }
 peripheral_regs = { path = "../../../common/peripheral_regs" }
-# Platform-agnostic — boot crate selects the kernel platform feature.
-# NOTE: cannot be `cargo check`ed in isolation; build via the boot crate
-# (see arm/Cargo.toml for the longer explanation).
-kernel = { path = "../../../../kernel", default-features = false }
+# Boot crate also picks platform-l552 → features unify, no double-selection.
+# Selecting the feature here lets the driver crate be host-buildable in
+# isolation (no boot crate in the graph → cargo otherwise leaves the
+# kernel feature set empty and the platform constants disappear).
+kernel = { path = "../../../../kernel", default-features = false, features = ["platform-l552"] }
+umbra-hal = { path = "../../../../../crates/umbra-hal" }
+
+[dev-dependencies]
+# In-memory MMIO backend for the Driver<M: MmioAccess = RealMmio>
+# generic — lets inline #[cfg(test)] mods exercise drivers without silicon.
+umbra-pal-test = { path = "../../../../../crates/umbra-pal-test" }
 
 [features]
 stm32l562 = []

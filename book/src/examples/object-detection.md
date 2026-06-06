@@ -78,8 +78,8 @@ into the host as `test_image_rgb888[]` and copied into
    activations area, sets `CTRL.START`, drops `EC` (epoch controller)
    into running state.
 3. Polls EPC.IRQ for completion and inlines the W1C ack (the IRQ never
-   reaches the NVIC line in this design — see memory note
-   `project_n657_g2b_complete.md`).
+   reaches the NVIC line in this design — the NPU's done signal is
+   consumed inside the enclave's poll loop).
 4. Copies 1470 bytes of INT8 logits (Tiny YOLO v2 raw output) from the
    NPU activations area at `OUTPUT_OFFSET = 0x67C0` into
    `OUTPUT_SHARED + 64`.

@@ -1,0 +1,71 @@
+# Codecov configuration for Umbra.
+#
+# Collector + upload are wired in `.github/workflows/build.yml`
+# (`cargo-llvm-cov` + `codecov/codecov-action@v4`). This file controls
+# the report shape and the PR-status gates.
+#
+# Coverage scope mirrors what the workflow uploads: only the
+# host-buildable crates (`xtask`, `umbra-pal-test`, `kernel`,
+# `umbra-hal`, `umbra-error`, `umbra-api`). The boot binaries and
+# per-platform driver crates cross-compile to `thumbv8m.main-none-eabi`
+# and run on STM32 silicon, so they have no host-side coverage and are
+# excluded below.
+
+coverage:
+  precision: 1
+  round: down
+  range: "50...80"   # red below 50, yellow 50-80, green above
+
+  status:
+    project:
+      default:
+        # `auto` matches the base commit's coverage — the project gate
+        # fails only on regression, never on the absolute number. This
+        # lets the codebase establish a baseline organically. Flip to a
+        # concrete percentage (e.g. 50%) once a few PRs have shown the
+        # actual steady-state coverage.
+        target: auto
+        threshold: 1%        # allow 1 pp drift before failing
+        if_not_found: success
+        if_ci_failed: error
+        only_pulls: false
+
+    patch:
+      default:
+        # The PR's own diff must be covered at this rate. Codecov
+        # computes the percentage over the lines the PR adds or
+        # modifies. New code without tests fails the gate.
+        target: 70%
+        threshold: 0%
+        if_not_found: success
+        if_ci_failed: error
+
+# Paths excluded from the report. Mirrors the
+# `--ignore-filename-regex` filter in the workflow's `cargo llvm-cov`
+# invocation, plus paths that cannot have host coverage by construction.
+ignore:
+  - "host/**"
+  - "lib/**"
+  - "tools/**"
+  - "**/build.rs"
+  - "**/tests/**"
+  - "src/hardware/platform/stm32l552/boot/**"
+  - "src/hardware/platform/stm32l552/drivers/**"
+  - "src/hardware/platform/stm32l562/boot/**"
+  - "src/hardware/platform/stm32l562/drivers/**"
+  - "src/hardware/platform/stm32n657/boot/**"
+  - "src/hardware/platform/stm32n657/drivers/**"
+
+# PR comment. Concise to avoid noise; only post when coverage actually
+# changes between base and head.
+comment:
+  layout: "header, diff, flags, components, files, footer"
+  behavior: default
+  require_changes: true
+  require_base: false
+  require_head: true
+
+# GitHub line annotations on the PR diff. Helps reviewers see which
+# new lines are not covered.
+github_checks:
+  annotations: true

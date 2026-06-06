@@ -1,101 +1,99 @@
 //////////////////////////////////////////////////////////////////
-//                                                              //
-// Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>  //
-//                                                              //
-// Description:                                                 //
-//      ARM Memory Protection Unit (MPU) Driver for Cortex-M33  //
-//                                                              //
+// //
+// Author: Salvatore Bramante <salvatore.bramante@imtlucca.it> //
+// //
+// Description: //
+// ARM Memory Protection Unit (MPU) Driver for Cortex-M33 //
+// //
 //////////////////////////////////////////////////////////////////
 
 // Crates
 use peripheral_regs::*;
 
 //////////////////////////////////////////////////
-//    __  __ ___ _   _                          //
-//   |  \/  | _ \ | | |                         //
-//   | |\/| |  _/ |_| |                         //
-//   |_|  |_|_|  \___/                          //
-//                                              //
+// __ __ ___ _ _ //
+// | \/ | _ \ | | | //
+// | |\/| | _/ |_| | //
+// |_| |_|_| \___/ //
+// //
 //////////////////////////////////////////////////
 
 const MPU_BASE_ADDR: u32 = 0xE000ED90;
 /// NS-alias of the MPU registers. Accessible from Secure-state code; writes
 /// configure the Non-Secure MPU view of memory. Used by `program_ns_mpu()`
-/// to set up Tock's static memory protection layout (spec §4.2).
+/// to set up Tock's static memory protection layout.
 const NS_MPU_BASE_ADDR: u32 = 0xE002ED90;
 type MpuRegisters = u32;
 
 //////////////////////////////////////////////
-//     ___             _            _       //
-//    / __|___ _ _  __| |_ __ _ _ _| |_ ___ //
-//   | (__/ _ \ ' \(_-<  _/ _` | ' \  _(_-< //
-//    \___\___/_||_/__/\__\__,_|_||_\__/__/ //
-//                                          //
+// ___ _ _ //
+// / __|___ _ _ __| |_ __ _ _ _| |_ ___ //
+// | (__/ _ \ ' \(_-< _/ _` | ' \ _(_-< //
+// \___\___/_||_/__/\__\__,_|_||_\__/__/ //
+// //
 //////////////////////////////////////////////
 
 //////////////////////////
-// MPU Type Register    //
+// MPU Type Register //
 //////////////////////////
-const MPU_TYPE_REG              : u32 = 0x00;
-const _MPU_TYPE_DREGION_FIELD    : u16 = 0x0808; // Number of MPU regions
+const MPU_TYPE_REG: u32 = 0x00;
+const _MPU_TYPE_DREGION_FIELD: u16 = 0x0808; // Number of MPU regions
 
 //////////////////////////
 // MPU Control Register //
 //////////////////////////
-const MPU_CTRL_REG              : u32 = 0x04;
-const MPU_CTRL_PRIVDEFENA_FIELD : u16 = 0x0102; // Privileged default memory map enable
-const _MPU_CTRL_HFNMIENA_FIELD   : u16 = 0x0101; // HardFault and NMI enable
-const MPU_CTRL_ENABLE_FIELD     : u16 = 0x0100; // MPU enable
+const MPU_CTRL_REG: u32 = 0x04;
+const MPU_CTRL_PRIVDEFENA_FIELD: u16 = 0x0102; // Privileged default memory map enable
+const _MPU_CTRL_HFNMIENA_FIELD: u16 = 0x0101; // HardFault and NMI enable
+const MPU_CTRL_ENABLE_FIELD: u16 = 0x0100; // MPU enable
 
 /////////////////////////////////
-// MPU Region Number Register  //
+// MPU Region Number Register //
 /////////////////////////////////
-const MPU_RNR_REG               : u32 = 0x08;
+const MPU_RNR_REG: u32 = 0x08;
 
 ///////////////////////////////////////
-// MPU Region Base Address Register  //
+// MPU Region Base Address Register //
 ///////////////////////////////////////
-const MPU_RBAR_REG              : u32 = 0x0C;
+const MPU_RBAR_REG: u32 = 0x0C;
 // Bits [31:5]: Base address (32-byte aligned)
 // Bits [4:3]: SH (Shareability)
 // Bits [2:1]: AP (Access Permissions)
 // Bit [0]: XN (Execute Never)
 
 /////////////////////////////////////////
-// MPU Region Limit Address Register   //
+// MPU Region Limit Address Register //
 /////////////////////////////////////////
-const MPU_RLAR_REG              : u32 = 0x10;
+const MPU_RLAR_REG: u32 = 0x10;
 // Bits [31:5]: Limit address (32-byte aligned)
 // Bits [3:1]: AttrIndx (MAIR index)
 // Bit [0]: EN (Region Enable)
 
-
 //////////////////////////////////////////////
 // MPU Memory Attribute Indirection Register//
 //////////////////////////////////////////////
-const MPU_MAIR0_REG             : u32 = 0x30;
-const MPU_MAIR1_REG             : u32 = 0x34;
-
+const MPU_MAIR0_REG: u32 = 0x30;
+const MPU_MAIR1_REG: u32 = 0x34;
 
 //////////////////////////////////////////////////////////////////////
-//    ___            _                   _        _   _             //
-//   |_ _|_ __  _ __| |___ _ __  ___ _ _| |_ __ _| |_(_)___ _ _     //
-//    | || '  \| '_ \ / -_) '  \/ -_) ' \  _/ _` |  _| / _ \ ' \    //
-//   |___|_|_|_| .__/_\___|_|_|_\___|_||_\__\__,_|\__|_\___/_||_|   //
-//             |_|                                                  //
+// ___ _ _ _ _ //
+// |_ _|_ __ _ __| |___ _ __ ___ _ _| |_ __ _| |_(_)___ _ _ //
+// | || ' \| '_ \ / -_) ' \/ -_) ' \ _/ _` | _| / _ \ ' \ //
+// |___|_|_|_|.__/_\___|_|_|_\___|_||_\__\__,_|\__|_\___/_||_| //
+// |_| //
 //////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Copy)]
 pub enum MpuAccessPermission {
     RWPrivilegedOnly = 0b00,
-    RWAny            = 0b01,
+    RWAny = 0b01,
     ROPrivilegedOnly = 0b10,
-    ROAny            = 0b11,
+    ROAny = 0b11,
 }
 
 #[derive(Clone, Copy)]
 pub enum MpuShareability {
-    NonShareable   = 0b00,
+    NonShareable = 0b00,
     OuterShareable = 0b10,
     InnerShareable = 0b11,
 }
@@ -103,7 +101,7 @@ pub enum MpuShareability {
 #[derive(Clone, Copy)]
 pub enum MpuExecuteNever {
     ExecutionPermitted = 0,
-    ExecutionNever     = 1,
+    ExecutionNever = 1,
 }
 
 pub struct MpuRegionConfig {
@@ -133,7 +131,7 @@ impl MpuRegionConfig {
 }
 
 ///////////////////////////
-// MPU Driver            //
+// MPU Driver //
 ///////////////////////////
 
 pub struct MpuDriver {
@@ -141,7 +139,6 @@ pub struct MpuDriver {
 }
 
 impl MpuDriver {
-
     // Constructor
     pub fn new() -> Self {
         let regs = unsafe { &mut *(MPU_BASE_ADDR as *mut MpuRegisters) };
@@ -156,18 +153,16 @@ impl MpuDriver {
         Self { regs }
     }
 
-    // Initialize MPU: Disable and clear all regions
+    /// Disable the MPU and zero RBAR/RLAR for every implemented region.
+    /// `MPU_TYPE.DREGION` gives the region count for this part.
     pub unsafe fn init(&mut self) {
         let regs_base_address = self.regs as *const MpuRegisters as *const u32;
 
-        // Disable MPU
         self.disable();
 
-        // Get number of regions
         let type_reg = read_register(regs_base_address, MPU_TYPE_REG);
         let dregion = (type_reg >> 8) & 0xFF;
 
-        // Clear all regions
         for i in 0..dregion {
             write_register(regs_base_address, MPU_RNR_REG, i);
             write_register(regs_base_address, MPU_RBAR_REG, 0);
@@ -179,9 +174,14 @@ impl MpuDriver {
         let regs_base_address = self.regs as *const MpuRegisters as *const u32;
         // Enable MPU with default memory map for privileged access (PRIVDEFENA)
         // This ensures that if no region matches and code is privileged, it uses default map.
-        
+
         // Enable PRIVDEFENA (Bit 2)
-        set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_PRIVDEFENA_FIELD, 1);
+        set_register_field(
+            regs_base_address,
+            MPU_CTRL_REG,
+            MPU_CTRL_PRIVDEFENA_FIELD,
+            1,
+        );
         // Enable MPU (Bit 0)
         set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_ENABLE_FIELD, 1);
     }
@@ -189,14 +189,18 @@ impl MpuDriver {
     /// Enable the MPU with `PRIVDEFENA=0` and `HFNMIENA=0` — strict deny-by-default
     /// even for privileged accesses, but bypass in HardFault/NMI handlers so the
     /// fault dumper can always reach LPUART1.
-    ///
-    /// This is the policy for the NS-MPU per spec §4.2: any kernel access outside
+    /// This is the policy for the NS-MPU: any kernel access outside
     /// the explicitly whitelisted regions is a MemFault, acting as a sentinel
     /// against kernel bugs that would otherwise stomp memory silently.
     pub unsafe fn enable_strict(&mut self) {
         let regs_base_address = self.regs as *const MpuRegisters as *const u32;
         // Clear PRIVDEFENA (bit 2)
-        set_register_field(regs_base_address, MPU_CTRL_REG, MPU_CTRL_PRIVDEFENA_FIELD, 0);
+        set_register_field(
+            regs_base_address,
+            MPU_CTRL_REG,
+            MPU_CTRL_PRIVDEFENA_FIELD,
+            0,
+        );
         // HFNMIENA (bit 1) defaults to 0 → MPU bypassed in HF/NMI; no write needed
         // unless a previous configure left it set. Be defensive:
         clear_register_bit(regs_base_address, MPU_CTRL_REG, 1);
@@ -213,12 +217,18 @@ impl MpuDriver {
     // attr0..attr3 go to MAIR0, attr4..attr7 go to MAIR1
     // Each attribute is 8 bits.
     pub unsafe fn set_mair(&mut self, attr_idx: u8, attr_val: u8) {
-        if attr_idx > 7 { return; }
+        if attr_idx > 7 {
+            return;
+        }
 
         let regs_base_address = self.regs as *const MpuRegisters as *const u32;
-        let reg_offset = if attr_idx < 4 { MPU_MAIR0_REG } else { MPU_MAIR1_REG };
+        let reg_offset = if attr_idx < 4 {
+            MPU_MAIR0_REG
+        } else {
+            MPU_MAIR1_REG
+        };
         let shift = (attr_idx % 4) * 8;
-        
+
         // Read-Modify-Write
         let mut val = read_register(regs_base_address, reg_offset);
         val &= !(0xFF << shift);
@@ -233,48 +243,46 @@ impl MpuDriver {
         write_register(regs_base_address, MPU_RNR_REG, config.rnum as u32);
 
         // MPU_RBAR: Base Address + SH + AP + XN
-        let rbar = (config.base_addr & 0xFFFF_FFE0) 
-                 | ((config.sh as u32) << 3)
-                 | ((config.ap as u32) << 1)
-                 | (config.xn as u32);
-        
+        let rbar = (config.base_addr & 0xFFFF_FFE0)
+            | ((config.sh as u32) << 3)
+            | ((config.ap as u32) << 1)
+            | (config.xn as u32);
+
         write_register(regs_base_address, MPU_RBAR_REG, rbar);
 
         // MPU_RLAR: Limit Address + AttrIndx + EN
         // Limit Address in RLAR is bits [31:5] of the address.
         let rlar = (config.limit_addr & 0xFFFF_FFE0)
-                 | ((config.attr_index as u32 & 0x7) << 1)
-                 | (if config.enable { 1 } else { 0 });
+            | ((config.attr_index as u32 & 0x7) << 1)
+            | (if config.enable { 1 } else { 0 });
 
         write_register(regs_base_address, MPU_RLAR_REG, rlar);
     }
 }
 
 /// One entry in a static NS-MPU layout. Fully fixed — programmed once at
-/// boot, never modified at runtime. See spec §4.2 for the L552 layout.
+/// boot, never modified at runtime.
 pub struct NsMpuRegion {
     pub base_addr: u32,
     pub limit_addr: u32,
     pub ap: MpuAccessPermission,
     pub xn: MpuExecuteNever,
-    pub attr_index: u8,  // 0 = Normal WB-RW-allocate, 1 = Device-nGnRE
+    pub attr_index: u8, // 0 = Normal WB-RW-allocate, 1 = Device-nGnRE
 }
 
 /// Program the NS-MPU with a static layout. Called exactly once during
 /// Secure boot (from `platform_impl::configure_ns_boot`). After this call
 /// the NS-MPU is locked: nothing in NS — Tock kernel, capsules, apps —
 /// rewrites MPU registers.
-///
 /// MAIR0 is initialized with two attributes:
-///   - attr 0: 0xFF — Normal memory, Inner/Outer Write-Back, RW-allocate
-///   - attr 1: 0x04 — Device-nGnRE (for MMIO peripheral regions)
-///
-/// Per spec §4.2 the layout MUST have at most 16 regions (PMSAv8 hard limit
+/// - attr 0: 0xFF — Normal memory, Inner/Outer Write-Back, RW-allocate
+/// - attr 1: 0x04 — Device-nGnRE (for MMIO peripheral regions)
+/// The layout MUST have at most 16 regions (PMSAv8 hard limit
 /// on M33); the L552 layout uses 7 (indices 0..=6).
 pub unsafe fn program_ns_mpu(regions: &[NsMpuRegion]) {
     let mut mpu = MpuDriver::new_with_base(NS_MPU_BASE_ADDR);
 
-    mpu.init();   // disable + zero all regions
+    mpu.init(); // disable + zero all regions
 
     // MAIR setup — common to both Normal and Device attributes.
     mpu.set_mair(0, 0xFF);

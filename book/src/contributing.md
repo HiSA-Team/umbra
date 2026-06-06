@@ -63,11 +63,9 @@ active MCU variant.
 
 ### Formal Verification
 
-```bash
-cd docs/formal
-proverif UmbraIntegrityFixValidator.pv
-proverif UmbraIntegrityRaceValidatorFix.pv
-```
+Two ProVerif models cover the integrity flow for L552 (SW AES) and
+L562 (OTFDEC). See [Formal Verification](formal/proverif.md) for the
+properties they check.
 
 ## Adding a New Board
 

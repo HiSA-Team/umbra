@@ -42,9 +42,30 @@ host/STM32N6-GettingStarted-ObjectDetection/
 tools/last_uart.log
 tools/last_uart_fault.log
 
-# Local-only: docs (specs, plans, reports) and Claude Code scratch state
+# Local-only: every docs/ asset (ADRs, guardrails, HANDOFF, formal
+# models, datasheets, working artifacts) lives outside the published
+# repo. The user-facing documentation surface is the mdBook under
+# `book/` (sources tracked, build output gitignored).
 docs/
 .claude/
+
+# === Build artefacts (host applications) ===
+
+# TACLeBench intermediate build outputs (not source)
+host/stm32l552/taclebench/obj/
+host/stm32l552/taclebench/app/
+
+# Tock host build artefacts (Cargo.lock churns during smoke tests; not stable)
+host/stm32l552/tock/target/
+
+# llvm-cov reports (host-coverage runs)
+lcov.info
+target/llvm-cov/
+
+# Workspace target/ at repo root (created by xtask + future workspace builds).
+# Per-crate target/ under src/.../{boot,drivers}/target/ stay covered by the
+# rule above, but the workspace root creates an additional one here.
+/target/
 
 # OTFDEC key/nonce material (local-only, never committed)
 tools/otfdec_key.bin
@@ -54,3 +75,7 @@ tools/otfdec_nonce.bin
 # Rust constants (src/.../boot/src/master_key.rs) stay tracked so a fresh
 # clone can `cargo check` before key generation; the binary form is local-only.
 tools/master_key.bin
+
+# Build artifacts under host/<mcu>/bare_metal/ (NEVER_DO #11)
+host/*/bare_metal/lib/
+host/*/bare_metal/*.bin

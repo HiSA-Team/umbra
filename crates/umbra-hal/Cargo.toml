@@ -1,0 +1,15 @@
+[package]
+name                   = "umbra-hal"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description            = "Hardware Abstraction Layer traits for Umbra (Secure-side aware, TrustZone-aware)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Traits are no_std + no_dep. Implementations live in per-platform PAL crates
+# (umbra-l552-drivers / umbra-n657-drivers / umbra-pal-test).

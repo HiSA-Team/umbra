@@ -44,11 +44,23 @@ host does.
 
 ## Build Everything
 
+The `xtask` orchestrator is the recommended entry point. It wraps the
+shell scripts during the transition to a native-Rust pipeline (see
+`xtask/src/main.rs:1-15`).
+
+```bash
+# Preferred:
+cargo xtask build l552       # or l562, n657
+```
+
+The shell flow remains the secondary route and is still used by CI for
+exotic targets (e.g. when an external loader has to be hand-staged):
+
 ```bash
 ./rebuild_all.sh
 ```
 
-This performs a full clean build:
+Either path performs a full clean build:
 
 1. (Optional) regenerate a master key via `tools/gen_key.py` (synced to
    both the L552 and N657 FSBL Rust constants).
@@ -69,13 +81,21 @@ This performs a full clean build:
 ### STM32L5 (L552, L562)
 
 ```bash
+# Preferred:
+cargo xtask flash l552      # or l562
+
+# Legacy shell flow:
 ./debug.sh
 ```
 
-This flashes both the Secure bootloader and the host application to
-internal flash via GDB + OpenOCD. On STM32L562, it also programs the
+Either path flashes both the Secure bootloader and the host application
+to internal flash via GDB + OpenOCD. On STM32L562, it also programs the
 plaintext enclave blob to external OCTOSPI flash. Connect to the
 ST-Link UART at **9600 baud**.
+
+`cargo xtask flash` additionally reverts any post-test master-key residue
+(NEVER_DO #10) so accidental key rotation in a development session does
+not leak into the next reset.
 
 ### STM32N6 (N657)
 
@@ -115,7 +135,21 @@ Note: additional diagnostic output (stack info, SAU/GTZC/MPU/RISAF
 status, HASH/AES tests) is available by building with the `boot_tests`
 feature enabled.
 
-## Smoke Tests
+## Host-Side Tests
+
+The kernel is host-buildable: it does no MMIO and depends only on the
+HAL traits, which `umbra-pal-test` satisfies in software. Run the
+host-side unit + property tests via:
+
+```bash
+cargo xtask test --host
+```
+
+This uses `umbra-pal-test` to satisfy the `umbra-hal` traits in software
+(SHA-256 via the `sha2` crate, `MmioMem` for register-level driver
+tests). No STM32 attached — these run on the laptop in CI.
+
+## On-Target Smoke Tests
 
 Automated UART validation against golden baselines:
 

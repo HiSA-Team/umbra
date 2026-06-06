@@ -1,13 +1,13 @@
 //////////////////////////////////////////////////////////////////////////////////////
-//                                                                                  //
-// Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>                      //
-// Description:                                                                     //
-//      Enclave data structures and header definitions                              //
-//                                                                                  //
+// //
+// Author: Salvatore Bramante <salvatore.bramante@imtlucca.it> //
+// Description: //
+// Enclave data structures and header definitions //
+// //
 //////////////////////////////////////////////////////////////////////////////////////
 
 // Alias to the single-source-of-truth SLOT_SIZE in ess.rs (Stage A
-// Step 1: build-time knob via .cargo/config.toml [env]). The previous
+// Step 1: build-time knob via.cargo/config.toml [env]). The previous
 // hardcoded 256 was duplicated; keeping the alias preserves callers.
 pub use crate::common::ess::SLOT_SIZE as EFB_SIZE;
 pub const UMBRA_HEADER_SIZE: u32 = 48;
@@ -20,32 +20,32 @@ pub enum EnclaveTrustLevel {
 }
 
 /// Header EFB
-///
-///     +---------------------------+
-///     |  magic (4 bytes)          |
-///     +---------------------------+
-///     |  trust_level (1 byte)     |
-///     +---------------------------+
-///     |  reserved (1 byte)        |
-///     +---------------------------+
-///     |  efbc_size (2 bytes)      |
-///     +---------------------------+
-///     |  ess_blocks (2 bytes)     |
-///     +---------------------------+
-///     |  code_size (4 bytes)      |  encrypted blocks only, NOT incl. reloc table
-///     +---------------------------+
-///     |  reloc_count (2 bytes)    |  static-PIE R_ARM_ABS32 reloc entries
-///     +---------------------------+  appended after the encrypted blocks
-///     |  hmac (32 bytes)          |
-///     +---------------------------+
-///
+/// ```text
+/// +---------------------------+
+/// | magic (4 bytes) |
+/// +---------------------------+
+/// | trust_level (1 byte) |
+/// +---------------------------+
+/// | reserved (1 byte) |
+/// +---------------------------+
+/// | efbc_size (2 bytes) |
+/// +---------------------------+
+/// | ess_blocks (2 bytes) |
+/// +---------------------------+
+/// | code_size (4 bytes) | encrypted blocks only, NOT incl. reloc table
+/// +---------------------------+
+/// | reloc_count (2 bytes) | static-PIE R_ARM_ABS32 reloc entries
+/// +---------------------------+ appended after the encrypted blocks
+/// | hmac (32 bytes) |
+/// +---------------------------+
+/// ```
 /// On-flash blob layout (post protect_enclave.py):
-///   [0..48)                          : this header
-///   [48..48+code_size)               : `code_size / TOTAL_BLOCK_SIZE` encrypted blocks
-///   [48+code_size..48+code_size+4*N) : `N == reloc_count` u32 plaintext-relative
-///                                       byte offsets, each marking a 32-bit slot
-///                                       to be patched with the runtime-delta on
-///                                       block install (see secure_kernel.rs).
+/// [0..48): this header
+/// [48..48+code_size): `code_size / TOTAL_BLOCK_SIZE` encrypted blocks
+/// [48+code_size..48+code_size+4*N): `N == reloc_count` u32 plaintext-relative
+/// byte offsets, each marking a 32-bit slot
+/// to be patched with the runtime-delta on
+/// block install (see secure_kernel.rs).
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct UmbraEnclaveHeader {
@@ -70,7 +70,7 @@ impl UmbraEnclaveHeader {
     pub unsafe fn from_address(addr: u32) -> Option<Self> {
         let header_ptr = addr as *const UmbraEnclaveHeader;
         let header = core::ptr::read_volatile(header_ptr);
-        
+
         if header.magic == Self::MAGIC {
             Some(header)
         } else {
@@ -94,12 +94,12 @@ impl UmbraEnclaveHeader {
 #[derive(Copy, Clone, PartialEq)]
 #[repr(u32)]
 pub enum EnclaveState {
-    Created    = 0,
-    Ready      = 1,
-    Running    = 2,
-    Suspended  = 3,
+    Created = 0,
+    Ready = 1,
+    Running = 2,
+    Suspended = 3,
     Terminated = 4,
-    Faulted    = 5,
+    Faulted = 5,
 }
 
 #[repr(C)]
@@ -123,9 +123,17 @@ pub struct EnclaveContext {
 impl EnclaveContext {
     pub const fn empty() -> Self {
         Self {
-            r4: 0, r5: 0, r6: 0, r7: 0,
-            r8: 0, r9: 0, r10: 0, r11: 0,
-            psp: 0, lr: 0, control: 0,
+            r4: 0,
+            r5: 0,
+            r6: 0,
+            r7: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            psp: 0,
+            lr: 0,
+            control: 0,
             status: EnclaveState::Created,
             result: 0,
         }
@@ -136,7 +144,7 @@ impl EnclaveContext {
 pub struct EnclaveDescriptor {
     pub id: u32,
     pub flash_base: u32,
-    pub ram_base: u32,    
+    pub ram_base: u32,
     pub code_size: u32,
     pub entry_point: u32,
     pub is_loaded: bool,

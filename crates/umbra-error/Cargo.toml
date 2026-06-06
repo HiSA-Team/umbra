@@ -1,0 +1,15 @@
+[package]
+name                   = "umbra-error"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description            = "Unified error type for the Umbra TEE — replaces ad-hoc Result<T, ()> with typed variants"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# thiserror-no-std lets us derive Error in no_std without alloc.
+thiserror-no-std = "2.0"

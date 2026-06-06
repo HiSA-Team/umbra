@@ -32,7 +32,7 @@ cd "${ROOT_DIR}"
 # `-nostdlib` rejects).
 #
 # Gated on L552/L562 because taclebench targets that architecture only.
-if [ "${MCU_VARIANT}" = "stm32l552" ] || [ "${MCU_VARIANT}" = "stm32l562" ]; then
+if [ "${MCU_VARIANT}" = "stm32l552" ]; then
     if [ -d "${ROOT_DIR}/host/stm32l552/taclebench" ]; then
         echo -e "${BOLD}Re-signing TACLeBench enclave blobs${VANILLA:-}"
         make -C "${ROOT_DIR}/host/stm32l552/taclebench" clean all

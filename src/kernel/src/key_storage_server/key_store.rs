@@ -1,4 +1,3 @@
-
 pub const KEY_SIZE: usize = 32;
 
 #[derive(Copy, Clone)]
@@ -10,12 +9,13 @@ impl Key {
     pub fn new(value: [u8; KEY_SIZE]) -> Self {
         Self { value }
     }
-    
+
     pub fn zero() -> Self {
-        Self { value: [0; KEY_SIZE] }
+        Self {
+            value: [0; KEY_SIZE],
+        }
     }
 }
-
 
 pub use crate::common::ess::MAX_KEYS;
 

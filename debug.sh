@@ -32,12 +32,45 @@ fi
 #
 # Gated on L552/L562 only; N657 uses XSPI-mapped flash at 0x70000000+
 # with a completely different sector layout.
-if [ "${MCU_VARIANT}" = "stm32l552" ] || [ "${MCU_VARIANT}" = "stm32l562" ]; then
+if [ "${MCU_VARIANT}" = "stm32l552" ]; then
     echo -e "${BOLD:-}Wiping NS-flash enclave scan range (sectors 240-255, per-sector)${VANILLA:-}"
     for sec in 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255; do
         "${FLASHER}" -c port="${PORT_NAME}" --erase "${sec}" "${sec}" \
             >/dev/null 2>&1 || echo "  (sector ${sec} skipped)"
     done
+fi
+
+# Spawn openocd between the STM32_Programmer_CLI wipe (releases ST-LINK)
+# and the GDB-driven `program_elf_*` flash (needs openocd on :3333). Per
+# memory `feedback_l562_flash_workflow.md`: don't delay between programmer
+# release and openocd attach — L562 OCTOSPI clocks can drift otherwise.
+# Same bounce pattern as tools/smoke_test_fault_runtime.sh.
+pkill -x openocd 2>/dev/null || true
+sleep 0.5
+OOCD_LOG="${OOCD_LOG:-/tmp/umbra-openocd-${MCU_VARIANT}.log}"
+echo -e "${BOLD:-}Starting openocd (log: ${OOCD_LOG})${VANILLA:-}"
+"${OPENOCD}" -f "${OPENOCD_CONFIG}" >"${OOCD_LOG}" 2>&1 &
+OOCD_PID=$!
+# Tear down openocd only on script END (EXIT covers both normal end +
+# bash exiting via signal) or explicit TERM. INT is *intentionally
+# excluded*: when the user presses Ctrl+C during the interactive GDB
+# session, they want to interrupt the running target on the chip — not
+# kill the openocd backend GDB is talking to. GDB handles SIGINT
+# internally (returns to prompt); leaving openocd alive keeps the
+# debug session usable. openocd dies at the natural end of the script,
+# when GDB has been quit cleanly.
+trap 'kill ${OOCD_PID} 2>/dev/null; wait ${OOCD_PID} 2>/dev/null; true' EXIT TERM
+# Wait up to 15s for openocd to claim port 3333.
+for _ in $(seq 1 30); do
+    if lsof -nP -iTCP:3333 -sTCP:LISTEN >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
+done
+if ! lsof -nP -iTCP:3333 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "ERROR: openocd did not come up on :3333 within 15s. Tail of ${OOCD_LOG}:" >&2
+    tail -20 "${OOCD_LOG}" >&2 || true
+    exit 1
 fi
 
 make program_elf_boot && make program_elf_host

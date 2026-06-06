@@ -24,9 +24,24 @@ set -eo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
 BOOT_DIR="${ROOT_DIR}/src/hardware/platform/stm32n657/boot"
-BOOT_ELF="${BOOT_DIR}/target/thumbv8m.main-none-eabi/release/boot"
-BOOT_BIN="${BOOT_DIR}/target/thumbv8m.main-none-eabi/release/boot.bin"
-FSBL_TRUSTED="${BOOT_DIR}/target/thumbv8m.main-none-eabi/release/boot-trusted.bin"
+
+# Source settings.sh so BOOT_CRATE_NAME / HOST_APP / HOST_DIR derive from
+# MCU_VARIANT cleanly — without this, any leftover BOOT_CRATE_NAME from a
+# previous `source ./settings.sh` for an L5xx target would win and we'd
+# try to flash umbra-l552-boot-trusted.bin against N657's XSPI2. xtask
+# sets MCU_VARIANT=stm32n657 in this script's env, so re-deriving via
+# settings.sh is correct + idempotent. debug.sh does the same on line 4.
+# shellcheck disable=SC1091
+. "${ROOT_DIR}/settings.sh" >/dev/null 2>&1
+
+# N657 boot crate is `umbra-n657-boot`; the build artifact lives under
+# the workspace target/ at ROOT_DIR. BOOT_CRATE_NAME comes from
+# settings.sh on the host or falls back to the explicit name for
+# standalone script runs.
+BOOT_CRATE_NAME="${BOOT_CRATE_NAME:-umbra-n657-boot}"
+BOOT_ELF="${ROOT_DIR}/target/thumbv8m.main-none-eabi/release/${BOOT_CRATE_NAME}"
+BOOT_BIN="${ROOT_DIR}/target/thumbv8m.main-none-eabi/release/${BOOT_CRATE_NAME}.bin"
+FSBL_TRUSTED="${ROOT_DIR}/target/thumbv8m.main-none-eabi/release/${BOOT_CRATE_NAME}-trusted.bin"
 
 # Tools — STM32CubeProgrammer install root. Override via env var, e.g. on Linux:
 #   export STM32CUBE_PROG_DIR=/opt/st/stm32cubeprog/bin
@@ -53,7 +68,9 @@ fi
 
 # Check ELF exists
 if [ ! -f "$BOOT_ELF" ]; then
-    echo "ERROR: Boot ELF not found. Run: cd $BOOT_DIR && cargo build --release"
+    echo "ERROR: Boot ELF not found at $BOOT_ELF"
+    echo "       Run: MCU_VARIANT=stm32n657 ./rebuild_all.sh"
+    echo "       (or: cargo xtask build n657)"
     exit 1
 fi
 

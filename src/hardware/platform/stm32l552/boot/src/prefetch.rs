@@ -6,9 +6,16 @@ pub unsafe fn prefetch_reachables(enclave_id: u32) {
         None => return,
     };
 
-    let enclave_idx = match kernel.ess.loaded_enclaves.iter()
+    let enclave_idx = match kernel
+        .ess
+        .loaded_enclaves
+        .iter()
         .enumerate()
-        .find(|(_, slot)| slot.as_ref().map(|e| e.descriptor.id == enclave_id).unwrap_or(false))
+        .find(|(_, slot)| {
+            slot.as_ref()
+                .map(|e| e.descriptor.id == enclave_id)
+                .unwrap_or(false)
+        })
         .map(|(i, _)| i)
     {
         Some(i) => i,

@@ -4,6 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Typed error replacing the kernel's pre-existing `Result<T, ()>` returns.
+# CryptoEngine + KeyGenerator boundaries are the first migrated sites;
+# deeper internal sites migrate alongside the umbra-api refactor.
+umbra-error = { path = "../../crates/umbra-error" }
+# The kernel consumes traits and types from the leaf `umbra-api` crate.
+# Re-export shims in `src/kernel/src/*` preserve every existing
+# `use kernel::...` call site.
+umbra-api   = { path = "../../crates/umbra-api" }
+
+# Property-based tests for invariants in `common::ess` and related
+# subsystems. Dev-dependency only, so the firmware (`thumbv8m`)
+# build does not see it — proptest needs `std`, which the test
+# build links automatically but the firmware build does not.
+[dev-dependencies]
+proptest = "1"
 
 [features]
 # Exactly one platform feature must be enabled by the boot crate. The platform
@@ -20,16 +35,17 @@ bench-eval = []
 
 umbra-speculation = []
 
+# Halt instead of system-reset on panic. Enable for local development with
+# a debugger attached. See the panic-policy ADR.
+debug-halt = []
+
 [lib]
 name = "kernel"
 path = "src/lib.rs"
 #crate-type = ["staticlib"]
 
-[profile.dev]
-panic = "abort"
-opt-level = "z"
-debug = 2 
-
-[profile.release]
-panic = "abort"
-opt-level = "z"
+# Profiles live at the workspace root since the boot crate absorbed
+# them. See /Cargo.toml [profile.dev] and [profile.release]. Note: the
+# previous `opt-level = "z"` here was never the production setting —
+# kernel is always pulled in by boot (`opt-level = 0`) which dictates
+# the actual compilation profile for the dep tree.

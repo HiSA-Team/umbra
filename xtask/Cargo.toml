@@ -1,0 +1,15 @@
+[package]
+name                   = "xtask"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish                = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace   = true
+# SIGINT absorption so `cargo xtask flash` doesn't bail on the first
+# Ctrl+C — see flash() in src/main.rs. Tiny crate, no transitive bloat.
+ctrlc            = "3.4"

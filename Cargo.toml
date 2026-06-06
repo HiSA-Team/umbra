@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "xtask",
+    "crates/umbra-pal-test",
+    "crates/umbra-hal",
+    "crates/umbra-error",
+    "crates/umbra-api",
+    "src/kernel",
+    "src/hardware/architecture/arm",
+    "src/hardware/common/peripheral_regs",
+    "src/hardware/platform/stm32l552/boot",               # umbra-l552-boot
+    "src/hardware/platform/stm32l552/drivers",            # umbra-l552-drivers
+    "src/hardware/platform/stm32n657/boot",               # umbra-n657-boot
+    "src/hardware/platform/stm32n657/drivers",            # umbra-n657-drivers
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.83"
+license      = "MIT"
+repository   = "https://github.com/HiSA-Team/umbra"
+
+[workspace.dependencies]
+# Shared between xtask and any future host-side tooling.
+anyhow = "1.0"
+clap   = { version = "4.5", features = ["derive"] }
+
+# Profiles MUST live at the workspace root in Cargo workspace mode —
+# per-crate `[profile.*]` blocks are silently ignored. Settings below
+# mirror what boot/Cargo.toml had previously, so the firmware binary
+# output is identical pre/post absorption. The kernel crate's old
+# `opt-level = "z"` was never the controlling profile in production
+# (boot's `opt-level = 0` applied to its whole dep tree).
+#
+# `panic = "abort"` is mandatory for #![no_std] no-alloc bare-metal —
+# the default `panic = "unwind"` requires a panic-unwind landing pad
+# that bare-metal does not have. Host crates (xtask, umbra-pal-test)
+# also build under abort, which is acceptable: `cargo test` handles
+# abort panics fine in current Cargo.
+
+[profile.dev]
+panic     = "abort"
+opt-level = 0
+debug     = true
+
+[profile.release]
+panic     = "abort"
+opt-level = 0           # Match boot's pre-workspace setting; flip to "z" later only after a HW-validated perf+size pass.
+debug     = true        # Symbols don't cost flash bytes on a stripped image.

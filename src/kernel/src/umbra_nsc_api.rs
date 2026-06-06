@@ -1,10 +1,10 @@
 //////////////////////////////////////////////////////////////////////////////////////
-//                                                                                  //
-// Author: Stefano Mercogliano <stefano.mercogliano@unina.it>                       //
-// Description:                                                                     //
-//      Non-Secure Callable (NSC) API declarations.                                 //
-//      Assembly veneers live in asm/arm/nsc_veneers.s (compiled via build.rs).      //
-//                                                                                  //
+// //
+// Author: Stefano Mercogliano <stefano.mercogliano@unina.it> //
+// Description: //
+// Non-Secure Callable (NSC) API declarations. //
+// Assembly veneers live in asm/arm/nsc_veneers.s (compiled via build.rs). //
+// //
 //////////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
