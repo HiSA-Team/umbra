@@ -38,19 +38,26 @@ pub fn validate_block(
     input[4 + CODE_BLOCK_SIZE..].copy_from_slice(metadata);
 
     let mut computed = [0u8; 32];
-    crypto.hmac(hmac_key, &input, &mut computed)
-          .map_err(|_| ValidationError::HmacMismatch)?;
+    crypto
+        .hmac(hmac_key, &input, &mut computed)
+        .map_err(|_| ValidationError::HmacMismatch)?;
 
     let mut diff: u8 = 0;
     let mut i: usize = 0;
-    while i < 32 { diff |= computed[i] ^ hmac_on_flash[i]; i += 1; }
-    if diff != 0 { return Err(ValidationError::HmacMismatch); }
+    while i < 32 {
+        diff |= computed[i] ^ hmac_on_flash[i];
+        i += 1;
+    }
+    if diff != 0 {
+        return Err(ValidationError::HmacMismatch);
+    }
 
     // N657 always uses AES decrypt (no OTFDEC path).
     let mut plaintext = *ciphertext;
     let iv = [0u8; 16];
-    crypto.aes_decrypt(enc_key, &iv, &mut plaintext)
-          .map_err(|_| ValidationError::DecryptFailed)?;
+    crypto
+        .aes_decrypt(enc_key, &iv, &mut plaintext)
+        .map_err(|_| ValidationError::DecryptFailed)?;
 
     Ok(ValidatedBlock {
         block_id: expected_block_id,

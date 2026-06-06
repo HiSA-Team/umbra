@@ -4,12 +4,16 @@
 
 Umbra's integrity model is formally verified using [ProVerif](https://prosecco.gforge.inria.fr/personal/bblanche/proverif/), an automatic cryptographic protocol verifier.
 
-Two models are maintained in `docs/formal/`:
+Two models cover the platforms:
 
 | Model | File | Scenario |
 |---|---|---|
 | L552 (SW AES) | `UmbraIntegrityFixValidator.pv` | HMAC over ciphertext, trusted Validator |
 | L562 (OTFDEC) | `UmbraIntegrityRaceValidatorFix.pv` | HMAC over plaintext, untrusted Validator channel |
+
+The `.pv` source files live in a developer working tree (not
+redistributed with the published repo) — request them from the
+project maintainers if you want to rerun the verification yourself.
 
 ## What Is Verified
 
@@ -29,10 +33,9 @@ These properties guarantee that an attacker cannot cause the CPU to execute unva
 
 ## Running Verification
 
-Install ProVerif, then:
+Install ProVerif, drop the `.pv` files into a working directory, then:
 
 ```bash
-cd docs/formal
 proverif UmbraIntegrityFixValidator.pv
 proverif UmbraIntegrityRaceValidatorFix.pv
 ```

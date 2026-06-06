@@ -1,7 +1,35 @@
+//! Cortex-M33 fault and exception handlers for STM32L552 (Secure side).
+//! # Stack-frame access pattern
+//! HardFault / SecureFault / BusFault paths receive only the eight words
+//! the CPU hardware-stacks (R0-R3, R12, LR, PC, xPSR). The assembly
+//! trampolines for those exceptions do NOT push R4-R11, so those callee-
+//! saved registers are unavailable in the Rust handlers. The MemManage
+//! trampoline is the exception: it does `mov r1, sp+8` after pushing
+//! R4-R11 and stashes the pointer in `LAST_FAULT_REGS` for `panic_dump`.
+//! When you need callee-saved registers for diagnostics from the other
+//! fault paths, pull them from the kernel-side context save area in
+//! `umbra-arch-arm::context` — they are saved there on every enclave
+//! preemption, not in the HW exception frame.
+//! # ESS-miss recovery contract (defended by `kernel::common::ess`)
+//! `MemManage.DACCVIOL` and `BusFault.PRECISERR` / `SecureFault.INVEP`
+//! events from MPCBB slot rejection dispatch into
+//! `Kernel::handle_ess_miss`. That call expects:
+//! 1. `mpcbb_set_slot_secure(addr, false)` invoked at entry so the DMA
+//! transfer hitting the NS alias is not silently dropped by GTZC.
+//! 2. The DMA transfer itself populates the slot from flash.
+//! 3. AES decrypt + chained-measurement validation in place.
+//! 4. `mpcbb_set_slot_secure(addr, true)` followed by `ICIALLU; DSB;
+//! ISB` so the freshly-DMA'd code is not served from a stale I-cache
+//! line on the imminent `bx lr` re-execution.
+//! 5. Exception return reruns the faulting instruction with the slot now
+//! resident (PC in the stacked frame is unchanged).
+//! Skipping any of these steps is a silent failure mode; see the ess
+//! module docs and the GTZC `mpcbb_set_slot_secure` docs for the matching
+//! ordering invariant.
 
-use core::ptr;
+use crate::raw_print::{print_hex, print_str};
 use arm::mmio::{SCB_BFAR, SCB_CFSR, SCB_HFSR, SCB_MMFAR, SCB_SFAR, SCB_SFSR};
-use crate::raw_print::{print_str, print_hex};
+use core::ptr;
 
 // Set by MemManage handler from the asm trampoline's `mov r1, sp+8`. Points
 // at saved {r4, r5, r6, r7, r8, r9, r10, r11} on MSP. Read by panic_dump
@@ -22,8 +50,10 @@ fn dump_stack_frame(sp: u32, exception_name: &str) {
     // Dump Stack Frame
     // Stack Frame: R0, R1, R2, R3, R12, LR, PC, xPSR
     let frame_ptr = sp as *const u32;
-    let regs = ["R0  ", "R1  ", "R2  ", "R3  ", "R12 ", "LR  ", "PC  ", "xPSR"];
-    
+    let regs = [
+        "R0  ", "R1  ", "R2  ", "R3  ", "R12 ", "LR  ", "PC  ", "xPSR",
+    ];
+
     for i in 0..8 {
         print_str(regs[i]);
         print_str(": 0x");
@@ -41,49 +71,53 @@ pub extern "C" fn umbra_hard_fault_handler(sp: u32, exc_return: u32) {
     print_str("\nHF ");
     unsafe {
         let frame = sp as *const u32;
-        print_hex(exc_return);                                 print_str(" ");
-        print_hex(frame.add(6).read_volatile());               print_str(" ");
-        print_hex(frame.add(7).read_volatile());               print_str(" ");
-        print_hex(frame.add(0).read_volatile());               print_str(" ");
-        print_hex(ptr::read_volatile(SCB_SFSR)); print_str(" ");
-        print_hex(ptr::read_volatile(SCB_SFAR)); print_str(" ");
-        print_hex(ptr::read_volatile(SCB_CFSR)); print_str(" ");
+        print_hex(exc_return);
+        print_str(" ");
+        print_hex(frame.add(6).read_volatile());
+        print_str(" ");
+        print_hex(frame.add(7).read_volatile());
+        print_str(" ");
+        print_hex(frame.add(0).read_volatile());
+        print_str(" ");
+        print_hex(ptr::read_volatile(SCB_SFSR));
+        print_str(" ");
+        print_hex(ptr::read_volatile(SCB_SFAR));
+        print_str(" ");
+        print_hex(ptr::read_volatile(SCB_CFSR));
+        print_str(" ");
         print_hex(ptr::read_volatile(SCB_HFSR));
     }
     print_str("\n");
-    loop {}
+    kernel::common::panic_policy::handle_fault();
 }
 
 #[no_mangle]
 pub extern "C" fn umbra_nmi_handler(sp: u32) {
     dump_stack_frame(sp, "NMI");
-    loop {}
+    kernel::common::panic_policy::handle_fault();
 }
 
 /// MemManage fault handler. Three cases:
-///
-///   IACCVIOL @ PC=0xFFFFFFFE — normal end-of-task sentinel. Enclaves are
-///                              launched with LR=0xFFFFFFFF; the final
-///                              `bx lr` in thread mode jumps to 0xFFFFFFFE
-///                              (Thumb bit stripped), an instruction fetch
-///                              into unmapped space. Route to the terminate
-///                              path so `umbra_enclave_enter_imp` sees
-///                              `EnclaveState::Terminated`.
-///   IACCVIOL  (bit 0)        — instruction fetch violation; faulting address
-///                              is the stacked PC (MMFAR is NOT updated).
-///   DACCVIOL  (bit 1)        — data access violation (e.g. literal-pool load
-///                              across a block boundary); MMFAR holds the
-///                              faulting address when MMARVALID (bit 7) is set.
-///
+/// IACCVIOL @ PC=0xFFFFFFFE — normal end-of-task sentinel. Enclaves are
+/// launched with LR=0xFFFFFFFF; the final
+/// `bx lr` in thread mode jumps to 0xFFFFFFFE
+/// (Thumb bit stripped), an instruction fetch
+/// into unmapped space. Route to the terminate
+/// path so `umbra_enclave_enter_imp` sees
+/// `EnclaveState::Terminated`.
+/// IACCVIOL (bit 0) — instruction fetch violation; faulting address
+/// is the stacked PC (MMFAR is NOT updated).
+/// DACCVIOL (bit 1) — data access violation (e.g. literal-pool load
+/// across a block boundary); MMFAR holds the
+/// faulting address when MMARVALID (bit 7) is set.
 /// Both violation sub-types are dispatched to `Kernel::handle_ess_miss` so
 /// enclave code with cross-block literal pools works transparently.
-///
 /// Return value (consumed by the asm trampoline in `startup.rs`):
-///   * `0`      — RECOVER: trampoline restores the original EXC_RETURN and
-///                resumes the enclave (re-runs the faulting instruction).
-///   * non-zero — TERMINATE: trampoline stores the value into the SVC-entry
-///                stacked r0 slot on MSP so `umbra_enclave_enter_imp` sees
-///                it as the encoded status.
+/// * `0` — RECOVER: trampoline restores the original EXC_RETURN and
+/// resumes the enclave (re-runs the faulting instruction).
+/// * non-zero — TERMINATE: trampoline stores the value into the SVC-entry
+/// stacked r0 slot on MSP so `umbra_enclave_enter_imp` sees
+/// it as the encoded status.
 #[no_mangle]
 pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32, msp_r4_base: u32) -> u32 {
     use kernel::common::enclave::EnclaveState;
@@ -101,9 +135,9 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32, msp_r4_base: u32) ->
     let cfsr_val = ptr::read_volatile(cfsr);
     let mmfsr = (cfsr_val & 0xFF) as u8;
 
-    let is_iaccviol  = (mmfsr & 0x01) != 0;
-    let is_daccviol  = (mmfsr & 0x02) != 0;
-    let mmar_valid   = (mmfsr & 0x80) != 0;
+    let is_iaccviol = (mmfsr & 0x01) != 0;
+    let is_daccviol = (mmfsr & 0x02) != 0;
+    let mmar_valid = (mmfsr & 0x80) != 0;
 
     if !is_iaccviol && !(is_daccviol && mmar_valid) {
         panic_dump(psp, cfsr_val, "MemManage: unrecoverable");
@@ -112,7 +146,11 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32, msp_r4_base: u32) ->
     // Read stacked PC up front — needed both for the end-of-task sentinel
     // check and for IACCVIOL fault-address lookup.
     let frame = psp as *const u32;
-    let raw_pc = if is_iaccviol { ptr::read_volatile(frame.add(6)) } else { 0 };
+    let raw_pc = if is_iaccviol {
+        ptr::read_volatile(frame.add(6))
+    } else {
+        0
+    };
 
     // End-of-task sentinel: LR=0xFFFFFFFF → `bx lr` jumps to 0xFFFFFFFE.
     if raw_pc == 0xFFFF_FFFE {
@@ -136,17 +174,20 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32, msp_r4_base: u32) ->
     {
         let kernel = match crate::secure_kernel::Kernel::get() {
             Some(k) => k,
-            None    => panic_dump(psp, cfsr_val, "MemManage: no kernel"),
+            None => panic_dump(psp, cfsr_val, "MemManage: no kernel"),
         };
         let (enclave_id, block_idx) = match kernel.lookup_faulting_block(fault_addr) {
             Some(pair) => pair,
-            None       => panic_dump(psp, cfsr_val, "MemManage: addr outside any enclave"),
+            None => panic_dump(psp, cfsr_val, "MemManage: addr outside any enclave"),
         };
         let mut dma = match drivers::dma::Dma::new() {
             Some(d) => d,
-            None    => panic_dump(psp, cfsr_val, "MemManage: DMA unavailable"),
+            None => panic_dump(psp, cfsr_val, "MemManage: DMA unavailable"),
         };
-        if kernel.handle_ess_miss(enclave_id, block_idx, &mut dma, true).is_err() {
+        if kernel
+            .handle_ess_miss(enclave_id, block_idx, &mut dma, true)
+            .is_err()
+        {
             panic_dump(psp, cfsr_val, "MemManage: handle_ess_miss failed");
         }
         ptr::write_volatile(cfsr, mmfsr as u32);
@@ -170,7 +211,6 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32, msp_r4_base: u32) ->
 /// to execute one fires INVEP. We classify, walk the stack frame for the
 /// stacked PC, and dispatch to the same `Kernel::handle_ess_miss` the
 /// MemManage path uses.
-///
 /// Tail-called from the assembly trampoline in `startup.rs`; must not return
 /// on unrecoverable paths. Success path returns via `bx lr`, which becomes
 /// exception-return and re-issues the faulting instruction.
@@ -194,17 +234,20 @@ pub unsafe extern "C" fn umbra_secure_fault_handler(sp: u32) {
     {
         let kernel = match crate::secure_kernel::Kernel::get() {
             Some(k) => k,
-            None    => panic_dump(sp, sfsr_val, "SecureFault: no kernel"),
+            None => panic_dump(sp, sfsr_val, "SecureFault: no kernel"),
         };
         let (enclave_id, block_idx) = match kernel.lookup_faulting_block(stacked_pc) {
             Some(pair) => pair,
-            None       => panic_dump(sp, sfsr_val, "SecureFault: PC outside any enclave"),
+            None => panic_dump(sp, sfsr_val, "SecureFault: PC outside any enclave"),
         };
         let mut dma = match drivers::dma::Dma::new() {
             Some(d) => d,
-            None    => panic_dump(sp, sfsr_val, "SecureFault: DMA unavailable"),
+            None => panic_dump(sp, sfsr_val, "SecureFault: DMA unavailable"),
         };
-        if kernel.handle_ess_miss(enclave_id, block_idx, &mut dma, true).is_err() {
+        if kernel
+            .handle_ess_miss(enclave_id, block_idx, &mut dma, true)
+            .is_err()
+        {
             panic_dump(sp, sfsr_val, "SecureFault: handle_ess_miss failed");
         }
         // Clear the SFSR write-1-to-clear bits for the next fault.
@@ -228,12 +271,15 @@ fn panic_dump(sp: u32, cfsr: u32, reason: &str) -> ! {
     // BusFault / SecureFault paths leave LAST_FAULT_REGS = None.
     if let Some(regs) = unsafe { LAST_FAULT_REGS } {
         let r = regs as *const u32;
-        let labels = ["R4  ", "R5  ", "R6  ", "R7  ",
-                      "R8  ", "R9  ", "R10 ", "R11 "];
+        let labels = [
+            "R4  ", "R5  ", "R6  ", "R7  ", "R8  ", "R9  ", "R10 ", "R11 ",
+        ];
         for (i, lbl) in labels.iter().enumerate() {
             print_str(lbl);
             print_str(": 0x");
-            unsafe { print_hex(r.add(i).read_volatile()); }
+            unsafe {
+                print_hex(r.add(i).read_volatile());
+            }
             print_str("\n");
         }
     }
@@ -245,31 +291,36 @@ fn panic_dump(sp: u32, cfsr: u32, reason: &str) -> ! {
     // straightforward — the valid bit tells you whether to trust the value.
     unsafe {
         let mmfar = ptr::read_volatile(SCB_MMFAR);
-        let bfar  = ptr::read_volatile(SCB_BFAR);
-        print_str("MMFAR: 0x"); print_hex(mmfar); print_str("\n");
-        print_str("BFAR:  0x"); print_hex(bfar);  print_str("\n");
+        let bfar = ptr::read_volatile(SCB_BFAR);
+        print_str("MMFAR: 0x");
+        print_hex(mmfar);
+        print_str("\n");
+        print_str("BFAR:  0x");
+        print_hex(bfar);
+        print_str("\n");
         let sfar = ptr::read_volatile(SCB_SFAR);
         let sfsr = ptr::read_volatile(SCB_SFSR);
-        print_str("SFAR:  0x"); print_hex(sfar); print_str("\n");
-        print_str("SFSR:  0x"); print_hex(sfsr); print_str("\n");
+        print_str("SFAR:  0x");
+        print_hex(sfar);
+        print_str("\n");
+        print_str("SFSR:  0x");
+        print_hex(sfsr);
+        print_str("\n");
     }
     print_str("Reason: ");
     print_str(reason);
     print_str("\n");
-    loop { core::hint::spin_loop(); }
+    kernel::common::panic_policy::handle_fault();
 }
 
 /// BusFault handler. On STM32L5, MPCBB slot-level rejection of a secure
 /// access raises BusFault with two recoverable sub-types:
-///
-///   IBUSERR   (bit 8)  — instruction fetch into an NS-marked slot.
-///   PRECISERR (bit 9)  — data access (e.g. literal-pool load) into an
-///                         NS-marked slot; BFAR holds the faulting address.
-///
+/// IBUSERR (bit 8) — instruction fetch into an NS-marked slot.
+/// PRECISERR (bit 9) — data access (e.g. literal-pool load) into an
+/// NS-marked slot; BFAR holds the faulting address.
 /// Both are routed through `Kernel::handle_ess_miss` so enclave code can
 /// freely use PC-relative literal pools / `adr` across block boundaries
 /// without the developer having to worry about block layout.
-///
 /// Tail-called from the assembly trampoline; must not return on
 /// unrecoverable paths.
 #[no_mangle]
@@ -278,9 +329,9 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
     let cfsr_val = ptr::read_volatile(cfsr);
     let bfsr = ((cfsr_val >> 8) & 0xFF) as u8;
 
-    let is_ibuserr  = (bfsr & 0x01) != 0;  // bit 8 of CFSR
-    let is_preciserr = (bfsr & 0x02) != 0;  // bit 9 of CFSR
-    let bfar_valid   = (bfsr & 0x80) != 0;  // bit 15 of CFSR
+    let is_ibuserr = (bfsr & 0x01) != 0; // bit 8 of CFSR
+    let is_preciserr = (bfsr & 0x02) != 0; // bit 9 of CFSR
+    let bfar_valid = (bfsr & 0x80) != 0; // bit 15 of CFSR
 
     if !is_ibuserr && !(is_preciserr && bfar_valid) {
         panic_dump(sp, cfsr_val, "BusFault: unrecoverable");
@@ -303,17 +354,20 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
     {
         let kernel = match crate::secure_kernel::Kernel::get() {
             Some(k) => k,
-            None    => panic_dump(sp, cfsr_val, "BusFault: no kernel"),
+            None => panic_dump(sp, cfsr_val, "BusFault: no kernel"),
         };
         let (enclave_id, block_idx) = match kernel.lookup_faulting_block(fault_addr) {
             Some(pair) => pair,
-            None       => panic_dump(sp, cfsr_val, "BusFault: addr outside any enclave"),
+            None => panic_dump(sp, cfsr_val, "BusFault: addr outside any enclave"),
         };
         let mut dma = match drivers::dma::Dma::new() {
             Some(d) => d,
-            None    => panic_dump(sp, cfsr_val, "BusFault: DMA unavailable"),
+            None => panic_dump(sp, cfsr_val, "BusFault: DMA unavailable"),
         };
-        if kernel.handle_ess_miss(enclave_id, block_idx, &mut dma, true).is_err() {
+        if kernel
+            .handle_ess_miss(enclave_id, block_idx, &mut dma, true)
+            .is_err()
+        {
             panic_dump(sp, cfsr_val, "BusFault: handle_ess_miss failed");
         }
         ptr::write_volatile(cfsr, (bfsr as u32) << 8);
@@ -329,24 +383,21 @@ pub unsafe extern "C" fn umbra_bus_fault_handler(sp: u32) {
 
 /// UsageFault dispatcher for enclave context. Called from the assembly
 /// trampoline in `startup.rs` with `psp` = the enclave's stacked frame base.
-///
 /// Three sub-types matter in this build:
-///
-///   UNDEFINSTR (UFSR bit 0)  — evicted ESS block fetch: the UDF pattern
-///                              0xDEDE_DEDE reached the decoder. Dispatch to
-///                              `Kernel::handle_ess_miss` to reload the block
-///                              and resume the faulting instruction.
-///   INVSTATE   (UFSR bit 1)  — `bx lr` against the sentinel LR=0xFFFFFFFF
-///                              set up by `umbra_enclave_enter_imp`. This is
-///                              how the enclave signals normal end-of-task.
-///   *other*                  — genuine enclave misbehavior.
-///
+/// UNDEFINSTR (UFSR bit 0) — evicted ESS block fetch: the UDF pattern
+/// 0xDEDE_DEDE reached the decoder. Dispatch to
+/// `Kernel::handle_ess_miss` to reload the block
+/// and resume the faulting instruction.
+/// INVSTATE (UFSR bit 1) — `bx lr` against the sentinel LR=0xFFFFFFFF
+/// set up by `umbra_enclave_enter_imp`. This is
+/// how the enclave signals normal end-of-task.
+/// *other* — genuine enclave misbehavior.
 /// Return value:
-///   * `0`               — trampoline takes the RECOVER path, restoring the
-///                         original EXC_RETURN and resuming the enclave.
-///   * non-zero          — trampoline takes the TERMINATE path, storing the
-///                         value as the SVC return code for
-///                         `umbra_enclave_enter_imp`.
+/// * `0` — trampoline takes the RECOVER path, restoring the
+/// original EXC_RETURN and resuming the enclave.
+/// * non-zero — trampoline takes the TERMINATE path, storing the
+/// value as the SVC return code for
+/// `umbra_enclave_enter_imp`.
 #[no_mangle]
 pub unsafe extern "C" fn umbra_usage_fault_dispatch(psp: u32) -> u32 {
     use kernel::common::enclave::EnclaveState;
@@ -355,7 +406,7 @@ pub unsafe extern "C" fn umbra_usage_fault_dispatch(psp: u32) -> u32 {
     let cfsr_val = ptr::read_volatile(cfsr_ptr);
     let ufsr = (cfsr_val >> 16) as u16;
     let is_undefinstr = (ufsr & 0x01) != 0;
-    let is_invstate   = (ufsr & 0x02) != 0;
+    let is_invstate = (ufsr & 0x02) != 0;
 
     #[cfg(feature = "ess_miss_recovery")]
     if is_undefinstr {
@@ -367,9 +418,7 @@ pub unsafe extern "C" fn umbra_usage_fault_dispatch(psp: u32) -> u32 {
         let normalized_pc = stacked_pc & !0x1000_0000u32;
 
         if let Some(kernel) = crate::secure_kernel::Kernel::get() {
-            if let Some((enclave_id, block_idx)) =
-                kernel.lookup_faulting_block(normalized_pc)
-            {
+            if let Some((enclave_id, block_idx)) = kernel.lookup_faulting_block(normalized_pc) {
                 if let Some(mut dma) = drivers::dma::Dma::new() {
                     match kernel.handle_ess_miss(enclave_id, block_idx, &mut dma, true) {
                         Ok(()) => {
@@ -401,10 +450,7 @@ pub unsafe extern "C" fn umbra_usage_fault_dispatch(psp: u32) -> u32 {
 /// Common UsageFault terminate path. Clears the entire UFSR, marks the
 /// enclave context with the given state, disables SysTick, and encodes the
 /// `(enclave_id, state, result)` triple expected by `umbra_enclave_enter_imp`.
-unsafe fn usage_fault_terminate(
-    psp: u32,
-    state: kernel::common::enclave::EnclaveState,
-) -> u32 {
+unsafe fn usage_fault_terminate(psp: u32, state: kernel::common::enclave::EnclaveState) -> u32 {
     use kernel::common::enclave::EnclaveContext;
 
     // UFSR occupies CFSR bits [31:16]; clear every sub-type we might observe.
@@ -429,26 +475,23 @@ unsafe fn usage_fault_terminate(
     kernel.disable_systick();
     let enclave_id = kernel.current_enclave_id.unwrap_or(0);
 
-    ((enclave_id & 0xFFFF) << 16)
-        | ((state as u32 & 0xFF) << 8)
-        | (result & 0xFF)
+    ((enclave_id & 0xFFFF) << 16) | ((state as u32 & 0xFF) << 8) | (result & 0xFF)
 }
 
 #[no_mangle]
 pub extern "C" fn umbra_usage_fault_handler(sp: u32) {
     dump_stack_frame(sp, "UsageFault");
-    loop {}
+    kernel::common::panic_policy::handle_fault();
 }
 
 #[no_mangle]
 pub extern "C" fn umbra_debug_mon_handler(_sp: u32) {
     print_str("\n[DebugMon] Handler Called\n");
-    loop {}
+    kernel::common::panic_policy::handle_fault();
 }
 
 #[no_mangle]
-pub extern "C" fn umbra_pendsv_handler(_sp: u32) {
-}
+pub extern "C" fn umbra_pendsv_handler(_sp: u32) {}
 
 #[no_mangle]
 pub extern "C" fn umbra_systick_handler(ctx_ptr: *mut u8) -> u32 {
@@ -469,13 +512,18 @@ pub extern "C" fn umbra_systick_handler(ctx_ptr: *mut u8) -> u32 {
         }
     };
 
-    unsafe { kernel.disable_systick(); }
+    unsafe {
+        kernel.disable_systick();
+    }
 
     let enclave_id = kernel.current_enclave_id.unwrap_or(0);
 
     #[cfg(feature = "ess_miss_recovery")]
     {
-        if let Some(enclave) = kernel.ess.loaded_enclaves.iter_mut()
+        if let Some(enclave) = kernel
+            .ess
+            .loaded_enclaves
+            .iter_mut()
             .flatten()
             .find(|e| e.descriptor.id == enclave_id)
         {
@@ -492,8 +540,7 @@ pub extern "C" fn umbra_systick_handler(ctx_ptr: *mut u8) -> u32 {
         }
     }
 
-    ((enclave_id & 0xFFFF) << 16)
-        | ((EnclaveState::Suspended as u32 & 0xFF) << 8)
+    ((enclave_id & 0xFFFF) << 16) | ((EnclaveState::Suspended as u32 & 0xFF) << 8)
 }
 
 #[no_mangle]
@@ -515,10 +562,11 @@ pub extern "C" fn umbra_yield_handler(ctx_ptr: *mut u8) -> u32 {
         }
     };
 
-    unsafe { kernel.disable_systick(); }
+    unsafe {
+        kernel.disable_systick();
+    }
 
     let enclave_id = kernel.current_enclave_id.unwrap_or(0);
 
-    ((enclave_id & 0xFFFF) << 16)
-        | ((EnclaveState::Suspended as u32 & 0xFF) << 8)
+    ((enclave_id & 0xFFFF) << 16) | ((EnclaveState::Suspended as u32 & 0xFF) << 8)
 }

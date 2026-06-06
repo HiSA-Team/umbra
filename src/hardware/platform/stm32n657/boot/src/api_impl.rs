@@ -1,20 +1,18 @@
 //! NSC API implementations for STM32N657.
-//!
 //! These `_imp` functions are called by the NSC veneers in
 //! kernel/asm/arm/nsc_veneers.s. The veneers do `sg`, push the link, BL
 //! into the implementation, then BXNS back to the NS host.
-//!
 //! Responsibilities:
-//!   - `umbra_enclave_create_imp` validates the UMBR header at the supplied
-//!     flash address, allocates ESS via the kernel allocator, copies block 0
-//!     from flash via `kernel.load_block_n657`, UDF-fills the remaining
-//!     blocks, and registers the enclave.
-//!   - `umbra_enclave_enter_imp` / `_exit_imp` / `_status_imp` drive enclave
-//!     execution; the kernel API is platform-agnostic now that ESS layout
-//!     is feature-gated.
-//!   - The UsageFault dispatcher in handlers.rs reuses
-//!     `kernel.load_block_n657` to fetch a faulting (UDF-filled) block on
-//!     demand.
+//! - `umbra_enclave_create_imp` validates the UMBR header at the supplied
+//! flash address, allocates ESS via the kernel allocator, copies block 0
+//! from flash via `kernel.load_block_n657`, UDF-fills the remaining
+//! blocks, and registers the enclave.
+//! - `umbra_enclave_enter_imp` / `_exit_imp` / `_status_imp` drive enclave
+//! execution; the kernel API is platform-agnostic now that ESS layout
+//! is feature-gated.
+//! - The UsageFault dispatcher in handlers.rs reuses
+//! `kernel.load_block_n657` to fetch a faulting (UDF-filled) block on
+//! demand.
 
 use arm::mmio::{ICIALLU, MPU_RBAR, MPU_RLAR, MPU_RNR};
 use kernel::common::enclave::{
@@ -27,26 +25,47 @@ use kernel::common::ess::{
 use crate::secure_kernel::{
     Kernel, BLOCK_META_OFFSET, BLOCK_META_SIZE, CODE_BLOCK_SIZE, TOTAL_BLOCK_SIZE,
 };
+use umbra_error::UmbraError;
 
 static mut NEXT_ENCLAVE_ID: u32 = 1;
 
+/// Map a typed [`UmbraError`] onto the frozen NSC ABI `u32` status code.
+/// Mirror of the L552 `api_impl::nsc_status`; the NS host only tests
+/// `id >= 0xFFFF_FFF0` (`host/stm32n657/.../main.c`), so the per-variant
+/// codes are for log/diagnosis clarity, not host branching.
+fn nsc_status(e: UmbraError) -> u32 {
+    match e {
+        UmbraError::EnclaveNotFound { .. } => 0xFFFF_FFF0,
+        UmbraError::EnclaveStateInvalid => 0xFFFF_FFF2,
+        UmbraError::EnclaveAlreadyLoaded { .. } => 0xFFFF_FFF4,
+        UmbraError::DmaTimeout => 0xFFFF_FFF5,
+        UmbraError::NscArgInvalid { .. } => 0xFFFF_FFF6,
+        UmbraError::OffsetOverflow => 0xFFFF_FFF7,
+        UmbraError::MeasurementMismatch { .. } => 0xFFFF_FFF8,
+        UmbraError::MemProtectDenied { .. } => 0xFFFF_FFF9,
+        UmbraError::KeyDerivation => 0xFFFF_FFFA,
+        UmbraError::LengthMismatch => 0xFFFF_FFFB,
+        UmbraError::HashHardware => 0xFFFF_FFFC,
+        UmbraError::EssRegionExhausted => 0xFFFF_FFFD,
+        UmbraError::AesHardware => 0xFFFF_FFFE,
+        UmbraError::InternalInvariant { .. } => 0xFFFF_FFFF,
+    }
+}
+
 /// Chained-measurement update for a single loaded block.
-///
 /// Builds the per-block HMAC input as `[block_id (4) | code (256) |
 /// meta (32)]` — the same layout `protect_enclave.py` uses when it
 /// computes the running chain offline. The code half is read back from
 /// ESS (just installed by `load_block_n657`); the meta half comes from
-/// flash since we don't keep it in RAM. `chain_state = HMAC-SHA256(
-/// chain_state, verify_buf)`.
+/// flash since we don't keep it in RAM. `chain_state = HMAC-SHA256(/// chain_state, verify_buf)`.
 fn update_chain(
     chain_state: &mut [u8; 32],
     block_idx: u32,
     ess_base: u32,
     enclave_flash_base: u32,
     hash: &mut drivers::hash::Hash,
-) {
-    let mut verify_buf = [0u8;
-        4 + CODE_BLOCK_SIZE as usize + BLOCK_META_SIZE as usize];
+) -> umbra_error::UmbraResult<()> {
+    let mut verify_buf = [0u8; 4 + CODE_BLOCK_SIZE as usize + BLOCK_META_SIZE as usize];
 
     let id_bytes = block_idx.to_le_bytes();
     verify_buf[0] = id_bytes[0];
@@ -56,7 +75,14 @@ fn update_chain(
 
     unsafe {
         // Code half: read back from ESS where load_block_n657 just wrote it.
-        let ess_src = (ess_base + block_idx * CODE_BLOCK_SIZE) as *const u8;
+        // Checked: a corrupt block_idx must not wrap into an aliased pointer
+        // fed to read_volatile inside the measurement chain (CJ2).
+        let code_off = block_idx
+            .checked_mul(CODE_BLOCK_SIZE)
+            .ok_or(UmbraError::OffsetOverflow)?;
+        let ess_src = ess_base
+            .checked_add(code_off)
+            .ok_or(UmbraError::OffsetOverflow)? as *const u8;
         let mut i: usize = 0;
         while i < CODE_BLOCK_SIZE as usize {
             verify_buf[4 + i] = core::ptr::read_volatile(ess_src.add(i));
@@ -66,10 +92,14 @@ fn update_chain(
         // BLOCK_META_OFFSET is feature-gated in secure_kernel (0 for
         // chained_measurement, 32 for ess_miss_recovery) so referencing it
         // here keeps the constant exercised.
-        let meta_src = (enclave_flash_base
-            + UMBRA_HEADER_SIZE
-            + block_idx * TOTAL_BLOCK_SIZE
-            + BLOCK_META_OFFSET) as *const u8;
+        let blk_off = block_idx
+            .checked_mul(TOTAL_BLOCK_SIZE)
+            .ok_or(UmbraError::OffsetOverflow)?;
+        let meta_src = enclave_flash_base
+            .checked_add(UMBRA_HEADER_SIZE)
+            .and_then(|x| x.checked_add(blk_off))
+            .and_then(|x| x.checked_add(BLOCK_META_OFFSET))
+            .ok_or(UmbraError::OffsetOverflow)? as *const u8;
         let mut j: usize = 0;
         while j < BLOCK_META_SIZE as usize {
             verify_buf[4 + CODE_BLOCK_SIZE as usize + j] =
@@ -81,6 +111,7 @@ fn update_chain(
     let mut output = [0u8; 32];
     hash.hmac_sha256(chain_state, &verify_buf, &mut output);
     *chain_state = output;
+    Ok(())
 }
 
 #[no_mangle]
@@ -95,10 +126,26 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
 
     // 1. Validate flash range — XSPI2 memory-mapped at 0x70000000 (256 MB).
     if base_addr < 0x7000_0000 || base_addr >= 0x8000_0000 {
-        return 0xFFFF_FFF6;
+        return nsc_status(UmbraError::NscArgInvalid {
+            which: "base_addr out of XSPI2 range",
+        });
     }
     if base_addr & 0xF != 0 {
-        return 0xFFFF_FFF5;
+        return nsc_status(UmbraError::NscArgInvalid {
+            which: "base_addr not 16-byte-aligned",
+        });
+    }
+    // Reject re-creating an enclave from a flash base already loaded. The
+    // L552 path has always had this guard; N657 was missing it, which let a
+    // second `tee_create(same_base)` install the same blob into a new slot.
+    for slot in kernel.ess.loaded_enclaves.iter() {
+        if let Some(le) = slot {
+            if le.descriptor.flash_base == base_addr {
+                return nsc_status(UmbraError::EnclaveAlreadyLoaded {
+                    id: le.descriptor.id,
+                });
+            }
+        }
     }
 
     if unsafe { NEXT_ENCLAVE_ID } > MAX_ENCLAVES_CTX as u32 {
@@ -120,27 +167,48 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     }
 
     // 3. Allocate enough ESS slots for all blocks (code only, meta lives
-    //    on flash). num_blocks × CODE_BLOCK_SIZE.
-    let total_ram_needed = num_blocks * CODE_BLOCK_SIZE;
+    // on flash). num_blocks × CODE_BLOCK_SIZE. checked_mul mirrors the L552
+    // guard: a bloated header.code_size must not wrap and under-allocate.
+    let total_ram_needed = match num_blocks.checked_mul(CODE_BLOCK_SIZE) {
+        Some(n) => n,
+        None => return nsc_status(UmbraError::OffsetOverflow),
+    };
     let ess_addr = match kernel.ess.allocate(total_ram_needed) {
-        Some(addr) => addr,
-        None => return 0xFFFF_FFFD,
+        Ok(addr) => addr,
+        Err(e) => return nsc_status(e),
     };
 
+    // Helper macro: release the ESS slots reserved above and return the
+    // given error code. Used on every FAIL path between `allocate` and
+    // `register_enclave` to avoid leaking the slot run on tampered /
+    // stale / under-sized blobs. Without this, every chained-measurement
+    // FAIL would consume the run of ESS slots permanently — a slow leak
+    // that eventually starves the allocator for legitimate enclaves.
+    // Mirror of `ess_fail!` in stm32l552/boot/src/api_impl/enclave_create.rs:100-105.
+    // boot-chain audit finding.
+    macro_rules! ess_fail {
+        ($err:expr) => {{
+            kernel.ess.release(ess_addr, total_ram_needed);
+            return $err;
+        }};
+    }
+
     // 4. Chained measurement: seed chain_state with the master key, then
-    //    load each block sequentially from flash and fold its
-    //    [block_id | code | meta] into the running HMAC chain.
-    //    `protect_enclave.py` builds the same chain offline in numeric
-    //    order and stamps the final value into header.hmac.
+    // load each block sequentially from flash and fold its
+    // [block_id | code | meta] into the running HMAC chain.
+    // `protect_enclave.py` builds the same chain offline in numeric
+    // order and stamps the final value into header.hmac.
     kernel.begin_measurement();
     let mut hash = drivers::hash::Hash::new();
 
     let mut blk: u32 = 0;
     while blk < num_blocks {
         if let Err(e) = unsafe { kernel.load_block_n657(blk, ess_addr, base_addr) } {
-            return e;
+            ess_fail!(e);
         }
-        update_chain(&mut kernel.chain_state, blk, ess_addr, base_addr, &mut hash);
+        if let Err(e) = update_chain(&mut kernel.chain_state, blk, ess_addr, base_addr, &mut hash) {
+            ess_fail!(nsc_status(e));
+        }
         blk += 1;
     }
 
@@ -153,13 +221,11 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     }
 
     // 5. Finalize chained measurement against header.hmac. Mismatch =
-    //    the on-flash blob has been tampered with (or the host's
-    //    protect_enclave.py used a different master key).
+    // the on-flash blob has been tampered with (or the host's
+    // protect_enclave.py used a different master key).
     if kernel.finalize_measurement(&header.hmac).is_err() {
-        crate::raw_print::print_str(
-            "[UMBRASecureBoot] chained-measurement FAIL\r\n",
-        );
-        return 0xFFFF_FFF6;
+        crate::raw_print::print_str("[UMBRASecureBoot] chained-measurement FAIL\r\n");
+        ess_fail!(0xFFFF_FFF6);
     }
 
     let assigned_id = unsafe { NEXT_ENCLAVE_ID };
@@ -184,8 +250,11 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         };
         bi += 1;
     }
-    if !kernel.ess.register_enclave(descriptor, ess_addr, efbs, num_blocks as usize) {
-        return 0xFFFF_FFF8;
+    if !kernel
+        .ess
+        .register_enclave(descriptor, ess_addr, efbs, num_blocks as usize)
+    {
+        ess_fail!(0xFFFF_FFF8);
     }
 
     // Initialize enclave context: PSP frame pre-populated with sentinel LR
@@ -214,13 +283,19 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
             core::ptr::write_volatile(frame.add(3), 0);
             core::ptr::write_volatile(frame.add(4), 0);
             core::ptr::write_volatile(frame.add(5), 0xFFFF_FFFF); // LR (sentinel)
-            core::ptr::write_volatile(frame.add(6), ess_addr);     // PC = entry
-            core::ptr::write_volatile(frame.add(7), 0x0100_0000);  // xPSR (Thumb)
+            core::ptr::write_volatile(frame.add(6), ess_addr); // PC = entry
+            core::ptr::write_volatile(frame.add(7), 0x0100_0000); // xPSR (Thumb)
         }
 
         kernel.enclave_contexts[enclave_idx] = EnclaveContext {
-            r4: 0, r5: 0, r6: 0, r7: 0,
-            r8: 0, r9: 0, r10: 0, r11: 0,
+            r4: 0,
+            r5: 0,
+            r6: 0,
+            r7: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
             psp: frame_base,
             // EXC_RETURN 0xFFFFFFFD = Thread mode, PSP, Secure, FType=1 (no FP).
             lr: 0xFFFF_FFFD,
@@ -230,7 +305,9 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         };
     }
 
-    unsafe { NEXT_ENCLAVE_ID += 1; }
+    unsafe {
+        NEXT_ENCLAVE_ID += 1;
+    }
     assigned_id
 }
 
@@ -256,7 +333,7 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         }
         match found {
             Some(i) => i,
-            None => return 0xFFFF_FFF0,
+            None => return nsc_status(UmbraError::EnclaveNotFound { id: enclave_id }),
         }
     };
 
@@ -275,10 +352,9 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
                 | (ctx.result & 0xFF);
         }
         EnclaveState::Faulted => {
-            return ((enclave_id & 0xFFFF) << 16)
-                | ((EnclaveState::Faulted as u32 & 0xFF) << 8);
+            return ((enclave_id & 0xFFFF) << 16) | ((EnclaveState::Faulted as u32 & 0xFF) << 8);
         }
-        _ => return 0xFFFF_FFF2,
+        _ => return nsc_status(UmbraError::EnclaveStateInvalid),
     }
 
     ctx.status = EnclaveState::Running;
@@ -292,9 +368,9 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
     unsafe {
         let mpu_rbar = MPU_RBAR;
         let mpu_rlar = MPU_RLAR;
-        let mpu_rnr  = MPU_RNR;
+        let mpu_rnr = MPU_RNR;
 
-        let psp_base  = enclave_psp_top(enclave_idx) - ENCLAVE_PSP_STACK_SIZE;
+        let psp_base = enclave_psp_top(enclave_idx) - ENCLAVE_PSP_STACK_SIZE;
         let psp_limit = enclave_psp_top(enclave_idx) - 1;
 
         // Region 4: enclave stack — RW unprivileged, execute-never.
@@ -309,7 +385,7 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         // genuinely RO from the enclave's perspective while still letting
         // the privileged kernel write into it during ESS-miss recovery.
         if let Some(le) = &kernel.ess.loaded_enclaves[enclave_idx] {
-            let code_base  = le.start_address;
+            let code_base = le.start_address;
             let code_limit = code_base + le.descriptor.code_size - 1;
             core::ptr::write_volatile(mpu_rnr, 5);
             core::ptr::write_volatile(mpu_rbar, (code_base & 0xFFFF_FFE0) | (0b11 << 1));
@@ -319,26 +395,14 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         // reads). RW unprivileged, no execute. Backed by the INPUT_SHARED
         // MEMORY entry in host/stm32n657/object_detection/linker/memory.ld.
         core::ptr::write_volatile(mpu_rnr, 6);
-        core::ptr::write_volatile(
-            mpu_rbar,
-            (0x24080000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01,
-        );
-        core::ptr::write_volatile(
-            mpu_rlar,
-            (0x240BFFE0u32 & 0xFFFF_FFE0) | 0x01,
-        );
+        core::ptr::write_volatile(mpu_rbar, (0x24080000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01);
+        core::ptr::write_volatile(mpu_rlar, (0x240BFFE0u32 & 0xFFFF_FFE0) | 0x01);
 
         // Region 7: OUTPUT_SHARED (enclave writes detections, host reads).
         // RW unprivileged, no execute.
         core::ptr::write_volatile(mpu_rnr, 7);
-        core::ptr::write_volatile(
-            mpu_rbar,
-            (0x240C0000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01,
-        );
-        core::ptr::write_volatile(
-            mpu_rlar,
-            (0x240CFFE0u32 & 0xFFFF_FFE0) | 0x01,
-        );
+        core::ptr::write_volatile(mpu_rbar, (0x240C0000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01);
+        core::ptr::write_volatile(mpu_rlar, (0x240CFFE0u32 & 0xFFFF_FFE0) | 0x01);
 
         // Region 8: NPU activations + I/O slot at 0x342E0000. The model
         // blob's hardcoded I/O and scratch addresses span the full Secure
@@ -347,35 +411,22 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
         // size the region to the full ~880 KB span. RW unprivileged, no
         // execute.
         core::ptr::write_volatile(mpu_rnr, 8);
-        core::ptr::write_volatile(
-            mpu_rbar,
-            (0x342E0000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01,
-        );
-        core::ptr::write_volatile(
-            mpu_rlar,
-            (0x343BFFE0u32 & 0xFFFF_FFE0) | 0x01,
-        );
+        core::ptr::write_volatile(mpu_rbar, (0x342E0000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01);
+        core::ptr::write_volatile(mpu_rlar, (0x343BFFE0u32 & 0xFFFF_FFE0) | 0x01);
 
         // Region 9: NPU peripheral block from base (0x580E0000) through
         // EPOCHCTRL (0x580FE000+). Covers CLKCTRL at NPU_BASE+0x10 (the
         // enclave enables the EC clock via CLKCTRL.BGATES bit 25 before
         // configuring EPOCHCTRL) as well as the EPOCHCTRL CTRL/ADDR/IRQ
         // registers. RW unprivileged, no execute, ~128 KB.
-        //
         // Uses the SECURE alias (0x580E0000) not the NS alias (0x480E0000):
         // SECCFGR3 bit 10 = 1 (set by platform_impl.rs init_clocks) makes
         // RISUP 106 (NPU config port) Secure-only. NS-alias access from the
         // enclave would be silently dropped. The Secure alias forces
         // IDAU-S attribute on transactions, which RISUP 106 admits.
         core::ptr::write_volatile(mpu_rnr, 9);
-        core::ptr::write_volatile(
-            mpu_rbar,
-            (0x580E0000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01,
-        );
-        core::ptr::write_volatile(
-            mpu_rlar,
-            (0x580FFFE0u32 & 0xFFFF_FFE0) | 0x01,
-        );
+        core::ptr::write_volatile(mpu_rbar, (0x580E0000u32 & 0xFFFF_FFE0) | (0b01 << 1) | 0x01);
+        core::ptr::write_volatile(mpu_rlar, (0x580FFFE0u32 & 0xFFFF_FFE0) | 0x01);
 
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
@@ -425,7 +476,7 @@ pub extern "C" fn umbra_enclave_exit_imp(enclave_id: u32) -> u32 {
         }
         match found {
             Some(i) => i,
-            None => return 0xFFFF_FFF0,
+            None => return nsc_status(UmbraError::EnclaveNotFound { id: enclave_id }),
         }
     };
     if enclave_idx >= MAX_ENCLAVES_CTX {
@@ -435,13 +486,12 @@ pub extern "C" fn umbra_enclave_exit_imp(enclave_id: u32) -> u32 {
     match ctx.status {
         EnclaveState::Suspended => {
             ctx.status = EnclaveState::Terminated;
-            ((enclave_id & 0xFFFF) << 16)
-                | ((EnclaveState::Terminated as u32 & 0xFF) << 8)
+            ((enclave_id & 0xFFFF) << 16) | ((EnclaveState::Terminated as u32 & 0xFF) << 8)
         }
         EnclaveState::Terminated | EnclaveState::Faulted => {
             ((enclave_id & 0xFFFF) << 16) | ((ctx.status as u32 & 0xFF) << 8)
         }
-        _ => 0xFFFF_FFF2,
+        _ => nsc_status(UmbraError::EnclaveStateInvalid),
     }
 }
 
@@ -470,8 +520,30 @@ pub extern "C" fn umbra_enclave_status_imp(enclave_id: u32) -> u32 {
     0xFF
 }
 
+/// Max bytes that the NS host can ask us to print in one call.
+/// Per the threat-model ADR §5, this bounds NS-pointer reads
+/// from NSC veneers so a malicious `str_ptr` cannot make us read off the
+/// end of valid memory. The SAU/MPCBB raises SecureFault if the pointer
+/// lies in Secure-only memory; `panic_policy::handle_fault` then resets
+/// (or halts with `--features debug-halt`).
+const MAX_PRINT_LEN: usize = 256;
+
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]
 pub extern "C" fn umbra_debug_print_imp(str_ptr: *const u8) {
-    crate::raw_print::print_cstr(str_ptr);
+    if str_ptr.is_null() {
+        return;
+    }
+    // SAFETY: `from_raw_parts` with `MAX_PRINT_LEN` bounds the read at 256
+    // bytes. The caller is the NS host; we DO NOT trust the pointer to point
+    // to readable memory. If it points into Secure-only memory or unmapped
+    // space, the SAU/MPCBB/bus raises SecureFault/BusFault and the panic
+    // policy handles it. The bound prevents UB read past 256 bytes when the
+    // pointer is valid but the string happens to be unterminated.
+    // CAUTION: recursive-fault path (slice spans beyond a Secure-readable
+    // region while panic_policy itself is logging) is theoretically possible
+    // but untested. Negative test deferred to — see plan Step 8.4b.
+    let bytes = unsafe { core::slice::from_raw_parts(str_ptr, MAX_PRINT_LEN) };
+    let len = bytes.iter().position(|&b| b == 0).unwrap_or(MAX_PRINT_LEN);
+    crate::raw_print::print_bytes(&bytes[..len]);
 }

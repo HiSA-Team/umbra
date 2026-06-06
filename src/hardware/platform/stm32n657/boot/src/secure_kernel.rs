@@ -1,18 +1,37 @@
 //! Kernel wrapper for STM32N657.
-//!
 //! Slimmer than the L5 sibling: no DMA, no GTZC/RISAF. Block loads use
 //! CPU copy via `load_block_n657`; ESS-miss recovery flows through the
 //! UsageFault dispatcher in handlers.rs.
+//! # Decomposition target () — currently 262 LOC
+//! Mirrors L552's planned split: `init/` / `enter/` / `exit/` / `lifecycle/`.
+//! The split for N657 is smaller because the DMA-driven page-load logic
+//! lives on the L552 side; N657 only does CPU copy here.
+//! # Invariants every change MUST preserve
+//! - **CJ2 chained-measurement** — N657 uses SW SHA-256 from
+//! `drivers::hash` (see that module's doc for the RIFSC history).
+//! Bypassing or reordering the chain breaks the root of trust.
+//! - **D-cache coherency** — `load_block_n657` issues `DCCMVAC` per
+//! 32-byte line + `ICIALLU` + `DSB` + `ISB` after copying. Skipping
+//! any step produces MMFSR.IACCVIOL at the enclave's first PC.
+//! - **`lookup_faulting_block` top boundary** — currently uses
+//! `efb_count * CODE_BLOCK_SIZE` (BFS-visited subset). The L552 fix
+//! to use `descriptor.code_size` (true ESS allocation) has not yet
+//! been ported; will manifest the same trailing-data-block
+//! "outside any enclave" panic when porting heavy paper-apps. Trivial
+//! one-line change
+//! "Open follow-ups" #1).
+//! - **Panic-policy delegation** — every failure path delegates to
+//! `panic_policy::handle_fault()` per ADR 2026-panic-policy.
 
 use arm::mmio::{DCCMVAC, ICIALLU, SCB_ICSR, SYST_CSR, SYST_CVR, SYST_RVR};
-use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
-use kernel::common::ess::EnclaveSwapSpace;
 use kernel::common::enclave::EnclaveContext;
+use kernel::common::ess::EnclaveSwapSpace;
 use kernel::key_storage_server::crypto::CryptoEngine;
+use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 
 use crate::boot_measurements::{
-    MODEL_BYTECODE_ADDR, MODEL_BYTECODE_LEN, MODEL_BYTECODE_HMAC,
-    MODEL_WEIGHTS_ADDR, MODEL_WEIGHTS_LEN, MODEL_WEIGHTS_HMAC,
+    MODEL_BYTECODE_ADDR, MODEL_BYTECODE_HMAC, MODEL_BYTECODE_LEN, MODEL_WEIGHTS_ADDR,
+    MODEL_WEIGHTS_HMAC, MODEL_WEIGHTS_LEN,
 };
 
 pub struct Kernel {
@@ -40,9 +59,15 @@ pub const BLOCK_META_OFFSET: u32 = 0;
 #[cfg(all(feature = "chained_measurement", not(feature = "ess_miss_recovery")))]
 pub const BLOCK_HEADER_SIZE: u32 = 32;
 
-#[cfg(all(not(feature = "chained_measurement"), not(feature = "ess_miss_recovery")))]
+#[cfg(all(
+    not(feature = "chained_measurement"),
+    not(feature = "ess_miss_recovery")
+))]
 pub const BLOCK_META_OFFSET: u32 = 32;
-#[cfg(all(not(feature = "chained_measurement"), not(feature = "ess_miss_recovery")))]
+#[cfg(all(
+    not(feature = "chained_measurement"),
+    not(feature = "ess_miss_recovery")
+))]
 pub const BLOCK_HEADER_SIZE: u32 = 64;
 
 #[cfg(feature = "ess_miss_recovery")]
@@ -69,12 +94,17 @@ impl Kernel {
         }
     }
 
-    pub unsafe fn init_keys(&mut self) {
+    /// Populate `enc_key`/`hmac_key` from the master key via the KDF.
+    /// Returns `Err(UmbraError::KeyDerivation)` if the HASH engine wedges; the
+    /// boot boundary halts visibly rather than booting on all-zero keys (the
+    /// old body swallowed the error and returned a zero key).
+    pub unsafe fn init_keys(&mut self) -> umbra_error::UmbraResult<()> {
         if let Some(crypto) = self.crypto.as_mut() {
             let crypto: &mut dyn CryptoEngine = &mut **crypto;
-            self.enc_key = crate::key_derivation::derive_enc_key(crypto);
-            self.hmac_key = crate::key_derivation::derive_hmac_key(crypto);
+            self.enc_key = crate::key_derivation::derive_enc_key(crypto)?;
+            self.hmac_key = crate::key_derivation::derive_hmac_key(crypto)?;
         }
+        Ok(())
     }
 
     pub fn begin_measurement(&mut self) {
@@ -84,21 +114,24 @@ impl Kernel {
     pub fn finalize_measurement(&self, expected: &[u8; 32]) -> Result<(), ()> {
         let mut diff: u8 = 0;
         let mut i: usize = 0;
-        while i < 32 { diff |= self.chain_state[i] ^ expected[i]; i += 1; }
-        if diff == 0 { Ok(()) } else { Err(()) }
+        while i < 32 {
+            diff |= self.chain_state[i] ^ expected[i];
+            i += 1;
+        }
+        if diff == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 
     /// Verify NPU bytecode + weights against the boot-time chained HMAC
     /// stamped by `tools/measure_blobs.py`. Halts on mismatch — trusting an
     /// unverified blob is worse than not booting.
-    ///
     /// Algorithm: state = master_key, fold 256-byte chunks via HMAC-SHA256,
     /// zero-pad the final chunk if `data_len` isn't 256-aligned. Must stay
     /// byte-for-byte aligned with `tools/measure_blobs.py`.
-    pub fn measure_boot_blobs(
-        &self,
-        hash: &mut drivers::hash::Hash,
-    ) -> Result<(), &'static str> {
+    pub fn measure_boot_blobs(&self, hash: &mut drivers::hash::Hash) -> Result<(), &'static str> {
         self.measure_region(
             hash,
             MODEL_BYTECODE_ADDR,
@@ -132,9 +165,7 @@ impl Kernel {
             while i < 256 {
                 if off + i < len {
                     unsafe {
-                        chunk[i as usize] = core::ptr::read_volatile(
-                            (addr + off + i) as *const u8,
-                        );
+                        chunk[i as usize] = core::ptr::read_volatile((addr + off + i) as *const u8);
                     }
                 } else {
                     chunk[i as usize] = 0;
@@ -182,7 +213,22 @@ impl Kernel {
     pub fn lookup_faulting_block(&self, pc: u32) -> Option<(u32, u32)> {
         for slot in self.ess.loaded_enclaves.iter().flatten() {
             let base = slot.start_address;
-            let top = base + (slot.efb_count as u32) * CODE_BLOCK_SIZE;
+            // CJ3 DoS guard: a bloated `efb_count` makes
+            // `base + efb_count * CODE_BLOCK_SIZE` wrap below `base`, so
+            // `pc >= base && pc < top` becomes always-false for some PCs
+            // — silent denial of demand-paging. `checked_mul` +
+            // `checked_add` catch the wrap so we skip the broken slot and
+            // keep scanning. The `enclave_create` bound caps `efb_count`
+            // for newly-registered enclaves, but the per-fault lookup
+            // walks `ess.loaded_enclaves` which may include slots from
+            // regression-prone future code paths.
+            let top = match (slot.efb_count as u32)
+                .checked_mul(CODE_BLOCK_SIZE)
+                .and_then(|x| base.checked_add(x))
+            {
+                Some(v) => v,
+                None => continue,
+            };
             if pc >= base && pc < top {
                 return Some((slot.descriptor.id, (pc - base) / CODE_BLOCK_SIZE));
             }
@@ -199,17 +245,14 @@ impl Kernel {
     }
 
     /// CPU-copy block loader from XSPI2 to ESS.
-    ///
     /// Reads `CODE_BLOCK_SIZE` bytes from the protected blob on XSPI2 and
     /// copies them into the ESS slot for `block_idx`. Block layout
     /// (chained_measurement, no ess_miss_recovery): each 288-byte block is
     /// `[Meta(32) | Code(256)]`, so the code starts at
     /// `enclave_flash_base + UMBRA_HEADER_SIZE + block_idx * 288 + 32`.
-    ///
     /// MCE2 transparently decrypts blocks placed inside its region 1; the
     /// current enclave lives outside that region at 0x70090000, so
     /// memory-mapped reads return plaintext.
-    ///
     /// HMAC chained-measurement validation is performed by the caller
     /// (`kernel.chain_state` + `update_chain` + final `finalize_measurement`
     /// against the header HMAC).
@@ -221,11 +264,26 @@ impl Kernel {
     ) -> Result<(), u32> {
         use kernel::common::enclave::UMBRA_HEADER_SIZE;
 
+        // CJ3 defense-in-depth guard: `block_idx` is bounded by
+        // `num_blocks ≤ MAX_EFBS` at the `umbra_enclave_create_imp`
+        // call site. The explicit `checked_*` chain below guards against
+        // a future regression in that bound and documents the per-block
+        // arithmetic invariant.
         let flash_block_base = enclave_flash_base
-            + UMBRA_HEADER_SIZE
-            + block_idx * TOTAL_BLOCK_SIZE;
-        let code_src = (flash_block_base + BLOCK_HEADER_SIZE) as *const u8;
-        let ess_dst  = (ess_base + block_idx * CODE_BLOCK_SIZE) as *mut u8;
+            .checked_add(UMBRA_HEADER_SIZE)
+            .and_then(|x| {
+                block_idx
+                    .checked_mul(TOTAL_BLOCK_SIZE)
+                    .and_then(|y| x.checked_add(y))
+            })
+            .ok_or(0xFFFFFFF7u32)?;
+        let code_src = flash_block_base
+            .checked_add(BLOCK_HEADER_SIZE)
+            .ok_or(0xFFFFFFF7u32)? as *const u8;
+        let ess_dst = block_idx
+            .checked_mul(CODE_BLOCK_SIZE)
+            .and_then(|x| ess_base.checked_add(x))
+            .ok_or(0xFFFFFFF7u32)? as *mut u8;
 
         let mut i: u32 = 0;
         while i < CODE_BLOCK_SIZE {
@@ -238,15 +296,18 @@ impl Kernel {
         // D-cache. The enclave's instruction fetcher reads via I-cache
         // directly from RAM (separate path) and would see stale bytes,
         // faulting with MMFSR.IACCVIOL at the enclave's first PC.
-        //
         // Fix: clean each just-written 32-byte cache line to PoC via DCCMVAC,
         // then invalidate I-cache (ICIALLU) so the next fetch reloads from RAM.
         // 256 B block = 8 cache lines, so 8 register writes — cheap.
         // SCB offsets: DCCMVAC = 0x268, ICIALLU = 0x250 (cm55 ARM reference).
-        let dst_base = ess_base + block_idx * CODE_BLOCK_SIZE;
+        // C6 (cont'd): same offset as ess_dst above, but recomputed for
+        // the cache-coherency loop. Re-using ess_dst as u32 would work
+        // but keeps the cache loop's variable names + algebra
+        // identical to the original — preserved for readability.
+        let dst_base = ess_dst as u32;
         let line_size: u32 = 32;
         let aligned_start = dst_base & !(line_size - 1);
-        let end = dst_base + CODE_BLOCK_SIZE;
+        let end = dst_base.checked_add(CODE_BLOCK_SIZE).ok_or(0xFFFFFFF7u32)?;
         cortex_m::asm::dsb();
         let mut a = aligned_start;
         while a < end {

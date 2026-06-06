@@ -25,8 +25,9 @@ Umbra provides the Secure World runtime. It:
    initializes SAU, the platform memory firewall (GTZC on L5, RISAF +
    RIFSC + RIMC on N6), MPU, and peripherals before handing control to
    the Non-Secure host.
-2. **Provides APIs** — 5 NSC veneers allow the host to create, enter,
-   exit, and query enclaves.
+2. **Provides APIs** — seven NSC veneers (five functional enclave-lifecycle
+   entries plus two instrumentation veneers) allow the host to create,
+   enter, exit, and query enclaves.
 3. **Manages enclaves** — loads encrypted code from flash, validates
    integrity (HMAC-SHA256, hardware-accelerated on L562 and N657),
    decrypts (AES), and installs into Secure SRAM.

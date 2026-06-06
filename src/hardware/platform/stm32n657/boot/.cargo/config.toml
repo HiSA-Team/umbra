@@ -1,9 +1,11 @@
+# Linker scripts (`-T...memory.ld / umbra.ld / platform.ld`) flow through
+# build.rs as absolute paths derived from CARGO_MANIFEST_DIR; see
+# boot/build.rs. They are NOT declared here as `link-arg=-T<relative
+# path>` because the workspace puts the linker's CWD outside the boot
+# crate, which breaks any relative include.
 [target.thumbv8m.main-none-eabi]
 rustflags = [
   "-C", "linker=arm-none-eabi-ld",
-  "-C", "link-arg=-T../../../../../host/stm32n657/bare_metal/linker/memory.ld",
-  "-C", "link-arg=-T../../../../../linker/umbra.ld",
-  "-C", "link-arg=-T../linker/platform.ld"
 ]
 
 [build]

@@ -33,6 +33,11 @@ else
     echo -e "${FAILURE}Unsupported shell. Please use bash or zsh.${VANILLA}" >&2
     return 1 2>/dev/null || exit 1
 fi
+# Export ROOT_DIR so child processes (Make) can see it: the workspace
+# target/ at the repo root is the canonical build-output location, so
+# the Makefile needs ROOT_DIR in addition to the per-crate dirs
+# (SECBOOT_DIR, KERNEL_DIR).
+export ROOT_DIR
 
 echo -e "${SUCCESS}[shell_detection] Running in $SHELL_TYPE shell${VANILLA}"
 
@@ -135,17 +140,22 @@ export UMBRA_BENCHMARK=0
 if [ "$MCU_VARIANT" = "stm32l552" ]; then
     export MCU=stm32l552
     export BOOT_FEATURES=""
+    # Boot crate is `umbra-l552-boot`; used by Makefile BOOT_ELF_NAME
+    # to locate the compiled binary.
+    export BOOT_CRATE_NAME=umbra-l552-boot
     echo -e "${SUCCESS}[mcu_selection] Selected STM32L552 (No HW AES)${VANILLA}"
 elif [ "$MCU_VARIANT" = "stm32l562" ]; then
     # We reuse the stm32l552 platform directory but enable 562 features
     export MCU=stm32l552
     export BOOT_FEATURES="--features stm32l562"
+    export BOOT_CRATE_NAME=umbra-l552-boot
     # Override on non-macOS by setting EXTLOAD_STLDR before sourcing.
     export EXTLOAD_STLDR="${EXTLOAD_STLDR:-/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin/ExternalLoader/MX25LM51245G_STM32L562E-DK.stldr}"
     echo -e "${SUCCESS}[mcu_selection] Selected STM32L562 (HW AES Enabled)${VANILLA}"
 elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export MCU=stm32n657
     export BOOT_FEATURES=""
+    export BOOT_CRATE_NAME=umbra-n657-boot
     echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q)${VANILLA}"
 else
     echo -e "${FAILURE}[mcu_selection] Unknown MCU_VARIANT: $MCU_VARIANT${VANILLA}"

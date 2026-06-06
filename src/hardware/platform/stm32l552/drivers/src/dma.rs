@@ -1,14 +1,38 @@
-// Author: Giovanni Spera  <giovanni.spera2011@libero.it>
-//
-// STM32L5xxxx DMA and DMAMUX Driver
+// Author: Giovanni Spera <giovanni.spera2011@libero.it>
 #![allow(dead_code)]
+
+//! DMA + DMAMUX driver for STM32L5xxxx — high-level wrapper over DMA1 / DMA2.
+//! Both controllers expose 8 channels each (16 total). Channels can be
+//! reserved out-of-band so callers outside this driver retain ownership;
+//! a per-request queue ≥ #channels manages enqueue ordering.
+//! # CCR bits 17-19 (SECM / SSEC / DSEC) are RESERVED on this silicon
+//! RM0438 documents `CCR.SECM` (bit 17), `CCR.SSEC` (bit 18) and
+//! `CCR.DSEC` (bit 19) as per-channel security classification controls,
+//! but on the STM32L5 dies the driver targets they are **reserved**: the
+//! writes are silently ignored and DMA1 / DMA2 channels remain Non-Secure
+//! regardless of what the bits look like in software. This was verified
+//! live in 2026-05-28 with GDB (`CCR3 = 0x00007ACB` after the driver
+//! sets all three bits).
+//! Operational consequence: NS-only DMA + GTZC interaction. Writes from
+//! these channels to MPCBB-Secure SRAM blocks are silently dropped by
+//! GTZC (SRWILADIS=1). Anything that needs Secure-DMA-destination on
+//! L5 must either:
+//! - target a MPCBB-NS slot (the ESS recovery / force-load pattern —
+//! temporarily flip the slot to NS before issuing the DMA, then back
+//! to Secure, see `gtzc::mpcbb_set_slot_secure` docs); or
+//! - reserve a no-man's-land in the physical SRAM that no other crate
+//! touches (the `host/stm32l552/tock/boards/.../layout.ld` 32 KB
+//! carve-out at `0x2001_0000` is the canonical example).
+//! This driver leaves the bit-17-19 writes in for completeness but they
+//! are dead — do not rely on them.
+
 // This driver implements an high level Diret Memory Access (DMA) and Diret Memory Access Multiplexer (DMAMUX) peripheral present on STM32L5xxxx.
 // Both DMA1 and DMA2 (on STM32L5xxxx) can be managed by this driver, or even a custom subset of channels.
 // Channels can be reserved for use outside of this driver.
 // There is implemented a customizable sized queue(>= #channels) for requests.
 
 // Crates
-use peripheral_regs::*;
+use peripheral_regs::{MmioAccess, RealMmio};
 
 const DMA1_BASE_ADDR: u32 = 0x50020000; // Secure
 const DMA2_BASE_ADDR: u32 = 0x50020400; // Secure
@@ -24,56 +48,68 @@ const MAX_NUMBER_OF_REQUESTS: usize = 10usize;
 const NUM_OF_DMA_PERIPHERALS: DmaChannelBitmap = 2;
 const NUM_OF_CHANNEL_IN_DMA: usize = 16usize;
 
-//   _____            _     _                
-//  |  __ \          (_)   | |               
-//  | |__) |___  __ _ _ ___| |_ ___ _ __ ___ 
-//  |  _  // _ \/ _` | / __| __/ _ \ '__/ __|
-//  | | \ \  __/ (_| | \__ \ ||  __/ |  \__ \
-//  |_|  \_\___|\__, |_|___/\__\___|_|  |___/
-//               __/ |                       
-//              |___/                      
-//
-//
+// _____ _ _
+// | __ \ (_) | |
+// | |__) |___ __ _ _ ___| |_ ___ _ __ ___
+// | _ // _ \/ _` | / __| __/ _ \ '__/ __|
+// | | \ \ __/ (_| | \__ \ || __/ | \__ \
+// |_| \_\___|\__, |_|___/\__\___|_| |___/
+// __/ |
+// |___/
 // Contrary to the Reference Manual channels go to 0 to 7, not 1 to 8
-const DMA_ISR_BASE_OFFSET      : DmaRegisters = 0x00;
-const DMA_IFCR_BASE_OFFSET     : DmaRegisters = 0x04;
-fn dma_ccrx_offset(x: u32)   -> DmaRegisters {0x08 + 0x14 * x }
-fn dma_cndtrx_offset(x: u32) -> DmaRegisters {0x0C + 0x14 * x }
-fn dma_cparx_offset(x: u32)  -> DmaRegisters {0x10 + 0x14 * x }
-fn dma_cm0arx_offset(x: u32) -> DmaRegisters {0x14 + 0x14 * x }
-fn dma_cm1arx_offset(x: u32) -> DmaRegisters {0x18 + 0x14 * x }
+const DMA_ISR_BASE_OFFSET: DmaRegisters = 0x00;
+const DMA_IFCR_BASE_OFFSET: DmaRegisters = 0x04;
+fn dma_ccrx_offset(x: u32) -> DmaRegisters {
+    0x08 + 0x14 * x
+}
+fn dma_cndtrx_offset(x: u32) -> DmaRegisters {
+    0x0C + 0x14 * x
+}
+fn dma_cparx_offset(x: u32) -> DmaRegisters {
+    0x10 + 0x14 * x
+}
+fn dma_cm0arx_offset(x: u32) -> DmaRegisters {
+    0x14 + 0x14 * x
+}
+fn dma_cm1arx_offset(x: u32) -> DmaRegisters {
+    0x18 + 0x14 * x
+}
 
 // Manages the state of a Request inside the queue.
 // While the Empty state is associated to the Queue slot more than the Request,
 // the state is stored by the Request itself.
 #[derive(Default, Copy, Clone, PartialEq)]
 enum RequestSlotState {
-#[default]  Empty,
-            Ready,
-            Running,
-            Done,
+    #[default]
+    Empty,
+    Ready,
+    Running,
+    Done,
 }
 
 #[derive(Default, Copy, Clone, PartialOrd, PartialEq)]
 pub enum TransferPriority {
-#[default]  Low      = 0,
-            Medium   = 1,
-            High     = 2,
-            VeryHigh = 3,
+    #[default]
+    Low = 0,
+    Medium = 1,
+    High = 2,
+    VeryHigh = 3,
 }
 
 #[derive(Default, Copy, Clone)]
 pub enum TransferSize {
-#[default]  Byte     = 0, // 8 bit
-            HalfWord = 1, // 16 bit
-            Word     = 2, // 32 bit
-            // Reserved is not a valid value
+    #[default]
+    Byte = 0, // 8 bit
+    HalfWord = 1, // 16 bit
+    Word = 2,     // 32 bit
+                  // Reserved is not a valid value
 }
 
 #[derive(Default, Copy, Clone)]
 pub enum TransferSecurity {
-#[default] NonSecure = 0,
-           Secure    = 1,
+    #[default]
+    NonSecure = 0,
+    Secure = 1,
 }
 
 // A DMA request made by the client.
@@ -90,61 +126,76 @@ pub struct Request {
 
     // Configuration
     pub count: u32, // Number of transfer, up to 2^18 -1
-    pub cpar : u32, // Peripheral Address
+    pub cpar: u32,  // Peripheral Address
     pub cm0ar: u32, // Memory 0 Address
     pub cm1ar: u32, // Memory 1 Address
 
     pub dsec: TransferSecurity, // Destination security
     pub ssec: TransferSecurity, // Source security
-    pub ct:   bool, // Current target, used for Double-buffer mode
-    pub dbm:  bool, // Double-buffer mode
-    pub mem2mem: bool, // Memory To Memory
-    pub pl:   TransferPriority,
+    pub ct: bool,               // Current target, used for Double-buffer mode
+    pub dbm: bool,              // Double-buffer mode
+    pub mem2mem: bool,          // Memory To Memory
+    pub pl: TransferPriority,
     pub msize: TransferSize,
     pub psize: TransferSize,
     pub minc: bool, // Memory increment
     pub pinc: bool, // Peripheral increment
     pub circ: bool, // Circular mode
-    pub dir:  bool, // Direction, 0 read from peripheral, 1 read from memory
+    pub dir: bool,  // Direction, 0 read from peripheral, 1 read from memory
     pub teie: bool, // Transfer Error    Interrupt Enable
     pub htie: bool, // Half Transfer     Interrupt Enable
     pub tcie: bool, // Transfer Complete Interrupt Enable
-    
-    pub secm: bool, // Security of the channel (1 = Secure, 0 = Non-Secure)
-    pub priv_: bool, // Privilege level (1 = Privileged, 0 = Unprivileged)
 
+    pub secm: bool,  // Security of the channel (1 = Secure, 0 = Non-Secure)
+    pub priv_: bool, // Privilege level (1 = Privileged, 0 = Unprivileged)
 }
 
-// The Dma manager struct, it contains and manages all the informations of the driver
-pub struct Dma {
-    regs: [&'static mut DmaRegisters; NUM_OF_DMA_PERIPHERALS as usize],
+/// Generic over the MMIO backend so host
+/// tests can inject [`umbra_pal_test::mmio::MmioHandle`]. Default
+/// `M = RealMmio` keeps every existing `Dma::new()` call site unchanged at
+/// the source level — the firmware build monomorphises to `Dma<RealMmio>`
+/// and inlines the `volatile_register` accesses just like before.
+/// The driver holds **two** backends (`mmio[0]` for DMA1, `mmio[1]` for
+/// DMA2). On firmware they are zero-sized-after-monomorphisation copies of
+/// `RealMmio` carrying just the base address; on host tests both slots are
+/// `MmioHandle` clones (or two different in-memory backends) and the log records every
+/// CCR/NDTR/MAR/PAR write so tests can assert the CCR-EN-last sequence.
+pub struct Dma<M: MmioAccess = RealMmio> {
+    mmio: [M; NUM_OF_DMA_PERIPHERALS as usize],
     reserved_chs: [DmaChannelBitmap; NUM_OF_DMA_PERIPHERALS as usize], // A bit is set if the corrisponding channel is reserved and cannot be used.
     current_nonce: RequestNonce,
     requests: [Request; MAX_NUMBER_OF_REQUESTS],
 }
 
-impl Dma {
-    const fn _new() -> Self {
-        let regs = unsafe {[
-            &mut *(DMA1_BASE_ADDR as *mut DmaRegisters),
-            &mut *(DMA2_BASE_ADDR as *mut DmaRegisters),
-        ]};
-
-        Self {
-            regs,
-            requests: [const { Request::void_request() }; MAX_NUMBER_OF_REQUESTS],
-            current_nonce: 1,
-            reserved_chs: [0; NUM_OF_DMA_PERIPHERALS as usize],
-        }
-    }
-
+impl Dma<RealMmio> {
     /// Construct a `Dma` handle. Multiple instances are allowed by design:
     /// the ESS-miss fault handler re-creates one after `secure_boot()` has
     /// already initialised another. The `Option` return is preserved so the
     /// signature can become fallible later (e.g. once a proper singleton /
     /// global-reuse pattern lands) without breaking callers.
     pub fn new() -> Option<Self> {
-        Some(Self::_new())
+        Some(Self {
+            mmio: [RealMmio::new(DMA1_BASE_ADDR), RealMmio::new(DMA2_BASE_ADDR)],
+            requests: [const { Request::void_request() }; MAX_NUMBER_OF_REQUESTS],
+            current_nonce: 1,
+            reserved_chs: [0; NUM_OF_DMA_PERIPHERALS as usize],
+        })
+    }
+}
+
+impl<M: MmioAccess> Dma<M> {
+    /// Constructor for host-side tests — accepts two `MmioAccess` backends,
+    /// one per DMA controller. On firmware build, callers use `Dma::new()`
+    /// which monomorphises to `Dma<RealMmio>` and inlines the volatile
+    /// accesses.
+    #[allow(dead_code)]
+    pub fn new_with_mmio(dma1_mmio: M, dma2_mmio: M) -> Self {
+        Self {
+            mmio: [dma1_mmio, dma2_mmio],
+            requests: [Request::void_request(); MAX_NUMBER_OF_REQUESTS],
+            current_nonce: 1,
+            reserved_chs: [0; NUM_OF_DMA_PERIPHERALS as usize],
+        }
     }
 
     // Handle queue checks for free channels in the DMA peripherals and for
@@ -154,7 +205,7 @@ impl Dma {
         for dma_instance in 0..NUM_OF_DMA_PERIPHERALS {
             for dma_ch in 0..NUM_OF_CHANNEL_IN_DMA {
                 if !self.is_ch_free(dma_instance as u32, dma_ch as u32) {
-                    continue
+                    continue;
                 }
 
                 // Check for available request
@@ -171,12 +222,11 @@ impl Dma {
             }
         }
     }
-    
+
     // Reclaim slots whose DMA transfer has finished. The hardware auto-clears
     // CCR.EN to 0 when the channel's CNDTR reaches 0 (non-circular mode), so
     // checking `read_ccrx(dma_id, ch) & 1 == 0` for a slot in `Running` state
     // tells us the transfer is done and the slot can be reused.
-    //
     // Without this GC pass, the requests[] array fills up after
     // MAX_NUMBER_OF_REQUESTS calls (= 10) and `enqueue()` silently returns
     // None — the DMA never starts and any caller waiting on
@@ -190,11 +240,11 @@ impl Dma {
             }
             let (dma_id, ch) = match self.requests[i].channel {
                 Some(c) => c,
-                None    => continue,
+                None => continue,
             };
             if (self.read_ccrx(dma_id, ch) & 1) == 0 {
                 self.requests[i].slot_state = RequestSlotState::Empty;
-                self.requests[i].channel    = None;
+                self.requests[i].channel = None;
             }
         }
     }
@@ -212,7 +262,7 @@ impl Dma {
         // Search for the first empty slot in the array
         for i in 0..MAX_NUMBER_OF_REQUESTS {
             if self.requests[i].slot_state != RequestSlotState::Empty {
-                continue
+                continue;
             }
 
             // Empty slot, note that the write is not atomic
@@ -224,12 +274,12 @@ impl Dma {
 
             // Try to move to DMA
             self.handle_queue();
-            return Some(nonce)
+            return Some(nonce);
         }
 
         None
     }
-    
+
     fn new_nonce(&mut self) -> RequestNonce {
         let current = self.current_nonce;
 
@@ -237,18 +287,18 @@ impl Dma {
 
         current
     }
-    
+
     // Check if the given channel is free to be used.
     // A reserved channel is never free.
     // For a channel to be free to EN bit in the CCRx register must be 0.
     fn is_ch_free(&self, dma_id: u32, channel: u32) -> bool {
         // Reserved
-        let is_reserved = (self.reserved_chs[dma_id as usize] & (1<<channel)) != 0;
+        let is_reserved = (self.reserved_chs[dma_id as usize] & (1 << channel)) != 0;
         let is_enabled = (self.read_ccrx(dma_id, channel) & 1) != 0;
-        
+
         !is_reserved && !is_enabled
     }
-    
+
     // Pop a Request from the queue.
     fn pop_request(&self) -> Option<RequestNonce> {
         let mut best = 0;
@@ -258,7 +308,7 @@ impl Dma {
             if self.requests[i].slot_state != RequestSlotState::Ready {
                 continue;
             }
-            
+
             if self.requests[i].pl >= self.requests[best].pl {
                 best = i;
                 found = true;
@@ -271,15 +321,15 @@ impl Dma {
             None
         }
     }
-    
+
     // Reserve, for the specified dma peripheral the specified channel.
     // This channel will not be used for new Requests and external software
     // can use freely once running transfers are done.
     pub fn reserve_ch(&mut self, dma_id: u32, channel: u32) {
         assert!(dma_id < NUM_OF_DMA_PERIPHERALS);
-        let bit = match (1 as DmaChannelBitmap). checked_shl(channel as DmaChannelBitmap) {
+        let bit = match (1 as DmaChannelBitmap).checked_shl(channel as DmaChannelBitmap) {
             Some(x) => x,
-            None => panic!("Invalid channel in reserve_ch")
+            None => panic!("Invalid channel in reserve_ch"),
         };
 
         self.reserved_chs[dma_id as usize] |= bit;
@@ -291,22 +341,24 @@ impl Dma {
         // 1. Reserve it first so we don't use it
         self.reserve_ch(dma_id, channel_id);
 
-        unsafe {
-            // 2. Disable Channel (Clear EN bit 0)
-            let ccr_addr = dma_ccrx_offset(channel_id);
-            let mut ccr_val = read_register(self.regs[dma_id as usize], ccr_addr);
-            ccr_val &= !1; 
-            write_register(self.regs[dma_id as usize], ccr_addr, ccr_val);
+        // 2. Disable Channel (Clear EN bit 0)
+        let ccr_addr = dma_ccrx_offset(channel_id);
+        let mut ccr_val = self.mmio[dma_id as usize].read(ccr_addr);
+        ccr_val &= !1;
+        self.mmio[dma_id as usize].write(ccr_addr, ccr_val);
 
-            // 3. Set SECM = 0 (Non-Secure)
-            // SECM is Bit 17. We clear it.
-            // Also ensure PRIV is set correctly? NS access is usually Unprivileged or Privileged depending on the master.
-            // If we set SECM=0, the channel becomes visible at the Non-Secure Alias address.
-            ccr_val &= !(1 << 17); // Clear SECM
-            write_register(self.regs[dma_id as usize], ccr_addr, ccr_val);
-        }
+        // 3. Set SECM = 0 (Non-Secure)
+        // SECM is Bit 17. We clear it.
+        // Also ensure PRIV is set correctly? NS access is usually Unprivileged or Privileged depending on the master.
+        // If we set SECM=0, the channel becomes visible at the Non-Secure Alias address.
+        // NOTE: on STM32L5 silicon CCR.SECM (bit 17) is RESERVED — the write
+        // is silently ignored; see the file-header comment for the live GDB
+        // observation. The instruction is kept for explicitness so the code
+        // matches the RM0438 release sequence verbatim.
+        ccr_val &= !(1 << 17); // Clear SECM
+        self.mmio[dma_id as usize].write(ccr_addr, ccr_val);
     }
-    
+
     // Move the given Request to the specified DMA Channel. The channel is enabled and the transfer started.
     // The Request is updated accordingly.
     fn move_request_to_ch(&mut self, request_nonce: RequestNonce, dma_id: u32, channel_id: u32) {
@@ -318,53 +370,55 @@ impl Dma {
         assert!(ccr & 1 == 0); // The channel is not enabled
 
         let index = self.get_request_index(request_nonce).unwrap();
-        
-        self.requests[index as usize].channel =  Some((dma_id, channel_id));
+
+        self.requests[index as usize].channel = Some((dma_id, channel_id));
         self.requests[index as usize].slot_state = RequestSlotState::Running;
         let request = self.requests[index as usize];
 
         // Security and privilege bits persist from the previous configuration;
         // set them explicitly from the request to avoid stale values.
         let priv_: u32 = if request.priv_ { 1 << 20 } else { 0 };
-        let secm:  u32 = if request.secm { 1 << 17 } else { 0 };
+        let secm: u32 = if request.secm { 1 << 17 } else { 0 };
 
-        let new_ccr: u32 = priv_             |
-            ((request.dsec    as u32) << 19) |
-            ((request.ssec    as u32) << 18) |
-            secm                             |
-            ((request.ct      as u32) << 16) |
-            ((request.dbm     as u32) << 15) |
-            ((request.mem2mem as u32) << 14) |
-            ((request.pl      as u32) << 12) |
-            ((request.msize   as u32) << 10) |
-            ((request.psize   as u32) <<  8) |
-            ((request.minc    as u32) << 7)  |
-            ((request.pinc    as u32) << 6)  |
-            ((request.circ    as u32) << 5)  |
-            ((request.dir     as u32) << 4)  |
-            ((request.teie    as u32) << 3)  |
-            ((request.htie    as u32) << 2)  |
-            ((request.tcie    as u32) << 1)  |
-            1; // Enable
-        
-        unsafe { 
-            // Clear interrupts
-            write_register(self.regs[dma_id as usize], DMA_IFCR_BASE_OFFSET, 0xF<<(4 * channel_id));
+        let new_ccr: u32 = priv_
+            | ((request.dsec as u32) << 19)
+            | ((request.ssec as u32) << 18)
+            | secm
+            | ((request.ct as u32) << 16)
+            | ((request.dbm as u32) << 15)
+            | ((request.mem2mem as u32) << 14)
+            | ((request.pl as u32) << 12)
+            | ((request.msize as u32) << 10)
+            | ((request.psize as u32) << 8)
+            | ((request.minc as u32) << 7)
+            | ((request.pinc as u32) << 6)
+            | ((request.circ as u32) << 5)
+            | ((request.dir as u32) << 4)
+            | ((request.teie as u32) << 3)
+            | ((request.htie as u32) << 2)
+            | ((request.tcie as u32) << 1)
+            | 1; // Enable
 
-            write_register(self.regs[dma_id as usize], dma_cndtrx_offset(channel_id), request.count);
-            write_register(self.regs[dma_id as usize], dma_cparx_offset(channel_id),  request.cpar);
-            write_register(self.regs[dma_id as usize], dma_cm0arx_offset(channel_id), request.cm0ar);
-            write_register(self.regs[dma_id as usize], dma_cm1arx_offset(channel_id), request.cm1ar);
-            write_register(self.regs[dma_id as usize], dma_ccrx_offset(channel_id), new_ccr);
-        }
+        // Critical CCR-EN-last write order — the channel triggers on
+        // CCR.EN, so NDTR/PAR/MAR0/MAR1 MUST land before the CCR write.
+        // Clear interrupts
+        self.mmio[dma_id as usize].write(DMA_IFCR_BASE_OFFSET, 0xF << (4 * channel_id));
+
+        self.mmio[dma_id as usize].write(dma_cndtrx_offset(channel_id), request.count);
+        self.mmio[dma_id as usize].write(dma_cparx_offset(channel_id), request.cpar);
+        self.mmio[dma_id as usize].write(dma_cm0arx_offset(channel_id), request.cm0ar);
+        self.mmio[dma_id as usize].write(dma_cm1arx_offset(channel_id), request.cm1ar);
+        self.mmio[dma_id as usize].write(dma_ccrx_offset(channel_id), new_ccr);
     }
 
     fn with_request<F>(&self, request_nonce: RequestNonce, f: F) -> bool
-    where F: Fn(&Request) {
+    where
+        F: Fn(&Request),
+    {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
             if self.requests[i].nonce == request_nonce {
                 f(&self.requests[i]);
-                return true
+                return true;
             }
         }
 
@@ -372,11 +426,13 @@ impl Dma {
     }
 
     fn with_request_mut<F>(&mut self, request_nonce: RequestNonce, mut f: F) -> bool
-    where F: FnMut(&mut Request) {
+    where
+        F: FnMut(&mut Request),
+    {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
             if self.requests[i].nonce == request_nonce {
                 f(&mut self.requests[i]);
-                return true
+                return true;
             }
         }
 
@@ -384,31 +440,33 @@ impl Dma {
     }
 
     fn with_request_mut_env<F>(&self, request_nonce: RequestNonce, mut f: F) -> bool
-    where F: FnMut(&Request) {
+    where
+        F: FnMut(&Request),
+    {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
             if self.requests[i].nonce == request_nonce {
                 f(&self.requests[i]);
-                return true
+                return true;
             }
         }
 
         false
     }
-    
+
     fn get_request_index(&self, nonce: RequestNonce) -> Option<u32> {
         for i in 0..MAX_NUMBER_OF_REQUESTS {
             if self.requests[i].nonce == nonce {
-                return Some(i as u32)
+                return Some(i as u32);
             }
         }
 
         None
     }
-    
+
     fn is_channel_reserved(&self, dma_id: u32, channel_id: u32) -> bool {
-        self.reserved_chs[dma_id as usize] & (1<<channel_id) != 0
+        self.reserved_chs[dma_id as usize] & (1 << channel_id) != 0
     }
-    
+
     fn is_request_done(&self, request_nonce: RequestNonce) -> bool {
         let mut done = false;
         self.with_request_mut_env(request_nonce, |r| {
@@ -423,15 +481,15 @@ impl Dma {
                 done = true;
             }
         });
-        
+
         done
     }
-    
+
     fn read_ccrx(&self, dma_id: u32, channel_id: u32) -> u32 {
-        unsafe { read_register(self.regs[dma_id as usize], dma_ccrx_offset(channel_id)) }
+        self.mmio[dma_id as usize].read(dma_ccrx_offset(channel_id))
     }
     fn read_cndtrx(&self, dma_id: u32, channel_id: u32) -> u32 {
-        unsafe { read_register(self.regs[dma_id as usize], dma_cndtrx_offset(channel_id)) }
+        self.mmio[dma_id as usize].read(dma_cndtrx_offset(channel_id))
     }
 }
 
@@ -442,10 +500,10 @@ impl Request {
         Self {
             nonce: Request::VOID_NONCE,
             channel: None,
-            ..Default:: default()
+            ..Default::default()
         }
     }
-    
+
     const fn void_request() -> Self {
         Self {
             // Private fields
@@ -454,28 +512,33 @@ impl Request {
             channel: None,
 
             count: 0,
-            cpar : 0,
+            cpar: 0,
             cm0ar: 0,
             cm1ar: 0,
 
             dsec: TransferSecurity::NonSecure,
             ssec: TransferSecurity::NonSecure,
-            ct:   false,
-            dbm:  false,
+            ct: false,
+            dbm: false,
             mem2mem: false,
-            pl:   TransferPriority::Low,
+            pl: TransferPriority::Low,
             msize: TransferSize::Byte,
             psize: TransferSize::Byte,
             minc: false,
             pinc: false,
             circ: false,
-            dir:  false,
+            dir: false,
             teie: false,
             htie: false,
             tcie: true,
-            secm: true, // Default to Secure
+            secm: true,  // Default to Secure
             priv_: true, // Default to Privileged
         }
     }
 }
 
+mod copier;
+pub use copier::{CpuDmaCopier, DmaError};
+
+#[cfg(test)]
+mod tests;

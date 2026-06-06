@@ -24,8 +24,11 @@ CARGO_PATH_OPT = -Z unstable-options -C
 # debug or release
 BOOT_COMPILE_MODE = release
 BOOT_ELF_MODE = $(if $(filter debug,$(BOOT_COMPILE_MODE)),, --release)
-BOOT_ELF_PATH = ${SECBOOT_DIR}/target/${TARGET_ARCH}/${BOOT_COMPILE_MODE}
-BOOT_ELF_NAME = boot
+# The build output lives in the workspace target/ at ROOT_DIR; the boot
+# binary name is BOOT_CRATE_NAME (umbra-l552-boot / umbra-n657-boot)
+# exported by settings.sh.
+BOOT_ELF_PATH = ${ROOT_DIR}/target/${TARGET_ARCH}/${BOOT_COMPILE_MODE}
+BOOT_ELF_NAME = ${BOOT_CRATE_NAME}
 
 #########
 # Build #
@@ -73,7 +76,11 @@ secureboot_bin:
 	@$(OBJCOPY) --extract-symbol $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) $(LIB_DIR)/libumbra.a
 	
 secureboot_clean:
-	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} clean 
+	# `-p ${BOOT_CRATE_NAME}` is mandatory in workspace mode: without
+	# it, `cargo clean` nukes the entire workspace target/ — including
+	# any libkernel.a or freshly-built peer artefacts. See the same
+	# comment on `umbra_clean` below.
+	@${CARGO} ${CARGO_PATH_OPT} ${SECBOOT_DIR} clean -p ${BOOT_CRATE_NAME}
 
 #############
 # Dump Code #
@@ -102,14 +109,20 @@ secureboot_cargodump:
 # debug or release
 UMBRA_COMPILE_MODE = debug
 UMBRA_LIB_MODE = $(if $(filter debug,$(UMBRA_COMPILE_MODE)),, --release)
-UMBRA_LIB_PATH = ${KERNEL_DIR}/target/${TARGET_ARCH}/${UMBRA_COMPILE_MODE}
+# Kernel build output lives in the workspace target/ at ROOT_DIR (path
+# mirrors BOOT_ELF_PATH above).
+UMBRA_LIB_PATH = ${ROOT_DIR}/target/${TARGET_ARCH}/${UMBRA_COMPILE_MODE}
 
 umbra_build:
-	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} rustc ${UMBRA_LIB_MODE} --crate-type=staticlib 
+	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} rustc ${UMBRA_LIB_MODE} --crate-type=staticlib
 	@cp ${UMBRA_LIB_PATH}/libkernel.a ${LIB_DIR}/libumbra.a
 
 umbra_clean:
-	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} clean;
+	# `-p kernel` is mandatory in workspace mode: without it, `cargo
+	# clean` nukes the entire workspace target/ — including the boot
+	# binary just produced by `secureboot_build`, breaking the
+	# sequenced rebuild flow.
+	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} clean -p kernel;
 	@rm -f lib/*
 
 #################################################################
@@ -138,14 +151,22 @@ openocd:
 program_elf: program_elf_boot program_elf_host
 
 program_elf_boot:
+	# `set pagination off` + `set confirm off` MUST come BEFORE any
+	# command that may prompt — `add-symbol-file` (next target) asks
+	# (y or n) per design unless confirm is disabled. Pagination off
+	# prevents the `--More--` pause that hangs the GDB-as-loader path
+	# inside a non-interactive shell.
 	$(GDB) $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) \
+	-ex 'set pagination off' \
+	-ex 'set confirm off' \
 	-ex 'target extended-remote:3333' \
 	-ex 'load $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME)' \
-	-ex 'set confirm off' \
 	-ex 'q'
 
 program_elf_host:
 	$(GDB) $(HOST_ELF) \
+	-ex 'set pagination off' \
+	-ex 'set confirm off' \
 	-ex 'directory $(HOST_DIR)/src' \
 	-ex 'directory $(HOST_DIR)/app' \
 	-ex 'directory $(KERNEL_DIR)/src' \
@@ -155,7 +176,6 @@ program_elf_host:
 	-ex 'target extended-remote:3333' \
 	-ex 'add-symbol-file $(BOOT_ELF_PATH)/$(BOOT_ELF_NAME) 0x08000000' \
 	-ex 'b main' \
-	-ex 'set confirm off' \
 	-ex 'r' \
 	-ex 'load $(HOST_ELF)' \
 	-ex 'r' \
@@ -187,10 +207,34 @@ program_target: enable_security
 # --extload. The L562 target then uses the HAL target-as-oracle cipher pass
 # (OTFDEC ENC-mode + OCTOSPI PP) to overwrite it with the real ciphertext
 # in place on first boot. There is no offline encryptor.
+#
+# IMPORTANT: erase OCTOSPI sectors 0-3 (the full 16 KB OTFDEC region)
+# BEFORE writing the plaintext blob. Without this, sectors 1-3 keep
+# stale ciphertext from a previous master_key — when the boot reads
+# probe_word at 0x90000000 it gets garbage instead of the UBMR magic,
+# falls into WARM path with the new OFD key, fails to decrypt, and
+# infinite-spins in s2_fail. Surfaced once the xtask auto-rebuild UX
+# made master_key rotation happen on every flash.
+#
+# Per-sector form (vs `--erase 0 3`) matches the L552 debug.sh wipe
+# pattern that documented STM32_Programmer_CLI v2.19 multi-sector-range
+# misbehavior.
 program_enclaves_extload:
 	$(MAKE) -C $(HOST_DIR) enclaves_plain.bin
+	# Build a 16 KB padded blob covering the full OTFDEC region (sectors
+	# 0-3 at 0x90000000-0x90003FFF). The previous per-sector
+	# `--extload --erase N N` form silently no-op'd on STM32_Programmer_CLI
+	# v2.19 with the L562 extloader — leaving sectors 1-3 with stale
+	# ciphertext from a previous master_key, and the boot's WARM-path
+	# decryption attempt with today's key failed (s2_fail). Padding the
+	# download to 16 KB makes STM32_Programmer_CLI auto-erase all 4
+	# sectors in its normal download-with-erase flow, which is documented
+	# to work reliably across loaders.
+	@tr '\0' '\377' < /dev/zero | head -c 16384 > $(HOST_DIR)/enclaves_plain_padded.bin
+	@dd if=$(HOST_DIR)/enclaves_plain.bin of=$(HOST_DIR)/enclaves_plain_padded.bin conv=notrunc 2>/dev/null
+	@ls -la $(HOST_DIR)/enclaves_plain_padded.bin
 	$(FLASHER) $(CONNECT) --extload $(EXTLOAD_STLDR) \
-		--download $(HOST_DIR)/enclaves_plain.bin 0x90000000 -v
+		--download $(HOST_DIR)/enclaves_plain_padded.bin 0x90000000 -v
 
 #########
 # PHONY #

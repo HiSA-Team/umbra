@@ -4,8 +4,12 @@
 
 This page documents the **common** Secure-boot flow that every platform
 follows once execution reaches Umbra's `secure_boot()`. The flow is
-expressed as calls to the `PlatformBoot` trait (see
-[Crate Structure](crate-structure.md)).
+expressed as calls to the `PlatformBoot` trait, defined in the
+`umbra-api` leaf crate at `crates/umbra-api/src/platform.rs:10-37` and
+implemented by each `umbra-<mcu>-boot` crate. The kernel re-exports it
+for backwards compatibility, so existing `use kernel::PlatformBoot` call
+sites stay green. See [Crate Structure](crate-structure.md) for the
+dependency-graph context.
 
 The STM32L5 path enters this flow directly from reset (Umbra is the
 reset vector in internal flash). The STM32N6 path enters it after the

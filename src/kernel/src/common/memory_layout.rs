@@ -1,27 +1,26 @@
 //////////////////////////////////////////////////////////////////////////////////////
-//    __  __                                   _                            _       //
-//   |  \/  | ___ _ __ ___   ___  _ __ _   _  | |    __ _ _   _  ___  _   _| |_     //
-//   | |\/| |/ _ \ '_ ` _ \ / _ \| '__| | | | | |   / _` | | | |/ _ \| | | | __|    //
-//   | |  | |  __/ | | | | | (_) | |  | |_| | | |__| (_| | |_| | (_) | |_| | |_     //
-//   |_|  |_|\___|_| |_| |_|\___/|_|   \__, | |_____\__,_|\__, |\___/ \__,_|\__|    //
-//                                     |___/              |___/                     //
-//                                                                                  //
+// __ __ _ _ //
+// | \/ | ___ _ __ ___ ___ _ __ _ _ | | __ _ _ _ ___ _ _| |_ //
+// | |\/| |/ _ \ '_ ` _ \ / _ \| '__| | | | | | / _` | | | |/ _ \| | | | __| //
+// | | | | __/ | | | | | (_) | | | |_| | | |__| (_| | |_| | (_) | |_| | |_ //
+// |_| |_|\___|_| |_| |_|\___/|_| \__, | |_____\__,_|\__, |\___/ \__,_|\__| //
+// |___/ |___/ //
+// //
 //////////////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////////////
-//                                                                              //
-// Author: Stefano Mercogliano <stefano.mercogliano@unina.it>                   //
-//                                                                              //
-// Description:                                                                 //    
-//      Umbra sees memory as a set of logical blocks, called memory blocks.
-//      
-//                                                                              //
+// //
+// Author: Stefano Mercogliano <stefano.mercogliano@unina.it> //
+// //
+// Description: //
+// Umbra sees memory as a set of logical blocks, called memory blocks.
+// //
 //////////////////////////////////////////////////////////////////////////////////
 
 // Alias to the single-source-of-truth SLOT_SIZE in ess.rs (Stage A
-// build-time knob via .cargo/config.toml [env]).
+// build-time knob via.cargo/config.toml [env]).
 pub use crate::common::ess::SLOT_SIZE as MEMORY_BLOCK_SIZE;
-pub const MEMORY_SUPER_BLOCK_SIZE: u32 = MEMORY_BLOCK_SIZE*16;
+pub const MEMORY_SUPER_BLOCK_SIZE: u32 = MEMORY_BLOCK_SIZE * 16;
 
 //////////////////
 // Enumerations //
@@ -30,17 +29,17 @@ pub const MEMORY_SUPER_BLOCK_SIZE: u32 = MEMORY_BLOCK_SIZE*16;
 pub enum MemoryBlockAccessAttribute {
     ReadOnly,
     ReadWrite,
-    ReadExecutable
+    ReadExecutable,
 }
 
 // A memory block can be either Trusted or Untrusted
-// Some architectures supports also the TrustedGateway attribute 
+// Some architectures supports also the TrustedGateway attribute
 // (e.g. TrustZone-M NSC)
 #[derive(Copy, Clone)]
 pub enum MemoryBlockSecurityAttribute {
     Untrusted,
     Trusted,
-    TrustedGateway
+    TrustedGateway,
 }
 
 /////////////////
@@ -51,7 +50,7 @@ pub enum MemoryBlockSecurityAttribute {
 pub struct MemoryBlock {
     block_base_address: u32,
     block_access_attribute: MemoryBlockAccessAttribute,
-    block_security_attribute: MemoryBlockSecurityAttribute
+    block_security_attribute: MemoryBlockSecurityAttribute,
 }
 
 impl MemoryBlock {
@@ -97,7 +96,6 @@ impl MemoryBlock {
     pub fn set_block_security_attribute(&mut self, attribute: MemoryBlockSecurityAttribute) {
         self.block_security_attribute = attribute;
     }
-
 }
 
 /////////////////////
@@ -109,20 +107,16 @@ impl MemoryBlock {
 
 pub struct MemoryBlockList {
     memory_block: MemoryBlock,
-    memory_block_list_size: u32
+    memory_block_list_size: u32,
 }
 
 impl MemoryBlockList {
     // Create a memory block list from a memory region
-    pub fn create_from_range(
-        base_addr: u32,
-        limit_addr: u32
-    ) -> Self {
-
+    pub fn create_from_range(base_addr: u32, limit_addr: u32) -> Self {
         let mut memory_block = MemoryBlock::new();
-        memory_block.set_block_base_address(base_addr/MEMORY_BLOCK_SIZE as u32);
+        memory_block.set_block_base_address(base_addr / MEMORY_BLOCK_SIZE as u32);
 
-        let mut memory_block_list_size = (limit_addr - base_addr)/MEMORY_BLOCK_SIZE as u32;
+        let mut memory_block_list_size = (limit_addr - base_addr) / MEMORY_BLOCK_SIZE as u32;
 
         // Check if the block_num must be ceiled or not
         if limit_addr & 0x000000ff != 0 {
@@ -160,5 +154,4 @@ impl MemoryBlockList {
         memory_block.set_block_security_attribute(attribute);
         self.set_memory_block(memory_block);
     }
-
 }

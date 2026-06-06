@@ -1,20 +1,16 @@
 // Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
-//
 // EFB crypto benchmark — RESEARCH INSTRUMENTATION, NOT FOR PRODUCTION.
-//
 // `run_all()` is invoked from `platform_impl.rs` after crypto init in
 // `secure_boot()` and never returns: it prints TSV rows to UART and halts
 // with `wfi` so measurements are not contaminated by subsequent boot
 // work. Shipping a firmware image with this feature enabled will brick
 // the device on the next warm reset.
-//
 // Matrix: 2 runs x 3 scenarios = 6 data points.
-//   Run A: L552 / SW AES (AesEmulated, production default)
-//   Run B: L562 / HW AES (AesHardware, production default)
+// Run A: L552 / SW AES (AesEmulated, production default)
+// Run B: L562 / HW AES (AesHardware, production default)
 // L552 has no hardware AES peripheral, so a HW-on-L552 run does not
 // exist at the silicon level.
-//
-// See docs/superpowers/specs/2026-04-15-efb-crypto-benchmark-design.md.
+// See the design spec
 
 #[cfg(not(feature = "i_acknowledge_benchmark_is_research_only"))]
 compile_error!(
@@ -43,12 +39,11 @@ const MEASURED: u32 = 1000;
 /// `AesEmulated` software path is also data-independent up to cache
 /// effects captured by the min/mean/max reporting.
 static TEST_CIPHERTEXT: [u8; 256] = [0xA5; 256];
-static TEST_METADATA:   [u8; 32]  = [0x5A; 32];
-static TEST_KEY:        [u8; 16]  = [
-    0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
-    0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
+static TEST_METADATA: [u8; 32] = [0x5A; 32];
+static TEST_KEY: [u8; 16] = [
+    0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
 ];
-static TEST_IV:         [u8; 16]  = [0; 16];
+static TEST_IV: [u8; 16] = [0; 16];
 
 fn write_u32_dec(uart: &Uart, mut v: u32) {
     if v == 0 {
@@ -140,7 +135,7 @@ fn print_done(uart: &Uart) {
 }
 
 use drivers::aes::AesEngine;
-use drivers::hash::{Hash, Algorithm, DataType};
+use drivers::hash::{Algorithm, DataType, Hash};
 
 /// AES implementation used by the benchmark: matches each board's
 /// production default. L552 has no hardware AES peripheral, so it
@@ -155,10 +150,15 @@ type BenchAes = drivers::aes::AesEmulated;
 /// The benchmark is measuring CPU cycles, not enforcing integrity, so
 /// the digest is not compared against any expected value.
 fn hmac_verify(hash: &mut Hash, ct: &[u8; 256], meta: &[u8; 32], digest_out: &mut [u8; 32]) {
-    let mut ctx = hash.start(Algorithm::SHA256, DataType::Width8, Some(&TEST_KEY));
-    hash.update(&mut ctx, ct);
-    hash.update(&mut ctx, meta);
-    hash.finish(ctx, digest_out);
+    // Benchmark path: a HASH timeout here is a HW fault, not a measured
+    // condition — surface it as a panic rather than silently skewing cycles.
+    let mut ctx = hash
+        .start(Algorithm::SHA256, DataType::Width8, Some(&TEST_KEY))
+        .expect("bench hmac: start");
+    hash.update(&mut ctx, ct).expect("bench hmac: update ct");
+    hash.update(&mut ctx, meta)
+        .expect("bench hmac: update meta");
+    hash.finish(ctx, digest_out).expect("bench hmac: finish");
 }
 
 /// Decrypt the full 256 B test ciphertext block-by-block into `scratch`.
@@ -184,7 +184,6 @@ fn aes_decrypt_block_256(aes: &mut BenchAes, ct: &[u8; 256], scratch: &mut [u8; 
 /// the rest of `run_all`'s locals. Safe to reuse across the S1/S2/S3
 /// calls because each `measure_loop` invocation fully writes then
 /// reads the buffer before returning.
-///
 /// `#[link_section = ".bss"]` is required: at `opt-level = 0` the
 /// compiler otherwise materializes the zero initializer into `.data`,
 /// which on L562 overflows `_SECURE_BOOT_TEXT_MEMORY_` by ~1.8 KB and
@@ -194,7 +193,6 @@ static mut BENCH_SAMPLES: [u32; MEASURED as usize] = [0u32; MEASURED as usize];
 
 /// Run `f` `WARMUP + MEASURED` times, measuring the last `MEASURED`
 /// iterations individually. Returns `(min, mean, max)` in cycles.
-///
 /// Emits a 'w' character on `uart` once warmup completes, then one '.'
 /// character every 100 measured iterations, so a slow scenario (SW AES)
 /// is visibly distinct from a hang. UART prints happen outside the
@@ -222,8 +220,12 @@ fn measure_loop<F: FnMut()>(uart: &Uart, mut f: F) -> (u32, u32, u32) {
     let mut max = 0u32;
     let mut sum: u64 = 0;
     for &s in samples.iter() {
-        if s < min { min = s; }
-        if s > max { max = s; }
+        if s < min {
+            min = s;
+        }
+        if s > max {
+            max = s;
+        }
         sum += s as u64;
     }
     let mean = (sum / MEASURED as u64) as u32;
@@ -264,7 +266,16 @@ pub fn run_all(uart: &Uart) -> ! {
     // optimized build with chained_measurement off and the default build.
     print_row(uart, "boot", "S1", board, aes_impl, 0, 0, 0);
     print_row(uart, "boot", "S2", board, aes_impl, 0, 0, 0);
-    print_row(uart, "boot", "S3", board, aes_impl, load_cycles, load_cycles, load_cycles);
+    print_row(
+        uart,
+        "boot",
+        "S3",
+        board,
+        aes_impl,
+        load_cycles,
+        load_cycles,
+        load_cycles,
+    );
 
     let mut aes: BenchAes = BenchAes::new();
     let mut hash = Hash::new();

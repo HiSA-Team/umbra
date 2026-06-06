@@ -22,9 +22,25 @@
 
 - [Overview](architecture/overview.md)
 - [Crate Structure](architecture/crate-structure.md)
+- [HAL Traits](architecture/hal-traits.md)
+- [Type-State Security Domain](architecture/type-state.md)
+- [Error Handling](architecture/error-handling.md)
+- [The umbra-api Leaf Crate](architecture/api-crate.md)
 - [Boot Flow](architecture/boot-flow.md)
 - [FSBL Boot (STM32N6)](architecture/fsbl-boot.md)
 - [Enclave Swap Space](architecture/ess-model.md)
+
+# Design Decisions
+
+- [Overview](decisions/README.md)
+- [ADR 000 — Threat Model](decisions/000-threat-model.md)
+- [ADR 001 — Workspace Layout](decisions/001-workspace-layout.md)
+- [ADR 002 — UmbraError](decisions/002-umbra-error.md)
+- [ADR 003 — HAL Trait Surface](decisions/003-hal-traits.md)
+- [ADR 004 — Type-State Security Domain](decisions/004-type-state-security-domain.md)
+- [ADR 005 — NSC Boundary](decisions/005-nsc-boundary.md)
+- [ADR 006 — Master-Key Chain of Trust](decisions/006-master-key-chain.md)
+- [ADR 007 — Panic Policy](decisions/007-panic-policy.md)
 
 # Supported Hardware
 
@@ -44,6 +60,10 @@
 
 - [ProVerif Models](formal/proverif.md)
 
----
+# Contributing
 
-[Contributing](contributing.md)
+- [Overview](contributing.md)
+- [Guardrails](contributing/guardrails.md)
+  - [NEVER_DO](contributing/never-do.md)
+  - [ALWAYS_DO](contributing/always-do.md)
+  - [Code Review Checklist](contributing/code-review-checklist.md)

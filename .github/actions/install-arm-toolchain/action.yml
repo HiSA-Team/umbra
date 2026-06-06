@@ -1,11 +1,9 @@
 # Composite action: install gcc-arm-none-eabi + binutils-arm-none-eabi
 # with retries and per-attempt timeouts.
-#
 # Background: a previous CI run had one matrix job hang for 40+ minutes
 # on `sudo apt-get install` after the runner drew a slow apt mirror.
 # Wrapping each apt call in `timeout 300` turns a stuck mirror into a
 # fast failure; the retry loop then re-rolls the mirror up to 3 times.
-#
 # Local action — no third-party dependency. Reviewed for shell-injection:
 # inputs are author-controlled (none here) and apt arguments are static.
 

@@ -1,0 +1,19 @@
+[package]
+name                   = "umbra-api"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish                = false
+description            = "Leaf API contract for the Umbra TEE — trait + type definitions, no impl, no I/O."
+
+[lib]
+path = "src/lib.rs"
+
+# A LEAF crate has minimal deps. Only umbra-error (and later umbra-hal,
+# once a trait in umbra-api needs to reference one of its types). Anything
+# that would create a cycle back to kernel / boot / drivers belongs here
+# instead, so this deps list is intentionally short.
+[dependencies]
+umbra-error = { path = "../umbra-error" }

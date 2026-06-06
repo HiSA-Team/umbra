@@ -152,6 +152,79 @@ jobs:
             echo "::endgroup::"
           done
 
+  host-workspace:
+    name: cargo test (workspace, host-side)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (host target only)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-host
+
+      - name: cargo check (host members)
+        # Firmware crates target thumbv8m.main-none-eabi and run their
+        # own assembly build scripts (arm-none-eabi-as). This job runs
+        # on the host toolchain only — embedded build/check is the
+        # `cargo-check` + `feature-matrix` jobs above, which install
+        # the ARM toolchain. Narrow to host-buildable members
+        # explicitly via -p flags. The kernel is host-buildable (no
+        # MMIO, depends only on umbra-hal traits which umbra-pal-test
+        # satisfies in software) so its tests run as part of CI.
+        run: cargo check -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api --locked
+
+      - name: cargo clippy (host crates, warnings deny)
+        # Strict on the workspace leaf + host crates. Kernel has
+        # pre-existing style debt (manual_div_ceil, missing_safety_doc,
+        # unnecessary_cast, etc.) tracked separately; not blocked on
+        # it here.
+        run: cargo clippy -p xtask -p umbra-pal-test -p umbra-hal -p umbra-error -p umbra-api --all-targets --locked -- -D warnings
+
+      - name: cargo test (host members)
+        run: cargo test -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api --locked
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cargo llvm-cov (host members → lcov.info)
+        # Coverage scope mirrors the cargo test step above. Whole-workspace
+        # llvm-cov fails because cargo's feature unification activates both
+        # platform-l552 and platform-n657 on the kernel crate at once, which
+        # the ess.rs cfg-gated compile_error rejects by design. The host
+        # job's per-crate narrowing avoids that.
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov \
+            -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api \
+            --lcov --output-path lcov.info \
+            --ignore-filename-regex '(host/|lib/|tools/)'
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  file-size-cap:
+    name: file-size cap
+    runs-on: ubuntu-latest
+    # File-size cap gate (hard cap = 600 LOC, soft cap = 400 LOC) per
+    # tools/check_file_size.sh. Currently advisory; flip to required
+    # by dropping `continue-on-error` once residual soft warnings have
+    # been decomposed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: tools/check_file_size.sh
+        run: ./tools/check_file_size.sh
+
   python-lint:
     name: ruff (advisory)
     runs-on: ubuntu-latest

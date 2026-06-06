@@ -1,3 +1,8 @@
+[alias]
+# Routes `cargo xtask <subcmd>` to the xtask binary via the root
+# workspace. Subcommands: build, flash, test --host, check-binary-size.
+xtask = "run --package xtask --bin xtask --release --"
+
 [env]
 UMBRA_SLOT_SIZE_BYTES         = { value = "256",    force = false }
 UMBRA_CACHE_LIMIT             = { value = "64",     force = false }

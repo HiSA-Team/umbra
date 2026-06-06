@@ -1,14 +1,24 @@
 [package]
-name = "boot"
+name = "umbra-l552-boot"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 cortex-m = "0.7"
 arm = { path = "../../../architecture/arm" }
-drivers = { path = "../drivers" }
+# Cargo `package` alias keeps `use drivers::*` working in source code
+# while the underlying package name is unique across the workspace
+# (each platform's drivers crate uses the same `drivers` Rust name).
+drivers = { path = "../drivers", package = "umbra-l552-drivers" }
 kernel = { path = "../../../../kernel", default-features = false, features = ["platform-l552"] }
 peripheral_regs = { path = "../../../common/peripheral_regs" }
+# `crypto_impl.rs` uses `umbra_hal::Hash` directly to dispatch the
+# trait-based hash() method. Re-export through `drivers` would
+# alias-collide with `drivers::hash::Hash` (the inherent struct),
+# so the trait crate enters as a direct dep here.
+umbra-hal = { path = "../../../../../crates/umbra-hal" }
+# `crypto_impl.rs` maps HW failures to UmbraError variants.
+umbra-error = { path = "../../../../../crates/umbra-error" }
 
 [features]
 default = ["chained_measurement", "ess_miss_recovery", "umbra-speculation"]
@@ -27,13 +37,5 @@ bench-eval = ["kernel/bench-eval"]
 # kernel/Cargo.toml for the rationale.
 umbra-speculation = ["kernel/umbra-speculation"]
 
-
-[profile.dev]
-panic = "abort"
-opt-level = 0
-debug = true
-
-[profile.release]
-panic = "abort"
-debug = true # symbols are nice and they don't increase the size on Flash
-opt-level = 0
+# Profiles live at the workspace root since the boot crate absorbed
+# them. See /Cargo.toml [profile.dev] and [profile.release].
