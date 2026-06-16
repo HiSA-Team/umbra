@@ -386,6 +386,7 @@ dependencies = [
  "proptest",
  "umbra-api",
  "umbra-error",
+ "umbra-ess-core",
 ]
 
 [[package]]
@@ -790,6 +791,13 @@ name = "umbra-error"
 version = "0.1.0"
 dependencies = [
  "thiserror-no-std",
+]
+
+[[package]]
+name = "umbra-ess-core"
+version = "0.0.0"
+dependencies = [
+ "umbra-error",
 ]
 
 [[package]]

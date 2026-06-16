@@ -12,6 +12,10 @@ umbra-error = { path = "../../crates/umbra-error" }
 # Re-export shims in `src/kernel/src/*` preserve every existing
 # `use kernel::...` call site.
 umbra-api   = { path = "../../crates/umbra-api" }
+# ESS cache logic carved into a verifiable leaf crate (issue #58). Re-exported
+# by `common::ess` so every existing call site is unchanged; platform features
+# are forwarded below so the per-board ESS address map still matches the silicon.
+umbra-ess-core = { path = "../../crates/umbra-ess-core", default-features = false }
 
 # Property-based tests for invariants in `common::ess` and related
 # subsystems. Dev-dependency only, so the firmware (`thumbv8m`)
@@ -26,9 +30,9 @@ proptest = "1"
 # the silicon's memory map. Default keeps the historical L552 selection so
 # kernel-alone `cargo check` succeeds.
 default = ["platform-l552"]
-platform-l552 = []
-platform-n657 = []
-platform-riscv32 = []
+platform-l552 = ["umbra-ess-core/platform-l552"]
+platform-n657 = ["umbra-ess-core/platform-n657"]
+platform-riscv32 = ["umbra-ess-core/platform-riscv32"]
 
 cache-zero-mode = []
 

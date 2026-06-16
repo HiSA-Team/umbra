@@ -1,0 +1,20 @@
+# umbra-ess-core — the verifiable ESS cache logic, carved out of the kernel
+# (issue #58). #![no_std], zero unsafe: this is the pure-logic leaf that the
+# Charon→Aeneas→Coq pipeline extracts a machine-checked model from. The kernel
+# re-exports it (Phase 3b) so the firmware and the proof share one source.
+[package]
+name = "umbra-ess-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+umbra-error = { path = "../umbra-error" }
+
+[features]
+# Platform features forwarded by the kernel select the per-board ESS address
+# map. With none enabled (host / Charon extraction) host-default addresses are
+# used — the logic is identical, only the constants differ.
+platform-l552 = []
+platform-n657 = []
+platform-riscv32 = []

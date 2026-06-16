@@ -140,25 +140,7 @@ impl EnclaveContext {
     }
 }
 
-#[derive(Copy, Clone)]
-pub struct EnclaveDescriptor {
-    pub id: u32,
-    pub flash_base: u32,
-    pub ram_base: u32,
-    pub code_size: u32,
-    pub entry_point: u32,
-    pub is_loaded: bool,
-}
-
-impl EnclaveDescriptor {
-    pub fn new() -> Self {
-        Self {
-            id: 0,
-            flash_base: 0,
-            ram_base: 0,
-            code_size: 0,
-            entry_point: 0,
-            is_loaded: false,
-        }
-    }
-}
+// `EnclaveDescriptor` now lives in the verifiable `umbra-ess-core` crate
+// (issue #58) — re-exported here so the kernel and the proof share one type and
+// every `common::enclave::EnclaveDescriptor` call site is unchanged.
+pub use umbra_ess_core::EnclaveDescriptor;
