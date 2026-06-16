@@ -92,8 +92,8 @@ pub unsafe fn secure_boot() -> ! {
     // disabled — the bench_eval module stub returns immediately.
     bench_eval::init();
 
-    platform.configure_ns_boot();
-    platform.jump_to_ns();
+    platform.configure_untrusted_boot();
+    platform.jump_to_untrusted();
 }
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]

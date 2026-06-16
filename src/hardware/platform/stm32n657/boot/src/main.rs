@@ -100,8 +100,8 @@ pub unsafe fn secure_boot() -> ! {
         }
     }
 
-    platform.configure_ns_boot();
-    platform.jump_to_ns();
+    platform.configure_untrusted_boot();
+    platform.jump_to_untrusted();
 }
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]

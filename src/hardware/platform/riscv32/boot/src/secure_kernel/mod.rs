@@ -1,0 +1,315 @@
+//! Monitor-side enclave kernel — the M-mode TCB glue between the `ecall` API and
+//! the platform-agnostic `kernel` crate (the same crate the STM32 platforms
+//! use). Enclave identity is parsed with `kernel::common::enclave`
+//! (`UmbraEnclaveHeader` / `EnclaveDescriptor`), exactly as L552 does.
+//!
+//! Execution is RISC-V-specific: the enclave is a plain function at the code
+//! start (`base + UMBRA_HEADER_SIZE`); the monitor enters it in S-mode with `ra`
+//! set to a return sentinel, and when it returns the fetch at the sentinel
+//! faults back to M — **Umbra handles the exit** (the EFB model: the monitor
+//! catches the enclave's return rather than the enclave signalling completion).
+
+use kernel::common::enclave::{EnclaveDescriptor, UmbraEnclaveHeader, UMBRA_HEADER_SIZE};
+use kernel::common::ess::{CACHE_LIMIT_PER_ENCLAVE, ESS_BASE};
+use kernel::key_storage_server::crypto::CryptoEngine;
+use umbra_error::{UmbraError, UmbraResult};
+use umbra_riscv_arch::trap::TrapFrame;
+
+use crate::crypto_impl;
+use crate::platform_impl::timer;
+use crate::raw_print;
+
+// ── Fixed memory map (shared with the host linker + the SPMP setup) ──────────
+/// U-mode host image entry (`_host_start`).
+pub const HOST_ENTRY: u32 = 0x8010_0000;
+/// Host working region `[base, base+size)` — code/rodata/data/bss/stack.
+pub const HOST_REGION_BASE: u32 = 0x8010_0000;
+pub const HOST_REGION_SIZE: u32 = 0x0004_0000; // 256 KB
+/// Initial host stack pointer (the host's `_host_start` resets it anyway).
+pub const HOST_SP: u32 = HOST_REGION_BASE + HOST_REGION_SIZE;
+/// Embedded-enclave + scan region `[base, base+size)`. The enclave header/code
+/// sit at the start; the rest covers the host's page-by-page scan range so the
+/// host (U-mode) can read it without faulting. Mapped SHARED R|X.
+pub const ENC_REGION_BASE: u32 = 0x8014_0000;
+pub const ENC_REGION_SIZE: u32 = 0x0004_0000; // 256 KB (covers the host scan range)
+/// Enclave stack — an unruled region (SPMP S-mode default-allow, U-mode deny).
+pub const ENC_SP: u32 = 0x800F_0000;
+/// `ra` the monitor installs before entering the enclave. The enclave's final
+/// `ret` jumps here; the fetch faults to M and is recognized as a clean return.
+pub const RETURN_SENTINEL: u32 = 0x0000_0000;
+
+/// Status word the host reads from the packed `enter` return (`(status<<8)|...`).
+pub const STATUS_TERMINATED: u32 = 4;
+/// The enclave was preempted by the timer mid-execution; the host (scheduler)
+/// re-enters it to resume. Matches the host's `STATUS_SUSPENDED`.
+pub const STATUS_SUSPENDED: u32 = 3;
+
+/// Enclave ids stay below the host-reserved error band (the host treats an id
+/// `>= 0xFFFF_FFF0` as an error — the same ABI invariant as the ARM platforms).
+pub const MAX_ENCLAVE_ID: u32 = 0xFFFF_FFEF;
+
+pub fn id_is_valid(id: u32) -> bool {
+    id <= MAX_ENCLAVE_ID
+}
+
+// ── EFB block format (chained + ess_miss_recovery) ──────────────────────────
+// Mirrors `tools/protect_enclave.py` + L552 `secure_kernel/init.rs`. Each
+// on-image block is `[sig(32) | meta(32) | ciphertext(256)]` = 320 bytes:
+//   sig  = per-block HMAC (used by the runtime ESS-miss re-validation, 2b)
+//   meta = [reachable_count(1) | reachable_idx(1)*N | pad] to 32 bytes
+//   ct   = AES-128-CTR(enc_key, IV=0) of the 256-byte plaintext block
+// The blob (N blocks + reloc table) starts at `base + UMBRA_HEADER_SIZE`.
+/// Executable code bytes per block (the ESS slot size). Matches the host
+/// `protect_enclave.py` `UMBRA_SLOT_SIZE_BYTES` default.
+pub const CODE_BLOCK_SIZE: u32 = 256;
+const BLOCK_META_OFFSET: u32 = 32;
+const BLOCK_CT_OFFSET: u32 = 64;
+/// On-image bytes per block (`sig + meta + ciphertext`).
+pub const TOTAL_BLOCK_SIZE: u32 = CODE_BLOCK_SIZE + 64;
+/// Max reachable entries per block stored in `meta` (kernel `MAX_REACHABLE`).
+const MAX_REACHABLE: usize = 4;
+/// Upper bound on blocks per enclave (BFS queue / loaded-bitmap width).
+const MAX_EFBS: usize = 32;
+// Max blocks resident in ESS at once per enclave = the production build-time
+// knob `UMBRA_CACHE_LIMIT` (default 64), shared with L552 via the kernel crate
+// (`kernel::common::ess::CACHE_LIMIT_PER_ENCLAVE`, imported above). At 64 ≫
+// MAX_EFBS the cache holds every block of a normal enclave, so eviction only
+// fires for enclaves larger than the cache; block 0 (entry) is never evicted.
+// Build with `UMBRA_CACHE_LIMIT=2` to exercise the eviction path on the demo.
+/// Illegal-instruction fill for unloaded ESS slots: `0x0000` is an illegal
+/// compressed instruction at any halfword offset, so an instruction fetch into
+/// an unloaded block always traps to M (mcause = 2 illegal instruction).
+const TRAP_FILL: u8 = 0x00;
+
+/// Fill a block-sized ESS slot with the trap pattern so a fetch into it faults.
+/// SAFETY: `ess_slot` is a CODE_BLOCK_SIZE region inside the enclave's ESS.
+unsafe fn trap_fill_slot(ess_slot: u32) {
+    core::ptr::write_bytes(ess_slot as *mut u8, TRAP_FILL, CODE_BLOCK_SIZE as usize);
+}
+
+/// Decrypt-install one block's ciphertext (`ct_ptr`, in the host image) into its
+/// ESS slot, AES-128-CTR-decrypting through the `CryptoEngine` (same boundary the
+/// STM32 platforms use). SAFETY: `ct_ptr` points at a CODE_BLOCK_SIZE
+/// ciphertext; `ess_slot` is the matching ESS region.
+unsafe fn install_block(
+    crypto: &mut dyn CryptoEngine,
+    enc_key: &[u8],
+    ct_ptr: *const u8,
+    ess_slot: u32,
+) {
+    core::ptr::copy_nonoverlapping(ct_ptr, ess_slot as *mut u8, CODE_BLOCK_SIZE as usize);
+    let slot = core::slice::from_raw_parts_mut(ess_slot as *mut u8, CODE_BLOCK_SIZE as usize);
+    // CTR is symmetric (decrypt == keystream XOR); IV = 0 matches the signer.
+    let _ = crypto.aes_decrypt(enc_key, &[0u8; 16], slot);
+}
+
+/// `fence.i` — make freshly-installed code visible to instruction fetch (forces
+/// QEMU to re-translate the modified block; I-cache/pipeline sync on real HW).
+fn fence_i() {
+    #[cfg(target_arch = "riscv32")]
+    // SAFETY: `fence.i` has no operands; it only orders self-modified code.
+    unsafe {
+        core::arch::asm!("fence.i")
+    };
+}
+
+// Slots indexed by enclave id. Ids start at 1 (the host reserves 0 as an
+// "empty slot" sentinel — `if enclave_ids[i] == 0 continue`), matching the L552
+// `NEXT_ENCLAVE_ID = 1` convention.
+const MAX_ENCLAVES: usize = 8;
+
+#[derive(Clone, Copy)]
+struct Slot {
+    descriptor: EnclaveDescriptor,
+    result: u32,
+    used: bool,
+    /// Set while the enclave is preempted: `saved_ctx` holds its full register
+    /// context and the next `enter` resumes from it instead of restarting.
+    suspended: bool,
+    /// The enclave's register file + `mepc`/`mstatus` snapshot taken at the
+    /// preemption tick (the RISC-V analog of L552's saved PSP context).
+    saved_ctx: TrapFrame,
+    /// Number of 320-byte EFB blocks this enclave was divided into.
+    num_blocks: u32,
+    /// Per-block residency: `true` once the block's plaintext sits in its ESS
+    /// slot. Block 0 (entry) is loaded at `create` and never evicted; the rest
+    /// fault in on demand and may be evicted under the cache limit.
+    block_loaded: [bool; MAX_EFBS],
+    /// Per-block use counter (LFU-ish): bumped on each (re)load so eviction can
+    /// pick the least-used victim.
+    block_counter: [u32; MAX_EFBS],
+}
+
+const EMPTY_SLOT: Slot = Slot {
+    descriptor: EnclaveDescriptor {
+        id: 0,
+        flash_base: 0,
+        ram_base: 0,
+        code_size: 0,
+        entry_point: 0,
+        is_loaded: false,
+    },
+    result: 0,
+    used: false,
+    suspended: false,
+    saved_ctx: ZERO_FRAME,
+    num_blocks: 0,
+    block_loaded: [false; MAX_EFBS],
+    block_counter: [0; MAX_EFBS],
+};
+
+const ZERO_FRAME: TrapFrame = TrapFrame {
+    regs: [0; 32],
+    mepc: 0,
+    mcause: 0,
+    mtval: 0,
+    mstatus: 0,
+};
+
+struct State {
+    slots: [Slot; MAX_ENCLAVES],
+    next_id: u32,
+    current: Option<usize>,
+    host_ctx: TrapFrame,
+    host_ctx_valid: bool,
+}
+
+impl State {
+    const fn new() -> Self {
+        State {
+            slots: [EMPTY_SLOT; MAX_ENCLAVES],
+            next_id: 1, // ids start at 1 (host reserves 0 as empty-slot sentinel)
+            current: None,
+            host_ctx: ZERO_FRAME,
+            host_ctx_valid: false,
+        }
+    }
+}
+
+use core::cell::UnsafeCell;
+struct Kernel(UnsafeCell<State>);
+// SAFETY: single-hart, cooperative; the trap handler is the only accessor.
+unsafe impl Sync for Kernel {}
+static KERNEL: Kernel = Kernel(UnsafeCell::new(State::new()));
+
+fn state() -> &'static mut State {
+    // SAFETY: sole accessor in a cooperative single-hart handler.
+    unsafe { &mut *KERNEL.0.get() }
+}
+
+/// One-time kernel init (called from `init_kernel`). Mirrors the STM32 boot's
+/// `Kernel::init` slot; the software crypto engine has no state to set up here.
+pub fn init() {}
+
+// ── Submodules (split to keep each file under the 600-LOC hard cap) ──────────
+mod create;
+mod ess_miss;
+
+pub use create::create;
+pub use ess_miss::try_handle_ess_miss;
+
+/// Enter enclave `id`: snapshot the host context, then run the enclave in
+/// S-mode. A **fresh** enclave starts at its entry point with the return
+/// sentinel in `ra`; a **suspended** one (preempted earlier) resumes from its
+/// saved context verbatim. Either way the preemption time-slice is armed so the
+/// monitor regains control after one quantum.
+pub fn enter(frame: &mut TrapFrame, id: u32) {
+    let st = state();
+    let idx = id as usize;
+    if idx >= MAX_ENCLAVES || !st.slots[idx].used {
+        frame.regs[10] = 0xFFFF_FFFF; // a0 = error
+        frame.mepc += 4;
+        return;
+    }
+
+    let mut saved = *frame;
+    saved.mepc += 4; // resume the host after its `enter` ecall
+    st.host_ctx = saved;
+    st.host_ctx_valid = true;
+    st.current = Some(idx);
+
+    if st.slots[idx].suspended {
+        // Resume: restore the preempted register file + mepc + mstatus (MPP=S)
+        // exactly as captured at the tick, so the enclave continues mid-stream.
+        *frame = st.slots[idx].saved_ctx;
+        st.slots[idx].suspended = false;
+    } else {
+        // Fresh start: jump to the entry point in S-mode with the return
+        // sentinel in `ra` and the enclave stack in `sp`.
+        frame.mepc = st.slots[idx].descriptor.entry_point;
+        frame.regs[1] = RETURN_SENTINEL; // ra
+        frame.regs[2] = ENC_SP; // sp
+        frame.return_to_supervisor();
+    }
+
+    // Arm the preemption tick for this slice. Disabled again the moment the
+    // enclave suspends or terminates, so the host scheduler runs un-preempted.
+    timer::arm();
+    timer::enable();
+}
+
+/// Machine-timer-interrupt handler: if an enclave is running, snapshot its full
+/// context into its slot, disable the timer, and hand the slice back to the host
+/// (the scheduler) with status SUSPENDED so it can re-enter to resume. Returns
+/// `false` if no enclave was current (a stray tick while the host ran) — the
+/// caller then just disables the timer. This is the RISC-V counterpart of
+/// L552's SysTick preemption + PSP context save.
+pub fn try_preempt(frame: &mut TrapFrame) -> bool {
+    let st = state();
+    if let Some(idx) = st.current {
+        st.slots[idx].saved_ctx = *frame; // full enclave context (regs + mepc + mstatus)
+        st.slots[idx].suspended = true;
+        timer::disable();
+        st.current = None;
+        if st.host_ctx_valid {
+            *frame = st.host_ctx;
+            frame.regs[10] = STATUS_SUSPENDED << 8; // a0 = packed SUSPENDED status
+            st.host_ctx_valid = false;
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// True when a trap is the active enclave returning to the sentinel. If so the
+/// monitor completes the enclave (storing the result, resuming the host) and
+/// returns `true`.
+pub fn try_handle_return(frame: &mut TrapFrame) -> bool {
+    let st = state();
+    if st.current.is_some() && frame.mepc == RETURN_SENTINEL {
+        let result = frame.regs[10]; // a0 = enclave's return value
+        complete(frame, result);
+        true
+    } else {
+        false
+    }
+}
+
+/// Complete the current enclave: store its result and resume the host with the
+/// packed `(STATUS_TERMINATED << 8) | (result & 0xFF)` in `a0`. Also used by an
+/// enclave that opts to signal completion via the `exit` ecall.
+pub fn complete(frame: &mut TrapFrame, result: u32) {
+    let st = state();
+    // The enclave is done — no more preemption ticks for it.
+    timer::disable();
+    if let Some(idx) = st.current.take() {
+        st.slots[idx].result = result;
+    }
+    if st.host_ctx_valid {
+        *frame = st.host_ctx;
+        frame.regs[10] = (STATUS_TERMINATED << 8) | (result & 0xFF);
+        st.host_ctx_valid = false;
+    }
+}
+
+/// Return the full result word of a terminated enclave (the `status` ecall).
+pub fn status(id: u32) -> u32 {
+    let st = state();
+    let idx = id as usize;
+    if idx < MAX_ENCLAVES && st.slots[idx].used {
+        st.slots[idx].result
+    } else {
+        0xFFFF_FFFF
+    }
+}

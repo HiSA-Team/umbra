@@ -1,8 +1,8 @@
 // Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
 
 //! Secure security setup + Non-Secure boot trampolines.
-//! Hosts `init_security` (SAU/MPU/RISAF), `configure_ns_boot` (NS SAU
-//! regions + VTOR_NS) and `jump_to_ns` (the NS world handoff). Lifted
+//! Hosts `init_security` (SAU/MPU/RISAF), `configure_untrusted_boot` (NS SAU
+//! regions + VTOR_NS) and `jump_to_untrusted` (the NS world handoff). Lifted
 //! verbatim from the monolithic `platform_impl.rs` during
 //!. Pure file reorganization; no semantic changes.
 
@@ -29,7 +29,7 @@ pub fn init_security() {
         core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
     }
 
-    // 2. SAU init + enable (all Secure — NS regions added in configure_ns_boot)
+    // 2. SAU init + enable (all Secure — NS regions added in configure_untrusted_boot)
     let mut sau_driver = sau::SauDriver::new();
     unsafe {
         sau_driver.init();
@@ -77,7 +77,7 @@ pub fn init_security() {
     }
 }
 
-pub fn configure_ns_boot() {
+pub fn configure_untrusted_boot() {
     use arm::sau;
 
     // 1. Disable Secure SysTick (NS gets its own if needed)
@@ -163,7 +163,7 @@ pub fn configure_ns_boot() {
     }
 }
 
-pub fn jump_to_ns() -> ! {
+pub fn jump_to_untrusted() -> ! {
     // Copy the NS host image from XSPI2 (where flash_n657.sh placed it
     // at 0x70080000) into AXISRAM1 via the NS alias 0x24000000. Writing
     // through the NS alias is required: after init_security configured

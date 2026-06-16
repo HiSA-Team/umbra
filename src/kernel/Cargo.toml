@@ -28,6 +28,7 @@ proptest = "1"
 default = ["platform-l552"]
 platform-l552 = []
 platform-n657 = []
+platform-riscv32 = []
 
 cache-zero-mode = []
 

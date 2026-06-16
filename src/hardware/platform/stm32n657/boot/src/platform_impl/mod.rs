@@ -72,10 +72,10 @@ impl PlatformBoot for Stm32n657Platform {
     fn init_external_flash(&self) -> bool {
         dma::init_external_flash()
     }
-    fn configure_ns_boot(&self) {
-        syscall_dispatch::configure_ns_boot()
+    fn configure_untrusted_boot(&self) {
+        syscall_dispatch::configure_untrusted_boot()
     }
-    fn jump_to_ns(&self) -> ! {
-        syscall_dispatch::jump_to_ns()
+    fn jump_to_untrusted(&self) -> ! {
+        syscall_dispatch::jump_to_untrusted()
     }
 }

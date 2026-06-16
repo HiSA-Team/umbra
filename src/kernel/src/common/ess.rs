@@ -38,10 +38,16 @@
 use crate::common::enclave::EnclaveDescriptor;
 use umbra_error::{UmbraError, UmbraResult};
 
-// Reject building with both platform features enabled — the cfg-gated
+// Reject building with more than one platform feature enabled — the cfg-gated
 // constants below would conflict.
-#[cfg(all(feature = "platform-l552", feature = "platform-n657"))]
-compile_error!("Enable exactly ONE of kernel features platform-l552 or platform-n657");
+#[cfg(any(
+    all(feature = "platform-l552", feature = "platform-n657"),
+    all(feature = "platform-l552", feature = "platform-riscv32"),
+    all(feature = "platform-n657", feature = "platform-riscv32"),
+))]
+compile_error!(
+    "Enable exactly ONE of kernel features platform-l552 / platform-n657 / platform-riscv32"
+);
 
 // ── L552 platform ESS layout ─────────────────────────────────────────
 // PSP stacks live just above.bss, well below the MSP. The MSP starts at
@@ -83,6 +89,25 @@ pub const EFBC_BASE: u32 = 0x340E0000; // Secure alias — RISAF2 default region
 pub const ENCLAVE_PSP_BASE: u32 = 0x340F0000;
 #[cfg(feature = "platform-n657")]
 pub const ENCLAVE_PSP_TOP: u32 = 0x340F4000;
+
+// ── RISC-V RV32 (QEMU virt) platform ESS layout ──────────────────────
+// Physical addressing (no MMU). The enclave's decrypted code blocks (ESS) and
+// stacks live in a Secure RAM region above the U-mode host image
+// (0x8010_0000–0x8018_0000). The monitor leaves this region SPMP-unruled, so
+// S-mode (the enclave) default-allows it while U-mode (the host) is
+// default-denied — the SPMP fence. EFBC == ESS_BASE: on RISC-V there is no
+// NS/Secure address alias, so execution and storage share one region governed
+// purely by PMP + SPMP.
+#[cfg(feature = "platform-riscv32")]
+pub const ESS_BASE: u32 = 0x80200000; // Secure RAM for enclave code blocks
+#[cfg(feature = "platform-riscv32")]
+pub const ESS_SIZE: u32 = 0x10000; // 64 KB
+#[cfg(feature = "platform-riscv32")]
+pub const EFBC_BASE: u32 = 0x80200000; // execution == storage (no alias on RV32)
+#[cfg(feature = "platform-riscv32")]
+pub const ENCLAVE_PSP_BASE: u32 = 0x80210000;
+#[cfg(feature = "platform-riscv32")]
+pub const ENCLAVE_PSP_TOP: u32 = 0x80218000;
 
 // ── Platform-agnostic constants ──────────────────────────────────────
 // Build-time knobs: SLOT_SIZE, CACHE_LIMIT_PER_ENCLAVE,

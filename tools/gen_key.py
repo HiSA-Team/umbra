@@ -21,6 +21,7 @@ def main():
     rust_paths = [
         os.path.join(root_dir, "src", "hardware", "platform", "stm32l552", "boot", "src", "master_key.rs"),
         os.path.join(root_dir, "src", "hardware", "platform", "stm32n657", "boot", "src", "master_key.rs"),
+        os.path.join(root_dir, "src", "hardware", "platform", "riscv32", "boot", "src", "master_key.rs"),
     ]
 
     # 3. Write Bin

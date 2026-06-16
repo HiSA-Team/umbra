@@ -1,0 +1,6 @@
+# Building from this directory targets RV32 bare-metal. The linker script is
+# passed as an ABSOLUTE path from build.rs (the workspace puts the linker CWD
+# outside this crate, which would break a relative `-T`), mirroring the STM32
+# boot crates.
+[build]
+target = "riscv32imac-unknown-none-elf"

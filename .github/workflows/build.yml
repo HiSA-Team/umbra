@@ -24,7 +24,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: thumbv8m.main-none-eabi
+          targets: thumbv8m.main-none-eabi, riscv32imac-unknown-none-elf
           components: clippy, rustfmt
 
       - uses: ./.github/actions/install-arm-toolchain
@@ -52,6 +52,11 @@ jobs:
             (cd "$crate" && cargo check --target "$RUST_TARGET")
             echo "::endgroup::"
           done
+          # The riscv32 monitor uses its own bare-metal target, so check it
+          # explicitly outside the thumbv8m loop.
+          echo "::group::cargo check riscv32 boot"
+          (cd src/hardware/platform/riscv32/boot && cargo check --target riscv32imac-unknown-none-elf)
+          echo "::endgroup::"
 
   feature-matrix:
     name: cargo check matrix (advisory)
@@ -72,14 +77,17 @@ jobs:
           - { name: "n657 boot default",      crate: "src/hardware/platform/stm32n657/boot", flags: "" }
           - { name: "n657 boot no-default",   crate: "src/hardware/platform/stm32n657/boot", flags: "--no-default-features" }
           - { name: "n657 boot tests",        crate: "src/hardware/platform/stm32n657/boot", flags: "--features boot_tests" }
-          # ── kernel crate — both platform selectors ──────────────────────
+          # ── kernel crate — platform selectors ───────────────────────────
           - { name: "kernel platform-l552",   crate: "src/kernel", flags: "" }
           - { name: "kernel platform-n657",   crate: "src/kernel", flags: "--no-default-features --features platform-n657" }
+          # ── RISC-V RV32 (QEMU virt) — own bare-metal target ─────────────
+          - { name: "riscv32 boot default",    crate: "src/hardware/platform/riscv32/boot", flags: "", target: "riscv32imac-unknown-none-elf" }
+          - { name: "kernel platform-riscv32", crate: "src/kernel", flags: "--no-default-features --features platform-riscv32", target: "riscv32imac-unknown-none-elf" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: thumbv8m.main-none-eabi
+          targets: thumbv8m.main-none-eabi, riscv32imac-unknown-none-elf
       - uses: ./.github/actions/install-arm-toolchain
       - uses: Swatinem/rust-cache@v2
         with:
@@ -88,13 +96,15 @@ jobs:
         env:
           CRATE: ${{ matrix.crate }}
           CARGO_ARGS: ${{ matrix.flags }}
+          # Per-row target; ARM rows omit `target` and fall back to RUST_TARGET.
+          ROW_TARGET: ${{ matrix.target || env.RUST_TARGET }}
         # `CARGO_ARGS` is intentionally word-split by the shell — matrix
         # values are author-controlled YAML, not external input.
         # shellcheck disable=SC2086
         run: |
           set -euo pipefail
           cd "$CRATE"
-          cargo check --target "$RUST_TARGET" $CARGO_ARGS
+          cargo check --target "$ROW_TARGET" $CARGO_ARGS
 
   clippy:
     name: cargo clippy (advisory)
@@ -106,7 +116,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: thumbv8m.main-none-eabi
+          targets: thumbv8m.main-none-eabi, riscv32imac-unknown-none-elf
           components: clippy
 
       - uses: ./.github/actions/install-arm-toolchain
@@ -128,6 +138,10 @@ jobs:
             (cd "$crate" && cargo clippy --target "$RUST_TARGET" --all-targets) || true
             echo "::endgroup::"
           done
+          # riscv32 monitor uses its own bare-metal target.
+          echo "::group::cargo clippy riscv32 boot"
+          (cd src/hardware/platform/riscv32/boot && cargo clippy --target riscv32imac-unknown-none-elf) || true
+          echo "::endgroup::"
 
   rustfmt:
     name: cargo fmt --check (advisory)
@@ -142,11 +156,13 @@ jobs:
           for crate in \
               src/hardware/common/peripheral_regs \
               src/hardware/architecture/arm \
+              src/hardware/architecture/riscv \
               src/hardware/platform/stm32l552/drivers \
               src/hardware/platform/stm32n657/drivers \
               src/kernel \
               src/hardware/platform/stm32l552/boot \
-              src/hardware/platform/stm32n657/boot ; do
+              src/hardware/platform/stm32n657/boot \
+              src/hardware/platform/riscv32/boot ; do
             echo "::group::cargo fmt $crate"
             (cd "$crate" && cargo fmt --check) || true
             echo "::endgroup::"
@@ -177,17 +193,17 @@ jobs:
         # explicitly via -p flags. The kernel is host-buildable (no
         # MMIO, depends only on umbra-hal traits which umbra-pal-test
         # satisfies in software) so its tests run as part of CI.
-        run: cargo check -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api --locked
+        run: cargo check -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch --locked
 
       - name: cargo clippy (host crates, warnings deny)
         # Strict on the workspace leaf + host crates. Kernel has
         # pre-existing style debt (manual_div_ceil, missing_safety_doc,
         # unnecessary_cast, etc.) tracked separately; not blocked on
         # it here.
-        run: cargo clippy -p xtask -p umbra-pal-test -p umbra-hal -p umbra-error -p umbra-api --all-targets --locked -- -D warnings
+        run: cargo clippy -p xtask -p umbra-pal-test -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch --all-targets --locked -- -D warnings
 
       - name: cargo test (host members)
-        run: cargo test -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api --locked
+        run: cargo test -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch --locked
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -201,7 +217,7 @@ jobs:
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov \
-            -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api \
+            -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch \
             --lcov --output-path lcov.info \
             --ignore-filename-regex '(host/|lib/|tools/)'
 
@@ -249,3 +265,56 @@ jobs:
           files=( rebuild_all.sh debug.sh tools/**/*.sh tools/*.sh )
           [ ${#files[@]} -eq 0 ] && { echo "no scripts found"; exit 0; }
           shellcheck "${files[@]}" || true
+
+  riscv-qemu-smoke:
+    name: riscv32 QEMU smoke (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # End-to-end analog of the ARM hardware smoke test (which CI cannot run):
+    # build the SPMP-patched QEMU (cached), build the monitor + host, and assert
+    # the enclave returns R0=0x72CA33A8 over the UART. Advisory: the QEMU build
+    # depends on apt package availability on the runner, so it must not gate.
+    continue-on-error: true
+    steps:
+      # No `submodules: recursive`: the QEMU submodule is ~1 GB and is only
+      # needed on a cache MISS (the patches are tracked in-repo, the built
+      # binary is cached). build-qemu-spmp.sh inits the submodule itself when
+      # it actually has to build.
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imac-unknown-none-elf
+
+      - name: Install riscv bare-metal GCC + QEMU build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-riscv64-unknown-elf \
+            ninja-build pkg-config python3 python3-venv \
+            libglib2.0-dev libpixman-1-dev
+
+      - name: Cache patched QEMU
+        id: qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: tools/qemu-spmp/install
+          key: qemu-spmp-${{ runner.os }}-${{ hashFiles('tools/qemu-spmp/QEMU_PIN', 'tools/qemu-spmp/patches/**') }}
+
+      - name: Build patched QEMU (cache miss only)
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        env:
+          PYTHON: python3
+        run: ./tools/qemu-spmp/build-qemu-spmp.sh
+
+      - name: Build + smoke-run on QEMU
+        env:
+          MCU_VARIANT: riscv32
+          PYTHON: python3
+        run: |
+          set -euo pipefail
+          ./rebuild_all.sh
+          # debug.sh execs QEMU on stdio and never self-exits; timebox it and
+          # assert the enclave result landed on the UART.
+          ( timeout 60 ./debug.sh || true ) | tee smoke.log
+          grep -q "R0=0x72CA33A8" smoke.log

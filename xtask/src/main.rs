@@ -9,13 +9,15 @@
 //! - `l562` → STM32L562 (HW AES + OTFDEC, same boot crate as L552 with the
 //!   `stm32l562` Cargo feature on, MCU_VARIANT=stm32l562)
 //! - `n657` → STM32N657 (Cortex-M55, FSBL flow, MCU_VARIANT=stm32n657)
+//! - `riscv32` → RISC-V RV32 on QEMU virt (M/S/U + PMP/SPMP, MCU_VARIANT=riscv32).
+//!   `flash` launches the SPMP-patched QEMU instead of an ST-LINK flash flow.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::Command;
 
-const PLATFORMS: [&str; 3] = ["l552", "l562", "n657"];
+const PLATFORMS: [&str; 4] = ["l552", "l562", "n657", "riscv32"];
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Umbra build / flash / test orchestration")]
@@ -77,6 +79,7 @@ fn mcu_variant(platform: &str) -> &'static str {
         "l552" => "stm32l552",
         "l562" => "stm32l562",
         "n657" => "stm32n657",
+        "riscv32" => "riscv32",
         _ => unreachable!("clap restricts the value to PLATFORMS"),
     }
 }
@@ -87,6 +90,8 @@ fn bare_metal_bin_rel(platform: &str) -> &'static str {
     match platform {
         "l552" | "l562" => "host/stm32l552/bare_metal/bin/bare_metal.bin",
         "n657" => "host/stm32n657/bare_metal/bin/bare_metal.bin",
+        // The RISC-V host is a Cargo crate; its artifact is the ELF (no .bin).
+        "riscv32" => "host/riscv32/bare_metal/target/riscv32imac-unknown-none-elf/release/bare_metal",
         _ => unreachable!("clap restricts the value to PLATFORMS"),
     }
 }
@@ -144,8 +149,11 @@ fn flash(platform: &str) -> Result<()> {
     // dev-boot mode (JP2=2-3) avoids the GDB register-access concerns
     // entirely. After flash, user switches JP2 to 1-2 and resets to
     // cold-boot the FSBL from XSPI2.
+    // - riscv32 → debug.sh launches the SPMP-patched QEMU (no ST-LINK flash);
+    // the monitor ELF is loaded via -kernel and the host image via -device
+    // loader. "Flash" here means "deploy + run on the emulator".
     let (script, script_label) = match platform {
-        "l552" | "l562" => ("./debug.sh", "debug.sh"),
+        "l552" | "l562" | "riscv32" => ("./debug.sh", "debug.sh"),
         "n657" => ("./tools/flash_n657.sh", "tools/flash_n657.sh"),
         _ => unreachable!("clap restricts the value"),
     };
@@ -165,6 +173,7 @@ fn flash(platform: &str) -> Result<()> {
             match platform {
                 "l552" | "l562" => "umbra-l552-boot",
                 "n657" => "umbra-n657-boot",
+                "riscv32" => "umbra-riscv32-boot",
                 _ => unreachable!("clap restricts the value"),
             },
         );
@@ -184,6 +193,7 @@ fn flash(platform: &str) -> Result<()> {
     let mk_files = [
         "src/hardware/platform/stm32l552/boot/src/master_key.rs",
         "src/hardware/platform/stm32n657/boot/src/master_key.rs",
+        "src/hardware/platform/riscv32/boot/src/master_key.rs",
         "tools/master_key.bin",
     ];
     let _ = Command::new("git")

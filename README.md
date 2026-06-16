@@ -7,7 +7,7 @@
   <a href="https://codecov.io/gh/HiSA-Team/umbra"><img src="https://codecov.io/gh/HiSA-Team/umbra/branch/main/graph/badge.svg" alt="Coverage"></a>
   <a href="https://github.com/HiSA-Team/umbra/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/rust-nightly-orange.svg" alt="Rust">
-  <img src="https://img.shields.io/badge/platform-STM32L5%20%7C%20STM32N6-green.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-STM32L5%20%7C%20STM32N6%20%7C%20RISC--V-green.svg" alt="Platform">
   <a href="https://hisa-team.github.io/umbra/"><img src="https://img.shields.io/badge/docs-mdBook-blue.svg" alt="Documentation"></a>
 </p>
 
@@ -24,6 +24,13 @@ Currently supported targets:
 | NUCLEO-L552ZE-Q | STM32L552 | Cortex-M33 | Software AES, DMA block loading |
 | STM32L562E-DK | STM32L562 | Cortex-M33 | Hardware AES, OCTOSPI + OTFDEC |
 | NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, HW HMAC-SHA256, HW AES (CRYP1), NPU-in-enclave demo |
+| QEMU `virt` (RV32) | RISC-V RV32 (M/S/U) | rv32imac | EFB block demand-paging, SW AES-128-CTR + SHA-256, PMP/SPMP isolation, ePMP `.text` self-lock — hardware-free (QEMU) |
+
+> **Trust model note.** The STM32 targets derive their guarantees from a silicon
+> root of trust. The RISC-V target runs on an **SPMP-patched** `qemu-system-riscv32`
+> (SPMP is not yet upstream) and has **no hardware root of trust / attestation** —
+> it is a fully-open, reproducible reference/emulation target for the isolation
+> model (PMP/SPMP/ePMP), not a silicon-equivalent secure deployment.
 
 ## Architecture
 
@@ -48,6 +55,9 @@ umbra-error  <-  umbra-hal  <-  umbra-api  <-  umbra-kernel  <-  per-platform PA
 - **`src/hardware/platform/stm32{l552,l562,n657}/{boot,drivers}/`** —
   per-platform PAL crates (`umbra-l552-boot`, `umbra-l552-drivers`,
   `umbra-n657-boot`, `umbra-n657-drivers`).
+- **`src/hardware/architecture/riscv/`** (`umbra-riscv-arch`) +
+  **`src/hardware/platform/riscv32/boot/`** (`umbra-riscv32-boot`) — the RISC-V
+  RV32 arch layer (PMP/SPMP/CSR/trap policy, host-tested) and M-mode monitor.
 - **`xtask/`** — Rust build/flash/test orchestration; entry-point for `cargo xtask`.
 
 Operational rules, threat-model invariants, panic policy, and the
@@ -69,6 +79,15 @@ Finally add the Armv8-M mainline target (covers both Cortex-M33 and Cortex-M55):
 ```
 rustup target add thumbv8m.main-none-eabi
 ```
+For the RISC-V RV32 (QEMU `virt`) target, add its triple instead:
+```
+rustup target add riscv32imac-unknown-none-elf
+```
+The RISC-V flow needs the `riscv64-unknown-elf-` GCC toolchain (the signer only
+uses its `objcopy`/`objdump`) and the SPMP-patched `qemu-system-riscv32`, built
+once from the `tools/qemu-spmp` submodule via
+`tools/qemu-spmp/build-qemu-spmp.sh`. **No hardware required.**
+
 Additional tools required for building and running:
 - **ARM toolchain** (`gcc-arm-none-eabi`) — C cross-compiler, linker, objcopy, gdb.
 - **OpenOCD** — used together with GDB to load ELFs over SWD on STM32L5.
@@ -90,6 +109,7 @@ Additional tools required for building and running:
 cargo xtask build l552    # STM32L552 (Cortex-M33, SW AES)
 cargo xtask build l562    # STM32L562 (HW AES + OTFDEC)
 cargo xtask build n657    # STM32N657 (Cortex-M55, HW CRYP1)
+cargo xtask build riscv32 # RISC-V RV32 (QEMU virt, M/S/U)
 cargo xtask test --host   # host-side tests + coverage
 cargo xtask check-binary-size <platform>
 ```
@@ -99,7 +119,8 @@ Run `cargo xtask --help` for the full entry-point list.
 ### Shell-script flow (still supported)
 
 Pick the target MCU in [`settings.sh`](settings.sh) by setting `MCU_VARIANT`
-to one of `stm32l552`, `stm32l562`, or `stm32n657`, then source the script:
+to one of `stm32l552`, `stm32l562`, `stm32n657`, or `riscv32`, then source the
+script:
 ```
 source settings.sh
 ```
@@ -148,6 +169,19 @@ Override the tool install dir for non-macOS hosts:
 ```
 export STM32CUBE_PROG_DIR=/opt/st/stm32cubeprog/bin
 ```
+
+### RISC-V RV32 (QEMU `virt`)
+
+No hardware or flashing — the monitor + host run on the SPMP-patched
+`qemu-system-riscv32`:
+
+```
+cargo xtask flash riscv32   # build + run on the SPMP-patched QEMU
+```
+
+Equivalent shell-script flow: `MCU_VARIANT=riscv32 ./debug.sh` launches QEMU
+(set `QEMU_DEBUG=1` to expose a gdbstub on `:1234`). A successful run ends with
+the enclave result on the UART: `[USER] Enclave terminated! R0=0x72CA33A8`.
 
 ## Documentation
 

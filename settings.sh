@@ -59,28 +59,56 @@ echo -e '  \/__/     \/__/     \/__/     \|__|     \/__/  '
 echo -e ""
 echo -e "${BOLD}Checking for dependencies${VANILLA}"
 
+export MCU_VARIANT=${MCU_VARIANT:-stm32n657}
+
 # Required dependencies (modify these accordingly to your locations)
 export CARGO=cargo
-export GCC_PREFIX=arm-none-eabi-
-export CC=${GCC_PREFIX}gcc
-export LD=${GCC_PREFIX}ld
-export OBJDUMP=${GCC_PREFIX}objdump
-export OBJCOPY=${GCC_PREFIX}objcopy
-export GDB=${GCC_PREFIX}gdb
-export GDBGUI=gdbgui
-# STM32_Programmer_CLI shipped with STM32CubeIDE. Override on non-macOS via
-# `export FLASHER=/path/to/STM32_Programmer_CLI` before sourcing this script.
-export FLASHER="${FLASHER:-/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI}"
-export OPENOCD=openocd
-export AR=${GCC_PREFIX}ar
 
-DEPENDENCIES=(
-    ${CARGO} 
-    ${CC} ${LD} ${OBJDUMP} ${OBJCOPY}
-    ${GDB} ${GDBGUI}
-    ${FLASHER}
-    ${OPENOCD}
-)
+if [ "$MCU_VARIANT" = "riscv32" ]; then
+    # ── RISC-V RV32 (QEMU virt) toolchain ──────────────────────────────
+    export GCC_PREFIX=riscv64-unknown-elf-
+    export CC=${GCC_PREFIX}gcc
+    export LD=${GCC_PREFIX}ld
+    export OBJDUMP=${GCC_PREFIX}objdump
+    export OBJCOPY=${GCC_PREFIX}objcopy
+    export GDB=${GCC_PREFIX}gdb
+    export AR=${GCC_PREFIX}ar
+    # SPMP-patched qemu-system-riscv32 (built by tools/qemu-spmp).
+    export QEMU="${QEMU:-${ROOT_DIR}/tools/qemu-spmp/install/bin/qemu-system-riscv32}"
+    # Python for the enclave signer (sign_enclave.py).
+    export PYTHON="${PYTHON:-/opt/miniconda3/bin/python}"
+
+    # GDB is only needed for the opt-in QEMU_DEBUG=1 launch, so it is NOT a
+    # required dependency here (riscv64-unknown-elf-gdb or gdb-multiarch).
+    DEPENDENCIES=(
+        ${CARGO}
+        ${CC} ${OBJCOPY}
+        ${QEMU}
+        ${PYTHON}
+    )
+else
+    # ── STM32 (ARM Cortex-M33/M55) toolchain ───────────────────────────
+    export GCC_PREFIX=arm-none-eabi-
+    export CC=${GCC_PREFIX}gcc
+    export LD=${GCC_PREFIX}ld
+    export OBJDUMP=${GCC_PREFIX}objdump
+    export OBJCOPY=${GCC_PREFIX}objcopy
+    export GDB=${GCC_PREFIX}gdb
+    export GDBGUI=gdbgui
+    # STM32_Programmer_CLI shipped with STM32CubeIDE. Override on non-macOS via
+    # `export FLASHER=/path/to/STM32_Programmer_CLI` before sourcing this script.
+    export FLASHER="${FLASHER:-/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.100.202412061334/tools/bin/STM32_Programmer_CLI}"
+    export OPENOCD=openocd
+    export AR=${GCC_PREFIX}ar
+
+    DEPENDENCIES=(
+        ${CARGO}
+        ${CC} ${LD} ${OBJDUMP} ${OBJCOPY}
+        ${GDB} ${GDBGUI}
+        ${FLASHER}
+        ${OPENOCD}
+    )
+fi
 
 for dep in "${DEPENDENCIES[@]}"; do
     dep_bin=$(basename "$dep")
@@ -157,6 +185,13 @@ elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export BOOT_FEATURES=""
     export BOOT_CRATE_NAME=umbra-n657-boot
     echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q)${VANILLA}"
+elif [ "$MCU_VARIANT" = "riscv32" ]; then
+    export MCU=riscv32
+    export BOOT_FEATURES=""
+    export BOOT_CRATE_NAME=umbra-riscv32-boot
+    # The monitor's `[[bin]]` name (the ELF under the workspace target dir).
+    export BOOT_BIN_NAME=umbra-rv32
+    echo -e "${SUCCESS}[mcu_selection] Selected RISC-V RV32 (QEMU virt, M/S/U + PMP/SPMP)${VANILLA}"
 else
     echo -e "${FAILURE}[mcu_selection] Unknown MCU_VARIANT: $MCU_VARIANT${VANILLA}"
     return 1
@@ -218,7 +253,12 @@ if [ "$UMBRA_SPECULATION" = "0" ]; then
     echo -e "${SUCCESS}[umbra-speculation] G3 prefetch DISABLED (spec=off cell)${VANILLA}"
 fi
 
-if [ "$MCU_VARIANT" = "stm32n657" ]; then
+if [ "$MCU_VARIANT" = "riscv32" ]; then
+    # The monitor is loaded at RAM ORIGIN (0x8000_0000) and the host image at 0x8010_0000.
+    export TARGET_ARCH=riscv32imac-unknown-none-elf
+    export TARGET_FLASH_START=0x80000000
+    export QEMU_CPU="${QEMU_CPU:-rv32,spmp=true}"
+elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export OPENOCD_CONFIG=./openocd_scripts/stm32n6x.cfg
     export TARGET_FLASH_START=0x30000000
     export TARGET_ARCH=thumbv8m.main-none-eabi
@@ -446,7 +486,15 @@ echo -e "${BOLD}Configuring Host information${VANILLA}"
 # derive PROGRAM_NAME from the directory basename).
 export HOST_APP=${HOST_APP:-bare_metal}
 
-if [ "$MCU_VARIANT" = "stm32n657" ]; then
+if [ "$MCU_VARIANT" = "riscv32" ]; then
+    case "$HOST_APP" in
+        bare_metal) ;;
+        *)
+            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for RISC-V: $HOST_APP (expected bare_metal)${VANILLA}"
+            return 1
+            ;;
+    esac
+elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     case "$HOST_APP" in
         bare_metal|freertos|object_detection) ;;
         *)
@@ -466,7 +514,12 @@ fi
 
 export HOST_DIR=${ROOT_DIR}/host/${MCU}/${HOST_APP}
 export HOST_NAME=${HOST_APP}
-export HOST_ELF=${HOST_DIR}/bin/${HOST_NAME}.elf
+if [ "$MCU_VARIANT" = "riscv32" ]; then
+    # The RISC-V host is a Cargo crate; its ELF is the cargo build output.
+    export HOST_ELF=${HOST_DIR}/target/${TARGET_ARCH}/release/${HOST_NAME}
+else
+    export HOST_ELF=${HOST_DIR}/bin/${HOST_NAME}.elf
+fi
 
 echo -e "${SUCCESS}[host_selection] Selected host: $HOST_APP @ $HOST_DIR${VANILLA}"
 echo -e "${SUCCESS}[host_configuration] host elf is @ $HOST_ELF${VANILLA}"

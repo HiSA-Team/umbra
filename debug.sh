@@ -3,6 +3,28 @@ set -eo pipefail
 
 source ./settings.sh
 
+# ── RISC-V RV32 (QEMU) launch path ─────────────────────────────────────────
+# No ST-LINK / OpenOCD: QEMU IS the target. Load the M-mode monitor at RAM
+# origin and the U-mode host image at 0x8010_0000, route the 16550 UART to
+# stdio. Set QEMU_DEBUG=1 to halt for GDB (gdbstub on :1234):
+#   QEMU_DEBUG=1 ./debug.sh   then:  ${GDB} -ex 'target remote :1234' <monitor.elf>
+if [ "${MCU_VARIANT}" = "riscv32" ]; then
+    MON_ELF="${ROOT_DIR}/target/${TARGET_ARCH}/release/${BOOT_BIN_NAME}"
+    if [ ! -f "${MON_ELF}" ] || [ ! -f "${HOST_ELF}" ]; then
+        echo -e "${FAILURE:-}[riscv32] Build artifacts missing — run ./rebuild_all.sh first${VANILLA:-}" >&2
+        exit 1
+    fi
+    GDB_FLAGS=""
+    if [ "${QEMU_DEBUG:-0}" = "1" ]; then
+        GDB_FLAGS="-s -S"
+        echo -e "${BOLD:-}[riscv32] QEMU halted for GDB on :1234 (target remote :1234)${VANILLA:-}"
+    fi
+    echo -e "${BOLD:-}[riscv32] Launching ${BOOT_BIN_NAME} + ${HOST_NAME} on QEMU (${QEMU_CPU})${VANILLA:-}"
+    exec "${QEMU}" -machine virt -cpu "${QEMU_CPU}" -bios none \
+        -kernel "${MON_ELF}" -device loader,file="${HOST_ELF}" \
+        -display none -serial stdio -monitor none ${GDB_FLAGS}
+fi
+
 if [ "$MCU_VARIANT" = "stm32l562" ]; then
     # Flash the plaintext enclave blob into OCTOSPI.
     # The L562 target uses the HAL target-as-oracle cipher pass

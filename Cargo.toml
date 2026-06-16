@@ -9,11 +9,13 @@ members = [
     "crates/umbra-api",
     "src/kernel",
     "src/hardware/architecture/arm",
+    "src/hardware/architecture/riscv",                    # umbra-riscv-arch
     "src/hardware/common/peripheral_regs",
     "src/hardware/platform/stm32l552/boot",               # umbra-l552-boot
     "src/hardware/platform/stm32l552/drivers",            # umbra-l552-drivers
     "src/hardware/platform/stm32n657/boot",               # umbra-n657-boot
     "src/hardware/platform/stm32n657/drivers",            # umbra-n657-drivers
+    "src/hardware/platform/riscv32/boot",                 # umbra-riscv32-boot
 ]
 
 [workspace.package]

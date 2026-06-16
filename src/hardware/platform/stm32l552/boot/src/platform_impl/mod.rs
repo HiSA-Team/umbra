@@ -72,11 +72,11 @@ impl PlatformBoot for Stm32l5Platform {
         Stm32l5Platform::init_external_flash_impl(self)
     }
 
-    fn configure_ns_boot(&self) {
-        Stm32l5Platform::configure_ns_boot_impl(self);
+    fn configure_untrusted_boot(&self) {
+        Stm32l5Platform::configure_untrusted_boot_impl(self);
     }
 
-    fn jump_to_ns(&self) -> ! {
-        Stm32l5Platform::jump_to_ns_impl(self)
+    fn jump_to_untrusted(&self) -> ! {
+        Stm32l5Platform::jump_to_untrusted_impl(self)
     }
 }

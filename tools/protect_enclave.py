@@ -18,6 +18,40 @@ CODE_BLOCK_SIZE = int(os.environ.get("UMBRA_SLOT_SIZE_BYTES", "256"))
 # Size of the metadata header per block (excluding the data itself)
 # We will define this dynamically or fixed.
 
+# Cross-toolchain prefix for objdump/objcopy/nm/readelf. Defaults to the ARM
+# bare-metal triple (STM32 platforms). RISC-V overrides it via
+# UMBRA_CROSS=riscv64-unknown-elf- so the SAME tool serves every target.
+CROSS = os.environ.get("UMBRA_CROSS", "arm-none-eabi-")
+
+# Target architecture, derived from the toolchain prefix. The block split,
+# encryption, metadata, and chained measurement are arch-independent; only the
+# disassembly-driven reachability (Stage 5) and the static-PIE relocation family
+# differ between ARM Thumb and RISC-V.
+IS_RISCV = "riscv" in CROSS
+
+# RISC-V control-flow mnemonics with a STATIC target (the reachability edge).
+# jalr/jr/ret/c.jr/c.jalr are indirect (no statically-known target) → excluded.
+# jal/c.jal are calls (they return → the block also falls through).
+RISCV_BRANCH_MNEMONICS = {
+    "jal", "j", "c.j", "c.jal",
+    "beq", "bne", "blt", "bge", "bltu", "bgeu",
+    "beqz", "bnez", "blez", "bgez", "bltz", "bgtz",
+    "bgt", "ble", "bgtu", "bleu",
+    "c.beqz", "c.bnez",
+}
+# RISC-V instructions that END a block's control flow (no fall-through to the
+# next block). Unconditional jumps + returns; `jal`/`c.jal` (calls) DO fall
+# through, conditional branches DO fall through.
+RISCV_UNCOND_MNEMONICS = {"j", "c.j", "jr", "c.jr", "ret", "tail", "mret"}
+
+
+def _is_branch(mnem):
+    """Does `mnem` carry a static intra-enclave control-flow edge?"""
+    if IS_RISCV:
+        return mnem in RISCV_BRANCH_MNEMONICS
+    # ARM Thumb: b/bl/bx/beq/... and the c* conditionals.
+    return mnem.startswith("b") or mnem.startswith("c") or "bl" in mnem
+
 def run_cmd(args):
     """Run a subprocess command and return output."""
     try:
@@ -32,7 +66,7 @@ def run_cmd(args):
 
 def get_section_info(elf_path, section_name):
     """Get section offset, size, and address using objdump."""
-    output = run_cmd(["arm-none-eabi-objdump", "-h", elf_path])
+    output = run_cmd([f"{CROSS}objdump", "-h", elf_path])
     # Idx Name Size VMA LMA File off Algn
     #  1 .app.enclave_code 00000400 ...
     for line in output.splitlines():
@@ -49,7 +83,7 @@ def get_section_info(elf_path, section_name):
 def extract_section(elf_path, section_name, output_file):
     """Extract section content to a file."""
     run_cmd([
-        "arm-none-eabi-objcopy",
+        f"{CROSS}objcopy",
         "-O", "binary",
         f"--only-section={section_name}",
         elf_path,
@@ -59,7 +93,7 @@ def extract_section(elf_path, section_name, output_file):
 def update_section(elf_path, section_name, input_file):
     """Update section content from a file."""
     run_cmd([
-        "arm-none-eabi-objcopy",
+        f"{CROSS}objcopy",
         "--update-section", f"{section_name}={input_file}",
         elf_path
     ])
@@ -92,7 +126,7 @@ def extract_static_pie_reloc_vmas(elf_path, section_name, section_vma, section_b
     R_ARM_BASE_PREL — those are PC-relative encodings and resolve
     correctly at runtime without any fixup.
     """
-    output = run_cmd(["arm-none-eabi-readelf", "-W", "-r", elf_path])
+    output = run_cmd([f"{CROSS}readelf", "-W", "-r", elf_path])
     rel_section_header = f".rel{section_name}"
     in_target = False
     vmas = set()
@@ -135,7 +169,7 @@ def parse_disassembly(elf_path, section_name):
         instructions: list of (addr, size, mnemonic, op_str, bytes)
         labels: dict of addr -> name
     """
-    cmd = ["arm-none-eabi-objdump", "-d", f"--section={section_name}", elf_path]
+    cmd = [f"{CROSS}objdump", "-d", f"--section={section_name}", elf_path]
     output = run_cmd(cmd)
     
     instructions = []
@@ -207,7 +241,7 @@ def encrypt_block(data, key):
 def load_symbols(elf_path):
     """Load symbols from ELF using nm, including local symbols."""
     # -a: debug-syms, -n: numeric sort
-    output = run_cmd(["arm-none-eabi-nm", "-a", "-n", elf_path])
+    output = run_cmd([f"{CROSS}nm", "-a", "-n", elf_path])
 
     syms = {}
     for line in output.splitlines():
@@ -222,11 +256,75 @@ def load_symbols(elf_path):
                 pass
     return syms
 
+def flat_protect(elf_file, key_file):
+    """Single-block "flat" EFB for the RISC-V monitor (set UMBRA_CROSS=riscv64-
+    unknown-elf-). Encrypt the whole `._enclave_code` with AES-128-CTR, measure
+    the CIPHERTEXT (encrypt-then-MAC), patch the 48-byte `._enclave_header`
+    (code_size@10, hmac@16), and write the ciphertext back into the ELF.
+
+    No block container / reachability / relocations: the riscv enclave is a
+    single PC-relative block. The monitor (`secure_kernel::create`) verifies
+    HMAC(MASTER_KEY, ciphertext), then AES-128-CTR-decrypts in the Secure ESS
+    before executing — the same encrypt-then-MAC ordering as the ARM EFB path,
+    reusing this tool's `encrypt_block` + ENC_KEY_LABEL KDF.
+    """
+    with open(key_file, "rb") as f:
+        master_key = f.read(32)
+    enc_key = hmac.new(master_key, b"umbra-enc-v1", hashlib.sha256).digest()[:16]
+
+    if not get_section_info(elf_file, "._enclave_code"):
+        print("Error: ._enclave_code section not found")
+        sys.exit(1)
+
+    with tempfile.TemporaryDirectory(prefix="umbra_flat_") as d:
+        pt = os.path.join(d, "pt.bin")
+        extract_section(elf_file, "._enclave_code", pt)
+        with open(pt, "rb") as f:
+            plain = f.read()
+
+        cipher = encrypt_block(plain, enc_key)  # AES-128-CTR over the whole code
+        if len(cipher) != len(plain):
+            print(f"Error: ciphertext length {len(cipher)} != plaintext {len(plain)}")
+            sys.exit(1)
+        mac = hmac.new(master_key, cipher, hashlib.sha256).digest()
+
+        ct = os.path.join(d, "ct.bin")
+        with open(ct, "wb") as f:
+            f.write(cipher)
+        update_section(elf_file, "._enclave_code", ct)
+
+        hdr = os.path.join(d, "hdr.bin")
+        extract_section(elf_file, "._enclave_header", hdr)
+        with open(hdr, "rb") as f:
+            hb = bytearray(f.read())
+        if len(hb) < 48:
+            print(f"Error: header too small ({len(hb)} bytes)")
+            sys.exit(1)
+        struct.pack_into("<I", hb, 10, len(cipher))  # code_size
+        hb[16:48] = mac                               # hmac
+        with open(hdr, "wb") as f:
+            f.write(hb)
+        update_section(elf_file, "._enclave_header", hdr)
+
+    print(f"[Protect] flat: enc_key={enc_key.hex()} measurement={mac.hex()} "
+          f"over {len(cipher)} ciphertext bytes")
+
+
 def main():
     # Strip optional flags out of argv so the positional parsing below is
-    # unchanged. Only flag for now: --hmac-over-plaintext (L562 path).
+    # unchanged. Flags: --hmac-over-plaintext (L562 path), --flat (RISC-V
+    # single-block path).
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     hmac_over_plaintext = "--hmac-over-plaintext" in sys.argv[1:]
+    flat_mode = "--flat" in sys.argv[1:]
+
+    # RISC-V single-block path: `protect_enclave.py --flat <elf_file> <key_file>`.
+    if flat_mode:
+        if len(argv) < 2:
+            print("Usage: protect_enclave.py --flat <elf_file> <key_file>")
+            sys.exit(1)
+        flat_protect(argv[0], argv[1])
+        return
 
     if len(argv) < 3:
         print("Usage: protect_enclave.py [--hmac-over-plaintext] <elf_file> <main_c> <key_file> [obj_dir]")
@@ -395,10 +493,15 @@ def main():
 
         block = blocks[blk_idx]
 
-        _check_pc_rel(ins, addr, blk_idx)
+        # PC-relative cross-block DATA access check is ARM-specific (ldr [pc],
+        # adr, add pc). RISC-V materializes addresses via auipc+offset; that
+        # detection is deferred, so skip the ARM probe on RISC-V (it never
+        # matches RISC-V mnemonics anyway).
+        if not IS_RISCV:
+            _check_pc_rel(ins, addr, blk_idx)
 
-        # Check for BRANCHES
-        if ins['mnemonic'].startswith('b') or ins['mnemonic'].startswith('c') or 'bl' in ins['mnemonic']:
+        # Check for BRANCHES (static intra-enclave control-flow edges).
+        if _is_branch(ins['mnemonic']):
             target_val = None
             
             # Strategy 1: Check for Symbol Label in Disassembly (Compiler CFG)
@@ -483,12 +586,18 @@ def main():
                 # bx (if not linking)
                 # pop {..., pc}
                 
-                is_uncond_b = mnem in ['b', 'b.n', 'b.w']
-                is_return_pop = 'pop' in mnem and 'pc' in op_str
-                is_return_bx = mnem == 'bx' # usually bx lr
-                
-                if is_uncond_b or is_return_pop or is_return_bx:
-                    needs_fallthrough = False
+                if IS_RISCV:
+                    # Unconditional jump or return ends the block's flow; calls
+                    # (jal/c.jal) and conditional branches fall through.
+                    if mnem in RISCV_UNCOND_MNEMONICS:
+                        needs_fallthrough = False
+                else:
+                    is_uncond_b = mnem in ['b', 'b.n', 'b.w']
+                    is_return_pop = 'pop' in mnem and 'pc' in op_str
+                    is_return_bx = mnem == 'bx' # usually bx lr
+
+                    if is_uncond_b or is_return_pop or is_return_bx:
+                        needs_fallthrough = False
                     
                 # Note: 'bl' (Branch with Link) returns, so it FALLS THROUGH effectively.
                 # Conditional branches (bne, beq) FALL THROUGH.
@@ -652,9 +761,21 @@ def main():
     with open(_tmp_code_path, "rb") as f:
         _code_snapshot_bytes = f.read()
     os.remove(_tmp_code_path)
-    abs32_vmas = extract_static_pie_reloc_vmas(
-        elf_file, "._enclave_code", start_addr, _code_snapshot_bytes
-    )
+    if IS_RISCV:
+        # RISC-V: the only absolute slots are R_RISCV_32 (data pointers/function
+        # tables). GOT_HI20/PCREL/CALL_PLT are PC-relative — the whole blob moves
+        # together, so they need no fixup. readelf prints each offset as a VMA.
+        _rv_relocs = run_cmd([f"{CROSS}readelf", "-W", "-r", elf_file])
+        abs32_vmas = sorted({
+            int(p[0], 16)
+            for line in _rv_relocs.splitlines()
+            for p in [line.split()]
+            if len(p) >= 3 and p[2] == "R_RISCV_32"
+        })
+    else:
+        abs32_vmas = extract_static_pie_reloc_vmas(
+            elf_file, "._enclave_code", start_addr, _code_snapshot_bytes
+        )
     # readelf prints each R_ARM_ABS32 offset as a VMA (compile-time virtual
     # address). The kernel works with PLAINTEXT-RELATIVE offsets (0-indexed
     # from `_enclave_code_start`, i.e. block 0's first byte), so we
@@ -674,7 +795,8 @@ def main():
             continue
         reloc_entries.append(off)
     reloc_count = len(reloc_entries)
-    print(f"[Protect] Static-PIE relocs (R_ARM_ABS32 + R_ARM_GOT_BREL): "
+    _reloc_family = "R_RISCV_32" if IS_RISCV else "R_ARM_ABS32 + R_ARM_GOT_BREL"
+    print(f"[Protect] Static-PIE relocs ({_reloc_family}): "
           f"{reloc_count} entries (plaintext-relative offsets, fixed up at block install).")
 
     # Pack the reloc table — `[u32 offset_0][u32 offset_1]...`. Append

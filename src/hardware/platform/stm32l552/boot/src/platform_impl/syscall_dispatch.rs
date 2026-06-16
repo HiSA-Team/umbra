@@ -10,7 +10,7 @@ use arm::mmio::{NVIC_ISER0, NVIC_ISER1, SCB_SHCSR, SYST_CSR};
 
 // ─── Static NS-MPU layout (Tock host port) ──────────────────────────────
 // Six regions plus the PPB region (7 total) describing the Non-Secure MPU
-// layout Umbra Secure programs once during configure_ns_boot(), then leaves
+// layout Umbra Secure programs once during configure_untrusted_boot(), then leaves
 // immutable for the lifetime of the system. Tock runs in NS with a NoopMpu
 // stub that never rewrites these registers; the actual memory protection
 // lives here.
@@ -283,7 +283,7 @@ impl Stm32l5Platform {
         );
     }
 
-    pub(super) fn configure_ns_boot_impl(&self) {
+    pub(super) fn configure_untrusted_boot_impl(&self) {
         // Disable Secure SysTick
         unsafe {
             let syst_csr = SYST_CSR;

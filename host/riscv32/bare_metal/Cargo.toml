@@ -1,0 +1,22 @@
+# RISC-V (RV32) bare-metal Umbra host 
+
+# Standalone build (own `[workspace]`) so it does not join the firmware
+# workspace — mirroring how the L552 host is a separate Makefile project.
+[package]
+name = "umbra-riscv-host-baremetal"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bare_metal"
+path = "src/main.rs"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+[profile.dev]
+panic = "abort"
+
+[workspace]

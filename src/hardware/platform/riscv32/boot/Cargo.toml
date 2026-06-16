@@ -1,0 +1,21 @@
+[package]
+name                   = "umbra-riscv32-boot"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description            = "Umbra M-mode monitor binary for the QEMU virt RISC-V (RV32) board"
+
+[dependencies]
+umbra-error      = { path = "../../../../../crates/umbra-error" }
+umbra-api        = { path = "../../../../../crates/umbra-api" }
+umbra-hal        = { path = "../../../../../crates/umbra-hal" }
+umbra-riscv-arch = { path = "../../../architecture/riscv" }
+kernel = { path = "../../../../kernel", default-features = false, features = [
+    "platform-riscv32",
+] }
+
+[[bin]]
+name = "umbra-rv32"
+path = "src/main.rs"

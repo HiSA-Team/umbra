@@ -854,6 +854,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-riscv-arch"
+version = "0.1.0"
+dependencies = [
+ "umbra-error",
+]
+
+[[package]]
+name = "umbra-riscv32-boot"
+version = "0.1.0"
+dependencies = [
+ "kernel",
+ "umbra-api",
+ "umbra-error",
+ "umbra-hal",
+ "umbra-riscv-arch",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -79,3 +79,7 @@ tools/master_key.bin
 # Build artifacts under host/<mcu>/bare_metal/ (NEVER_DO #11)
 host/*/bare_metal/lib/
 host/*/bare_metal/*.bin
+
+# RISC-V (riscv32) bare-metal host is a Cargo crate — Cargo build output dir.
+host/riscv32/bare_metal/target/
+

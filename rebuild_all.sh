@@ -4,6 +4,32 @@ set -eo pipefail
 source ./settings.sh
 export UMBRA_ESS_MISS_RECOVERY=1
 
+# ── RISC-V RV32 (QEMU) build path ──────────────────────────────────────────
+# The RISC-V monitor + host are Cargo crates. Generate the master key, build the
+# M-mode monitor and the U-mode bare-metal host, then divide + protect the
+# embedded enclave (EFB 320-byte blocks: AES-128-CTR encrypt + per-block HMAC +
+# chained measurement) with the SAME tool the STM32 platforms use —
+# tools/protect_enclave.py with the RISC-V toolchain prefix. The monitor
+# demand-loads + verifies + decrypts blocks at runtime.
+if [ "${MCU_VARIANT}" = "riscv32" ]; then
+    # Rotate the master key with gen_key.py
+    # writes tools/master_key.bin (read by the signer below) AND each platform's
+    # master_key.rs (compiled into the monitor). Run BEFORE the monitor build so
+    # crypto_impl::MASTER_KEY picks up the fresh key.
+    echo -e "${BOLD:-}[riscv32] Generating master key (tools/gen_key.py)${VANILLA:-}"
+    "${PYTHON}" "${ROOT_DIR}/tools/gen_key.py"
+    echo -e "${BOLD:-}[riscv32] Building M-mode monitor (${BOOT_CRATE_NAME})${VANILLA:-}"
+    ( cd "${SECBOOT_DIR}" && ${CARGO} build --release )
+    echo -e "${BOLD:-}[riscv32] Building U-mode host (${HOST_NAME})${VANILLA:-}"
+    ( cd "${HOST_DIR}" && ${CARGO} build --release )
+    echo -e "${BOLD:-}[riscv32] Protecting embedded enclave (EFB block division + chained measurement)${VANILLA:-}"
+    UMBRA_CROSS="${GCC_PREFIX}" UMBRA_CHAINED=1 UMBRA_ESS_MISS_RECOVERY=1 \
+        "${PYTHON}" "${ROOT_DIR}/tools/protect_enclave.py" \
+        "${HOST_ELF}" _ "${ROOT_DIR}/tools/master_key.bin"
+    echo -e "${SUCCESS:-}[riscv32] Build complete. Launch with ./debug.sh${VANILLA:-}"
+    exit 0
+fi
+
 # Secure boot kernel build.
 make secureboot_clean
 make secureboot_build

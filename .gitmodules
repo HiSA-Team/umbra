@@ -10,3 +10,6 @@
 [submodule "host/stm32l552/tock/lib/libtock-rs"]
 	path = host/stm32l552/tock/lib/libtock-rs
 	url = https://github.com/tock/libtock-rs.git
+[submodule "tools/qemu-spmp/qemu"]
+	path = tools/qemu-spmp/qemu
+	url = https://gitlab.com/qemu-project/qemu.git

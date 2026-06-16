@@ -41,6 +41,7 @@
 - [ADR 005 — NSC Boundary](decisions/005-nsc-boundary.md)
 - [ADR 006 — Master-Key Chain of Trust](decisions/006-master-key-chain.md)
 - [ADR 007 — Panic Policy](decisions/007-panic-policy.md)
+- [ADR 008 — RISC-V SPMP Arbitration](decisions/008-riscv-spmp-arbitration.md)
 
 # Supported Hardware
 

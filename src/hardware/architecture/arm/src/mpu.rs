@@ -271,7 +271,7 @@ pub struct NsMpuRegion {
 }
 
 /// Program the NS-MPU with a static layout. Called exactly once during
-/// Secure boot (from `platform_impl::configure_ns_boot`). After this call
+/// Secure boot (from `platform_impl::configure_untrusted_boot`). After this call
 /// the NS-MPU is locked: nothing in NS — Tock kernel, capsules, apps —
 /// rewrites MPU registers.
 /// MAIR0 is initialized with two attributes:

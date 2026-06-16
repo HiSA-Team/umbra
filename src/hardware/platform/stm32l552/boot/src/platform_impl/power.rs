@@ -1,7 +1,7 @@
 //! Sleep / wakeup hooks and the final hand-off from Secure to Non-Secure
 //! world.
 //!: extracted from `platform_impl.rs`. The
-//! `jump_to_ns` path is the last thing the Secure kernel runs at boot —
+//! `jump_to_untrusted` path is the last thing the Secure kernel runs at boot —
 //! after this the NS host owns the CPU until a Secure call comes through
 //! the NSC veneers in `arm/asm/nsc_veneers.s` (see invariant CJ4 in
 //! `mod.rs`).
@@ -12,7 +12,7 @@
 use super::Stm32l5Platform;
 
 impl Stm32l5Platform {
-    pub(super) fn jump_to_ns_impl(&self) -> ! {
+    pub(super) fn jump_to_untrusted_impl(&self) -> ! {
         crate::raw_print::print_str("[UMBRASecureBoot] Jumping to Non-Secure World\n");
 
         #[cfg(feature = "benchmark")]
