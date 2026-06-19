@@ -8,6 +8,7 @@ members = [
     "crates/umbra-error",
     "crates/umbra-api",
     "crates/umbra-ess-core",
+    "crates/umbra-rot-core",
     "src/kernel",
     "src/hardware/architecture/arm",
     "src/hardware/architecture/riscv",                    # umbra-riscv-arch

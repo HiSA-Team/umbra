@@ -42,6 +42,7 @@ use std::vec::Vec;
 
 use super::*;
 use proptest::prelude::*;
+use umbra_error::UmbraError;
 
 /// A `CryptoEngine` stub that produces deterministic, avalanche-like
 /// output for property tests. See module-level doc comment for the

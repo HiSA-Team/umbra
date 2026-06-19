@@ -1,0 +1,15 @@
+# umbra-rot-core — the verifiable Root-of-Trust measurement logic (issue #58).
+# #![no_std], zero unsafe: the chained-HMAC measurement + constant-time accept
+# gate, carved out of `kernel::key_storage_server` so the Charon→Aeneas→Coq
+# pipeline can prove its security properties. Crypto is the opaque seam
+# (`umbra_api::CryptoEngine`); the kernel re-exports this crate and keeps its
+# `&mut dyn CryptoEngine` dispatch by instantiating the generics at `dyn`.
+[package]
+name = "umbra-rot-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+umbra-error = { path = "../umbra-error" }
+umbra-api   = { path = "../umbra-api" }

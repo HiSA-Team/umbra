@@ -387,6 +387,7 @@ dependencies = [
  "umbra-api",
  "umbra-error",
  "umbra-ess-core",
+ "umbra-rot-core",
 ]
 
 [[package]]
@@ -877,6 +878,14 @@ dependencies = [
  "umbra-error",
  "umbra-hal",
  "umbra-riscv-arch",
+]
+
+[[package]]
+name = "umbra-rot-core"
+version = "0.0.0"
+dependencies = [
+ "umbra-api",
+ "umbra-error",
 ]
 
 [[package]]

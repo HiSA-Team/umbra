@@ -16,6 +16,10 @@ umbra-api   = { path = "../../crates/umbra-api" }
 # by `common::ess` so every existing call site is unchanged; platform features
 # are forwarded below so the per-board ESS address map still matches the silicon.
 umbra-ess-core = { path = "../../crates/umbra-ess-core", default-features = false }
+# Root-of-Trust measurement logic carved into a verifiable leaf crate:
+# KeyGenerator delegates here. Generic over CryptoEngine; the kernel keeps
+# its `&mut dyn` dispatch by instantiating at `dyn CryptoEngine`.
+umbra-rot-core = { path = "../../crates/umbra-rot-core" }
 
 # Property-based tests for invariants in `common::ess` and related
 # subsystems. Dev-dependency only, so the firmware (`thumbv8m`)

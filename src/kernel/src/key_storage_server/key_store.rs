@@ -1,21 +1,7 @@
-pub const KEY_SIZE: usize = 32;
-
-#[derive(Copy, Clone)]
-pub struct Key {
-    pub value: [u8; KEY_SIZE],
-}
-
-impl Key {
-    pub fn new(value: [u8; KEY_SIZE]) -> Self {
-        Self { value }
-    }
-
-    pub fn zero() -> Self {
-        Self {
-            value: [0; KEY_SIZE],
-        }
-    }
-}
+// `Key` / `KEY_SIZE` now live in the verifiable `umbra-rot-core` crate
+// re-exported here so the kernel and the RoT proofs share one
+// type and every `key_store::{Key, KEY_SIZE}` call site is unchanged.
+pub use umbra_rot_core::{Key, KEY_SIZE};
 
 pub use crate::common::ess::MAX_KEYS;
 

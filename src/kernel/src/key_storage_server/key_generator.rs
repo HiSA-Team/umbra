@@ -1,6 +1,6 @@
 use crate::key_storage_server::crypto::CryptoEngine;
 use crate::key_storage_server::key_store::{Key, KEY_SIZE};
-use umbra_error::{UmbraError, UmbraResult};
+use umbra_error::UmbraResult;
 
 pub struct KeyGenerator<'a> {
     crypto: &'a mut dyn CryptoEngine,
@@ -12,93 +12,50 @@ impl<'a> KeyGenerator<'a> {
     }
 
     pub fn derive_key(&mut self, base_key: &Key, context: &[u8]) -> UmbraResult<Key> {
-        let mut new_key_bytes = [0u8; KEY_SIZE];
-        // For simplicity, using HMAC as KDF: HMAC(base_key, context)
-        self.crypto
-            .hmac(&base_key.value, context, &mut new_key_bytes)?;
-        Ok(Key::new(new_key_bytes))
+        umbra_rot_core::derive_key(&mut *self.crypto, base_key, context)
     }
 
-    /// Constant-time tag comparison. Mirrors the XOR-fold pattern at
-    /// `src/hardware/platform/stm32l552/boot/src/validator.rs:62-65`.
-    /// The length-mismatch branch leaks only `len() != len()`, which is
-    /// always public (both lengths are known constants at every call
-    /// site — currently 32 bytes for the HMAC-SHA-256 measurement tag).
+    /// Constant-time tag comparison (proved sound: T1). Returns `true` iff the
+    /// tags are byte-for-byte equal.
     pub fn verify_measurement(&self, measured_hash: &[u8], expected_hash: &[u8]) -> bool {
-        if measured_hash.len() != expected_hash.len() {
-            return false;
-        }
-        let mut diff: u8 = 0;
-        for i in 0..measured_hash.len() {
-            diff |= measured_hash[i] ^ expected_hash[i];
-        }
-        diff == 0
+        umbra_rot_core::verify_measurement(measured_hash, expected_hash)
     }
 
-    /// Fold one more block into an in-progress HMAC chain.
-    /// `current_key` is both the input key (from the previous block, or the master
-    /// key for block 0) and, on success, the output key `HMAC(current_key, block)`.
-    /// Lets the caller stream the design's chained measurement one block at a time
-    /// as DMA completes, without buffering all blocks in memory.
+    /// Fold one more block into the in-progress HMAC chain.
     pub fn update_chain(
         &mut self,
         current_key: &mut [u8; KEY_SIZE],
         block: &[u8],
     ) -> UmbraResult<()> {
-        let mut output = [0u8; KEY_SIZE];
-        self.crypto.hmac(current_key, block, &mut output)?;
-        *current_key = output;
-        Ok(())
+        umbra_rot_core::update_chain(&mut *self.crypto, current_key, block)
     }
 
-    // Logic to chain HMACs for EFB validation as per design
+    /// Closed-form chained measurement — the streaming [`Self::update_chain`]
+    /// folded over a block list. The `&[&[u8]]` shape is not Aeneas-extractable
+    /// (slice of borrows), so the oracle stays here as a loop over the proved
+    /// `update_chain`; the firmware itself streams via `update_chain`.
     pub fn compute_measurement(
         &mut self,
         blocks: &[&[u8]],
         initial_key: &Key,
     ) -> UmbraResult<[u8; KEY_SIZE]> {
         let mut current_key = initial_key.value;
-        let mut output = [0u8; KEY_SIZE];
-
         for block in blocks {
-            self.crypto.hmac(&current_key, block, &mut output)?;
-            current_key = output;
+            umbra_rot_core::update_chain(&mut *self.crypto, &mut current_key, block)?;
         }
-        Ok(output)
+        Ok(current_key)
     }
 
-    /// Authenticates the encrypted binary using HMAC and then decrypts it in-place.
-    /// # Arguments
-    /// * `key` - The root key (encryption key).
-    /// * `data` - The encrypted data (ciphertext). Modified in-place to plaintext.
-    /// * `expected_hmac` - The expected HMAC signature of the ciphertext.
+    /// Authenticate the ciphertext against `expected_hmac`, then decrypt in
+    /// place. Returns `Ok` only if the measurement matched.
+    /// Delegates to the proved `umbra_rot_core::authenticate_and_decrypt`.
     pub fn authenticate_and_decrypt(
         &mut self,
         key: &Key,
         data: &mut [u8],
         expected_hmac: &[u8],
     ) -> UmbraResult<()> {
-        // 1. Verify Measurement (HMAC of Ciphertext)
-        let measurement_key = self.derive_key(key, data)?;
-
-        if !self.verify_measurement(&measurement_key.value, expected_hmac) {
-            // MeasurementMismatch carries the first 8 bytes of each side for
-            // diagnostic visibility without leaking the full digest off-chip.
-            let mut expected = [0u8; 8];
-            let mut got = [0u8; 8];
-            let elen = core::cmp::min(8, expected_hmac.len());
-            expected[..elen].copy_from_slice(&expected_hmac[..elen]);
-            let glen = core::cmp::min(8, measurement_key.value.len());
-            got[..glen].copy_from_slice(&measurement_key.value[..glen]);
-            return Err(UmbraError::MeasurementMismatch { expected, got });
-        }
-
-        // 2. Decrypt (AES-CTR)
-        // Using 0-IV as per current protocol (or derived).
-        let iv = [0u8; 16];
-        self.crypto.aes_decrypt(&key.value, &iv, data)?;
-
-        Ok(())
+        umbra_rot_core::authenticate_and_decrypt(&mut *self.crypto, key, data, expected_hmac)
     }
 }
 

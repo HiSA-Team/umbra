@@ -283,3 +283,49 @@ Until that passes, treat 3b as host-validated only.
 >   missing array/scalar theory ourselves (one reusable `EssTheory.v`) and write
 >   the model in the Coq-clean subset (structural recursion, not indexed loops).
 >   Refactor proposal (Phase 2/3) pending.
+
+---
+
+## 3. ROOT-OF-TRUST PROPERTIES — proved on the real code (`umbra-rot-core`)
+
+The `Ess_Guard` property was local/by-construction. The interesting Root-of-Trust
+properties are about Umbra's **chained HMAC measurement** (`M₀ = master_key`,
+`Mᵢ₊₁ = HMAC(Mᵢ, blockᵢ)`; threat-model CJ2). Carved the measurement logic out of
+`kernel::key_storage_server` into a new verifiable leaf crate
+**`crates/umbra-rot-core`** (`#![no_std]`, zero unsafe).
+
+**Refactor (behavior-preserving):**
+- `verify_measurement`, `derive_key`, `update_chain`, `authenticate_and_decrypt`
+  moved to `umbra-rot-core`, made **generic** `C: ?Sized + CryptoEngine` —
+  because **Aeneas cannot extract `&mut dyn CryptoEngine`** ("Function pointers
+  are not supported yet"; a trait object is a vtable). The kernel's
+  `KeyGenerator` keeps `&mut dyn CryptoEngine` and delegates, instantiating
+  `C = dyn CryptoEngine`: **dispatch stays virtual (no monomorphization bloat),
+  logic is the proved one.**
+- `key_store::{Key, KEY_SIZE}` re-exported from the crate (single source).
+- Host-verified: `cargo check/test -p kernel` ✅ 22 passed (incl. the CJ2
+  chained-measurement proptests, now exercising the delegated crate). Cross-build
+  gate = CI.
+- All 4 primitives **extract to Coq, 0 `admit`**. (`compute_measurement`'s
+  `&[&[u8]]` slice-of-slices is *not* Aeneas-extractable and the firmware never
+  calls it — it streams `update_chain` — so it stays a test-only oracle.)
+
+**Theorems proved (`Qed`)** — `formal/rocq/rot-core/proofs-coq/`:
+
+| # | File | Statement | Assumption |
+|---|---|---|---|
+| **T1** | `Rot_Verify.v` | `verify_measurement` is a **sound accept gate**: accepts ⟺ tags byte-equal (`ct_eq_correct`); corollary `verify_no_false_accept` | **none** (pure logic, `N.lor`/`N.lxor` lemmas) |
+| **T2** | `Rot_Chain.v` | the chained measurement is **injective** in the block sequence (`chain_injective`) — **tamper-evidence**: any change to any block changes the root measurement | idealized HMAC (injective in (key,block) — the ProVerif symbolic model) |
+| **T3** | `Rot_Integrity.v` | **RoT integrity**: acceptance ⇒ presented blocks **are** the registered ones (`rot_integrity`); contrapositive `rot_tamper_rejected` | T1 + T2 |
+
+T3 is the code-level, **content-integrity** strengthening of ProVerif's
+`Execute(b) ⇒ RegisterBlock(b)`: not merely "every executed block was
+registered" but "the executed code is bit-for-bit the registered code; no
+substituted or tampered enclave is accepted."
+
+**Honest scope:** T1/T2 are proved over faithful Coq models of the extracted
+algorithms (the OR-fold-of-XORs gate; the `update_chain` HMAC step) with HMAC
+idealized — the standard symbolic-crypto level, now *mechanized* and tied to the
+real extracted functions, vs. the existing CJ2 *property tests* that only sample
+it. Remaining: bind the Coq `chain` to the extracted `update_chain` body by a
+refinement lemma (currently justified by reading the extracted definition).
