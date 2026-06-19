@@ -3,3 +3,4 @@
 Rot_Verify.v
 Rot_Chain.v
 Rot_Integrity.v
+Rot_Validate.v

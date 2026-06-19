@@ -329,3 +329,47 @@ idealized — the standard symbolic-crypto level, now *mechanized* and tied to t
 real extracted functions, vs. the existing CJ2 *property tests* that only sample
 it. Remaining: bind the Coq `chain` to the extracted `update_chain` body by a
 refinement lemma (currently justified by reading the extracted definition).
+
+---
+
+## 4. EXTENDING THE VERIFIABLE CORE — memory-protection server (T4, T5)
+
+The remaining safe kernel modules, carved and proved:
+
+- `memory_protection_server/memory_guard.rs` → **traits only** (the hardware
+  enforcement seam: MPCBB/SAU/PMP/RISAF). No logic to verify; left in place.
+- `memory_protection_server/memory_validation.rs::validate_block` → now delegates
+  to a new **`umbra_rot_core::validate_block`** (generic, extracted, 0 admit).
+  **T4** (`Rot_Validate.v`, `validate_block_sound`): a validated block's derived
+  measurement IS the expected one — a corollary of T1, lifting the proved gate to
+  the memory-protection server. No new crypto assumption.
+- `common/memory_layout.rs` → new verifiable crate **`crates/umbra-mem-core`**
+  (block model + region math, extracted 0 admit). **T5** (`Mem_Region.v`,
+  `create_from_range_covers`): the block list built from `[base, limit)` covers
+  the requested range.
+
+**Verification finding (T5).** Proving coverage forced two implicit assumptions
+of `create_from_range` into the open, as proof hypotheses:
+1. the round-up test `limit_addr & 0xff` **hardcodes a 256-byte block** — for any
+   other `UMBRA_SLOT_SIZE_BYTES` the ceiling is computed against the wrong modulus
+   and coverage can fail;
+2. **`base` must be block-aligned** (`base mod 256 = 0`) — the size ceils on
+   `limit mod 256`, not `(limit − base) mod 256`, so an unaligned base can
+   under-cover.
+Both hold for the default configuration; they are latent coupling worth a guard
+or a follow-up fix.
+
+**Host-verified (behavior-preserving):** `cargo check/test -p kernel` ✅ 22,
+`umbra-rot-core` + `umbra-mem-core` tests ✅. Cross-build = CI.
+
+### Verifiable-core summary
+
+| Crate | Domain | Theorems |
+|---|---|---|
+| `umbra-ess-core` | ESS cache state machine | Check-Cache guard (`Ess_Guard`) |
+| `umbra-rot-core` | RoT chained measurement | T1 gate soundness, T2 tamper-evidence, T3 RoT integrity, T4 validator soundness |
+| `umbra-mem-core` | memory-block region math | T5 region coverage (+ finding) |
+
+The Umbra-authored safe kernel surface (cache, measurement/RoT, memory layout) is
+now carved into verifiable leaf crates the firmware depends on, with machine-
+checked properties on the security-critical ones.

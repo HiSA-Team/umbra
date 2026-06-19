@@ -57,6 +57,12 @@ impl<'a> KeyGenerator<'a> {
     ) -> UmbraResult<()> {
         umbra_rot_core::authenticate_and_decrypt(&mut *self.crypto, key, data, expected_hmac)
     }
+
+    /// Validate a single block against its expected measurement (proved sound:
+    /// T4). Returns `true` only if the block's derived measurement matches.
+    pub fn validate_block(&mut self, data: &[u8], expected_measurement: &Key) -> bool {
+        umbra_rot_core::validate_block(&mut *self.crypto, data, expected_measurement)
+    }
 }
 
 #[cfg(test)]

@@ -20,6 +20,9 @@ umbra-ess-core = { path = "../../crates/umbra-ess-core", default-features = fals
 # KeyGenerator delegates here. Generic over CryptoEngine; the kernel keeps
 # its `&mut dyn` dispatch by instantiating at `dyn CryptoEngine`.
 umbra-rot-core = { path = "../../crates/umbra-rot-core" }
+# Memory-layout logic carved into a verifiable leaf crate (issue #58); re-exported
+# by `common::memory_layout`.
+umbra-mem-core = { path = "../../crates/umbra-mem-core" }
 
 # Property-based tests for invariants in `common::ess` and related
 # subsystems. Dev-dependency only, so the firmware (`thumbv8m`)

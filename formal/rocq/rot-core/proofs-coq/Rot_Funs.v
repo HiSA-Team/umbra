@@ -81,14 +81,14 @@ Definition key_new (value : array u8 32%usize) : result Key_t :=
 .
 
 (** [umbra_rot_core::{umbra_rot_core::Key}::zero]:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 41:4-43:5
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 41:4-45:5
     Visibility: public *)
 Definition key_zero : result Key_t :=
   let a := array_repeat 32%usize 0%u8 in Ok {| key_value := a |}
 .
 
 (** [umbra_rot_core::verify_measurement]: loop body 0:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 55:4-58:5
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 57:4-60:5
     Visibility: public *)
 Definition verify_measurement_loop_body
   (measured_hash : slice u8) (expected_hash : slice u8) (diff : u8) (i : usize)
@@ -108,7 +108,7 @@ Definition verify_measurement_loop_body
 .
 
 (** [umbra_rot_core::verify_measurement]: loop 0:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 55:4-58:5
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 57:4-60:5
     Visibility: public *)
 Definition verify_measurement_loop
   (measured_hash : slice u8) (expected_hash : slice u8) (diff : u8) (i : usize)
@@ -122,7 +122,7 @@ Definition verify_measurement_loop
 .
 
 (** [umbra_rot_core::verify_measurement]:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 49:0-60:1
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 51:0-62:1
     Visibility: public *)
 Definition verify_measurement
   (measured_hash : slice u8) (expected_hash : slice u8) : result bool :=
@@ -136,7 +136,7 @@ Definition verify_measurement
 .
 
 (** [umbra_rot_core::derive_key]:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 63:0-71:1
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 65:0-73:1
     Visibility: public *)
 Definition derive_key
   {C : Type} (umbra_apicryptoCryptoEngineInst : umbra_api_crypto_CryptoEngine_t
@@ -165,7 +165,7 @@ Definition derive_key
 .
 
 (** [umbra_rot_core::update_chain]:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 76:0-85:1
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 78:0-87:1
     Visibility: public *)
 Definition update_chain
   {C : Type} (umbra_apicryptoCryptoEngineInst : umbra_api_crypto_CryptoEngine_t
@@ -193,8 +193,29 @@ Definition update_chain
   end
 .
 
+(** [umbra_rot_core::validate_block]:
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 104:0-114:1
+    Visibility: public *)
+Definition validate_block
+  {C : Type} (umbra_apicryptoCryptoEngineInst : umbra_api_crypto_CryptoEngine_t
+  C) (crypto : C) (data : slice u8) (expected_measurement : Key_t) :
+  result (bool * C)
+  :=
+  base_key <- key_zero;
+  p <- derive_key umbra_apicryptoCryptoEngineInst crypto base_key data;
+  let (r, crypto1) := p in
+  match r with
+  | Core_result_Result_Ok computed =>
+    let s := array_to_slice computed.(key_value) in
+    let s1 := array_to_slice expected_measurement.(key_value) in
+    b <- verify_measurement s s1;
+    Ok (b, crypto1)
+  | Core_result_Result_Err _ => Ok (false, crypto1)
+  end
+.
+
 (** [umbra_rot_core::authenticate_and_decrypt]:
-    Source: 'crates/umbra-rot-core/src/lib.rs', lines 101:0-120:1
+    Source: 'crates/umbra-rot-core/src/lib.rs', lines 119:0-138:1
     Visibility: public *)
 Definition authenticate_and_decrypt
   {C : Type} (umbra_apicryptoCryptoEngineInst : umbra_api_crypto_CryptoEngine_t

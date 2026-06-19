@@ -387,6 +387,7 @@ dependencies = [
  "umbra-api",
  "umbra-error",
  "umbra-ess-core",
+ "umbra-mem-core",
  "umbra-rot-core",
 ]
 
@@ -828,6 +829,10 @@ dependencies = [
  "umbra-hal",
  "umbra-pal-test",
 ]
+
+[[package]]
+name = "umbra-mem-core"
+version = "0.0.0"
 
 [[package]]
 name = "umbra-n657-boot"

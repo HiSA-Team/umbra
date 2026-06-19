@@ -1,0 +1,9 @@
+# umbra-mem-core — verifiable memory-layout logic (issue #58). #![no_std], zero
+# unsafe: Umbra's logical memory-block model + region math, carved out of
+# `kernel::common::memory_layout` so the Charon→Aeneas→Coq pipeline can reason
+# about memory-region coverage. The kernel re-exports it.
+[package]
+name = "umbra-mem-core"
+version = "0.0.0"
+edition = "2021"
+publish = false

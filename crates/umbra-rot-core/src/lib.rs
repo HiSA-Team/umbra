@@ -97,6 +97,22 @@ pub fn update_chain<C: ?Sized + CryptoEngine>(
 // single-step semantics and proves it injective. The `&[&[u8]]` oracle stays
 // in the kernel's `KeyGenerator` (test-only) as a loop over `update_chain`.
 
+/// **T4 target.** Validate a single block: derive its measurement (HMAC under a
+/// zero base key) and accept iff it matches `expected_measurement`. This is the
+/// `memory_protection_server`'s per-block validator. Soundness (T4): a `true`
+/// result implies the block's derived measurement IS the expected one.
+pub fn validate_block<C: ?Sized + CryptoEngine>(
+    crypto: &mut C,
+    data: &[u8],
+    expected_measurement: &Key,
+) -> bool {
+    let base_key = Key::zero();
+    match derive_key(crypto, &base_key, data) {
+        Ok(computed) => verify_measurement(&computed.value, &expected_measurement.value),
+        Err(_) => false,
+    }
+}
+
 /// **T3 target.** Authenticate the ciphertext against `expected_hmac` (via the
 /// derived measurement key), then decrypt in place. Returns `Ok` ONLY if the
 /// measurement matched — the by-construction half of RoT integrity.
