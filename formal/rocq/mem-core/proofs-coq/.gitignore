@@ -4,3 +4,4 @@
 *.glob
 *.aux
 .lia.cache
+.nia.cache

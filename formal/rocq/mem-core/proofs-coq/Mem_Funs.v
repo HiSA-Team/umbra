@@ -38,6 +38,7 @@ Definition MemoryBlockAccessAttribute_Insts_CoreCloneClone : core_clone_Clone
   MemoryBlockAccessAttribute_t := {|
   core_clone_Clone_clone :=
     MemoryBlockAccessAttribute_Insts_CoreCloneClone_clone;
+  core_clone_Clone_clone_from := fun _ y => Ok y;
 |}.
 
 (** Trait implementation: [umbra_mem_core::{impl core::marker::Copy for umbra_mem_core::MemoryBlockAccessAttribute}]
@@ -63,6 +64,7 @@ Definition MemoryBlockSecurityAttribute_Insts_CoreCloneClone : core_clone_Clone
   MemoryBlockSecurityAttribute_t := {|
   core_clone_Clone_clone :=
     MemoryBlockSecurityAttribute_Insts_CoreCloneClone_clone;
+  core_clone_Clone_clone_from := fun _ y => Ok y;
 |}.
 
 (** Trait implementation: [umbra_mem_core::{impl core::marker::Copy for umbra_mem_core::MemoryBlockSecurityAttribute}]
@@ -85,6 +87,7 @@ Definition MemoryBlock_Insts_CoreCloneClone_clone
 Definition MemoryBlock_Insts_CoreCloneClone : core_clone_Clone MemoryBlock_t
   := {|
   core_clone_Clone_clone := MemoryBlock_Insts_CoreCloneClone_clone;
+  core_clone_Clone_clone_from := fun _ y => Ok y;
 |}.
 
 (** Trait implementation: [umbra_mem_core::{impl core::marker::Copy for umbra_mem_core::MemoryBlock}]

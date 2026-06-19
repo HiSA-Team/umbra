@@ -373,3 +373,38 @@ or a follow-up fix.
 The Umbra-authored safe kernel surface (cache, measurement/RoT, memory layout) is
 now carved into verifiable leaf crates the firmware depends on, with machine-
 checked properties on the security-critical ones.
+
+---
+
+## 5. CLOSING THE BRIDGE — a theorem on the *extracted* code (T5)
+
+T1–T5 above are proved over faithful Coq models of the extracted algorithms. To
+make a proof stand on the **Aeneas-generated code itself** (as `Ess_Guard` does
+for the verbatim body), we close the bridge for `create_from_range`:
+
+`formal/rocq/mem-core/proofs-coq/Mem_Bridge.v` — `create_from_range_bridge` —
+proves the extracted `memoryBlockList_create_from_range` (compiled from
+`Mem_Funs.v`) returns exactly the `cfr` base-block index and size that T5
+(`Mem_Region.v`) reasons about. So **T5's region coverage holds of the real
+generated function**, not just a model. The extracted `Mem_Funs.v` is compiled
+against Aeneas's Coq `Primitives.v` (the one Coq-backend patch: `clone_from`
+filled on 3 derived `Clone` instances).
+
+**Deepest backend gap found en route:** Aeneas's Coq `scalar_and` is shipped as
+an **unspecified `Axiom` marked `TODO`** (`Primitives.v:260`) — bitwise-and has
+*no* semantics in the Coq backend. The bridge had to **supply** it
+(`scalar_and_spec`: `to_Z (scalar_and x y) = Z.land …`). This is the `& 0xff`
+mask at the heart of the T5 finding: the property literally cannot be stated
+about the extracted code until the missing axiom is provided. A concrete,
+mechanized instance of the Phase-1 thesis ("the Coq backend ships the generator
+but not the theory").
+
+**Status of the other bridges (honest).** Grounding T1 (`verify_measurement`)
+and T2 (`update_chain`) on extracted code requires compiling the extracted
+`Rot_Funs.v`, which pulls the heavier std-theory (`core::slice::Iter`,
+`core::convert::From`, the `CryptoEngine` trait record, the `control_flow`/loop
+combinator) — the same Include-clash + std-stub work the ess full-module compile
+needs, larger here. The `create_from_range` bridge is the proof-of-technique:
+**it is mechanical-but-volume to repeat**, gated only by how much of Aeneas's Coq
+standard library one is willing to backfill (which is exactly the Coq-only cost
+this report has quantified from Phase 1 onward).
