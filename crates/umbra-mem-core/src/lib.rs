@@ -12,7 +12,7 @@
 //! implicitly relies on — see `formal/rocq/mem-core`.
 #![no_std]
 
-/// Logical block size (the `UMBRA_SLOT_SIZE_BYTES` knob; default 256).
+// Logical block size MEMORY_BLOCK_SIZE (the `UMBRA_SLOT_SIZE_BYTES` knob; default 256).
 include!(concat!(env!("OUT_DIR"), "/block_size_generated.rs"));
 
 /// A super-block groups 16 blocks (used by the per-platform guards).
