@@ -408,3 +408,68 @@ needs, larger here. The `create_from_range` bridge is the proof-of-technique:
 **it is mechanical-but-volume to repeat**, gated only by how much of Aeneas's Coq
 standard library one is willing to backfill (which is exactly the Coq-only cost
 this report has quantified from Phase 1 onward).
+
+---
+
+## 6. ABSTRACTION/REFINEMENT — the extracted ESS allocator, fully bridged
+
+§5 bridged a single straight-line function. The ESS *allocator* is the harder,
+security-critical case: two `while` loops over a 256-bit bitmap, where the very
+property that matters (enclave blocks never alias) lives in the bit arithmetic
+the Coq backend leaves unspecified. We prove it with the standard
+**abstraction/refinement stack** — three layers, so the Aeneas/scalar ugliness is
+quarantined to one file instead of smeared across every theorem.
+
+Files (all under `formal/rocq/ess-core/proofs-coq/`, all `Qed`, **zero admits**):
+
+| Layer | File | Content |
+|---|---|---|
+| **1 — model** | `Ess_Model.v` | `Slots := Z -> bool`; `free_run` / `mark`; **`alloc_isolation`**: two live allocations occupy DISJOINT slot ranges. Pure — no extracted types. |
+| **2 — representation** | `Ess_Rep.v` | `represents (bitmap) (Slots)` (word/bit ⇆ model slot); the **8 quarantined axioms** giving the opaque ops their semantics; the bit lemmas DERIVED from `Z.testbit` theory. |
+| **3 — refinement** | `Ess_Refine.v` | verbatim `mark_slots_used` / `find_free_run` / `allocate` + the theorems below. |
+
+Theorems on the **extracted** code (verbatim from `Ess_Funs.v`, copied as
+`Ess_Guard.v` does — the generated module does not compile standalone):
+
+- **`mark_slots_used_refines`** — the extracted bitmap mutation refines the model
+  `mark`: from a bitmap representing `s`, the loop ends representing
+  `mark s start count`. Full loop-invariant proof; the bit-set/clear bridge
+  (`word=idx/32`, `bit=idx%32`, OR-in `1<<bit`, store) reduced entirely to Layer-2.
+- **`find_free_run_sound`** — if the first-fit search returns `Some start`, then
+  `[start, start+slots_needed)` was a run of FREE slots (and fits the bitmap).
+  The sliding-window run-counter invariant: `found_count` = length of the free
+  run ending at the cursor.
+- **`allocate_refines`** — a successful allocation marks exactly a previously-free
+  run. ~15 lines: it composes the two loop refinements above.
+- **`allocate_isolation`** — end-to-end: distinct live allocations are `disjoint`.
+  The real shipping allocator inherits Layer-1's `alloc_isolation`.
+
+### The quarantine (Layer 2's 8 axioms)
+
+Every opaque primitive the proofs touch is pinned down ONCE, honestly, in
+`Ess_Rep.v` — the same move §5 made with `scalar_and_spec`, generalised:
+
+- **array theory** (the Coq backend ships `array_index_usize`/`array_update_usize`
+  as bare `Axiom`s, "TODO: finish the definitions"): McCarthy select/store laws
+  (`_index_eq`, `_index_neq`), success (`_ok`), and value-extensionality (`_ext`).
+- **bit theory** (`scalar_and`/`scalar_or`/`scalar_shl` are `Axiom`s with no
+  semantics): `u32_or_to_Z`/`u32_and_to_Z` = `Z.lor`/`Z.land`, and
+  `u32_shl_one_pow2` (`1<<b = 2^b` for `b<32`). Everything else — that OR-ing in
+  `1<<b` sets bit `b` and leaves the rest, that `w & (1<<b) = 0` iff bit `b` is
+  clear — is **derived** from Coq's `Z.testbit` library, not assumed.
+
+That is the whole point of the stack: Layer 3's two ~250-line loop proofs and the
+trivial `allocate` composition introduce **no** further axioms. To refine the next
+extracted function, reuse the same 8.
+
+### How to build
+
+```bash
+export PATH="$HOME/.opam/default/bin:$PATH"   # coqc 8.18
+cd formal/rocq/ess-core/proofs-coq
+for f in Primitives AeneasLoopShim Ess_TypesExternal Ess_Types \
+         Ess_Model Ess_Rep Ess_Guard Ess_Refine; do coqc -R . Lib $f.v; done
+```
+
+(or `coq_makefile -f _CoqProject -o Makefile && make` — the `_CoqProject` lists
+the buildable files in order and documents why `Ess_Funs.v` is excluded.)

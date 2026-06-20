@@ -1,1 +1,16 @@
 -R . Lib
+
+# Build order for the verified ESS allocator (issue #58).
+# NB: the auto-generated Ess_Funs.v / Ess_FunsExternal.v are intentionally NOT
+# listed — they do not compile standalone (the externals template double-includes
+# Ess_Types, and the backend omits the std theory they need). The verbatim copies
+# of the functions we reason about live in Ess_Refine.v, exactly as Ess_Guard.v
+# copies its loop body. See REPORT.md §6.
+Primitives.v
+AeneasLoopShim.v
+Ess_TypesExternal.v
+Ess_Types.v
+Ess_Model.v
+Ess_Rep.v
+Ess_Guard.v
+Ess_Refine.v

@@ -86,6 +86,13 @@ coqc -R . Lib <Model>_Types.v
 coqc -R . Lib <Model>_Funs.v
 ```
 
+The **ESS allocator** is verified with a full abstraction/refinement stack
+(`ess-core/proofs-coq/`: `Ess_Model.v` → `Ess_Rep.v` → `Ess_Refine.v`), proving
+the extracted `mark_slots_used` / `find_free_run` / `allocate` refine a clean
+model and so inherit spatial isolation. Build order + rationale live in that
+directory's `_CoqProject`; the architecture is documented in
+[`REPORT.md`](REPORT.md) §6.
+
 ## Layout
 
 ```
