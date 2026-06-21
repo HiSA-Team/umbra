@@ -240,6 +240,8 @@ impl Kernel {
             {
                 // Fold this block into the running chain; final comparison happens
                 // in `Kernel::finalize_measurement` after all blocks are loaded.
+                #[cfg(feature = "bench-eval")]
+                let _cg = crate::bench_eval::CryptoGuard::start();
                 if generator
                     .update_chain(&mut self.chain_state, verify_slice)
                     .is_err()
@@ -263,6 +265,8 @@ impl Kernel {
             {
                 let iv = [0u8; 16];
                 let ess_slice = core::slice::from_raw_parts_mut(ess_ptr, CODE_BLOCK_SIZE as usize);
+                #[cfg(feature = "bench-eval")]
+                let _cg = crate::bench_eval::CryptoGuard::start();
                 let _ = crypto_engine.aes_decrypt(&self.enc_key, &iv, ess_slice);
             }
             #[cfg(feature = "stm32l562")]

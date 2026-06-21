@@ -41,7 +41,7 @@ ATTACK="${UMBRA_ATTACK:?Set UMBRA_ATTACK to ciphertext|hmac|swap}"
 source "$(cd "$(dirname "$0")" && pwd)/smoke_test_lib.sh"
 
 HOST_ELF="host/stm32l552/bare_metal/bin/bare_metal.elf"
-BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
+BOOT_ELF="target/${TARGET_ARCH}/release/${BOOT_CRATE_NAME}"
 SECTION="._enclave_code"
 
 # Block layout: TOTAL_BLOCK_SIZE=320, header=64 [HMAC(32)|Meta(32)], CODE=256.

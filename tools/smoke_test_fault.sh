@@ -31,7 +31,7 @@ LOG="tools/last_uart_fault.log"
 source "$(cd "$(dirname "$0")" && pwd)/smoke_test_lib.sh"
 
 HOST_ELF="host/stm32l552/bare_metal/bin/bare_metal.elf"
-BOOT_ELF="src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
+BOOT_ELF="target/thumbv8m.main-none-eabi/release/umbra-l552-boot"
 
 # Corruption target: first ciphertext byte of block 0.
 # With ess_miss_recovery, layout is [HMAC(32)|Meta(32)|CT(256)], so CT starts at 64.

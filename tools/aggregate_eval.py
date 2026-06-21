@@ -99,6 +99,12 @@ def main():
     for c in hex_cols:
         pass_df[c] = pass_df[c].map(hex_to_int)
 
+    # crypto_sec_cycles (issue #59) is newer than some CSVs — tolerate absence.
+    if "crypto_sec_cycles" in pass_df.columns:
+        pass_df["crypto_sec_cycles"] = pass_df["crypto_sec_cycles"].map(hex_to_int)
+    else:
+        pass_df["crypto_sec_cycles"] = float("nan")
+
     # ---- Aggregate reps to mean per (app, slot, cache, spec) cell ----
     group_keys = ["app", "slot_bytes", "cache_limit", "speculation"]
     agg = pass_df.groupby(group_keys, as_index=False).agg(
@@ -108,6 +114,7 @@ def main():
         runtime_mean=("runtime_cycles", "mean"),
         switch_mean=("switch_mean_cycles", "mean"),
         null_svc_mean=("null_svc_cycles", "mean"),
+        crypto_mean=("crypto_sec_cycles", "mean"),
         n_reps=("rep_idx", "count"),
     )
 
@@ -168,10 +175,20 @@ def main():
     # ---- boot_plot.csv ----
     boot = agg.copy()
     boot["size_bin_kb"] = boot["blob_size"].map(size_bin_kb)
-    boot["boot_total_mean"] = boot["boot_ns_mean"] + boot["boot_sec_mean"]
+    # boot_ns_cycles and boot_sec_cycles bracket the SAME create window from the
+    # NS and Secure sides (differ only by the ~400-cycle NSC round-trip); the
+    # host-observed cost is boot_ns_mean alone. Summing them double-counts.
+    # crypto_mean is the isolated HMAC+AES cost (issue #59); the rest of the
+    # secure create (DMA, MPCBB flips, relocation, residency copy) is residency.
+    boot["boot_total_mean"] = boot["boot_ns_mean"]
+    boot["boot_over_native"] = boot["boot_ns_mean"] / boot["native_runtime"]
+    boot["boot_residency_mean"] = boot["boot_sec_mean"] - boot["crypto_mean"]
+    boot["crypto_over_native"] = boot["crypto_mean"] / boot["native_runtime"]
     boot = boot[["app", "slot_bytes", "cache_limit", "speculation",
                  "blob_size", "size_bin_kb", "boot_ns_mean",
-                 "boot_sec_mean", "boot_total_mean", "n_reps"]]
+                 "boot_sec_mean", "crypto_mean", "boot_residency_mean",
+                 "boot_total_mean", "boot_over_native", "crypto_over_native",
+                 "baseline_source", "n_reps"]]
 
     # ---- switch_plot.csv ----
     sw = agg.copy()

@@ -64,6 +64,17 @@ mod imp {
     static BENCH_SWITCH_SUM: AtomicU32 = AtomicU32::new(0);
     static BENCH_SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
+    // Crypto accumulator: sum of DWT deltas bracketing the HMAC-chain folds
+    // + AES decrypt during enclave_create (issue #59 null-enclave decomposition).
+    // Under force-load all crypto runs at create, so boot_residency =
+    // boot_sec_cycles - crypto_cycles. u32 (no native 64-bit atomics on M33).
+    static BENCH_CRYPTO_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+    // Runtime ESS-miss count: incremented once per handle_ess_miss with
+    // polling=true (a real runtime miss, not boot force-load). Lets the sweep
+    // show directly whether miss count responds to cache_limit.
+    static BENCH_MISS_COUNT: AtomicU32 = AtomicU32::new(0);
+
     /// Enable the DWT cycle counter. Idempotent; safe to call multiple
     /// times. Invoke once from secure_boot() under cfg(bench-eval) so
     /// the first measurement bracket fires with the counter running.
@@ -88,6 +99,17 @@ mod imp {
         BENCH_SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Add one bracketed crypto delta (HMAC fold or AES decrypt) to the
+    /// create-time accumulator. Called from `CryptoGuard::drop`.
+    pub fn record_crypto_cycles(cycles_elapsed: u32) {
+        BENCH_CRYPTO_CYCLES.fetch_add(cycles_elapsed, Ordering::Relaxed);
+    }
+
+    /// Count one runtime ESS miss (handle_ess_miss with polling=true).
+    pub fn record_miss() {
+        BENCH_MISS_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Read the wall-clock DWT counter directly. Caller brackets the
     /// critical section and computes the delta via `cycles::elapsed`.
     #[inline(always)]
@@ -108,6 +130,17 @@ mod imp {
 
         raw_print::print_str("[EVAL]\tboot\tsec_cycles=0x");
         raw_print::print_hex(boot_sec);
+        raw_print::print_str("\n");
+
+        // Crypto row (issue #59): isolated HMAC+AES cost; residency = boot_sec - crypto.
+        let crypto = BENCH_CRYPTO_CYCLES.load(Ordering::Relaxed);
+        raw_print::print_str("[EVAL]\tcrypto\tcycles=0x");
+        raw_print::print_hex(crypto);
+        raw_print::print_str("\n");
+
+        let misses = BENCH_MISS_COUNT.load(Ordering::Relaxed);
+        raw_print::print_str("[EVAL]\tmiss\tcount=0x");
+        raw_print::print_hex(misses);
         raw_print::print_str("\n");
 
         // Switch row. Print min as 0 when no switches happened so the
@@ -154,6 +187,26 @@ mod imp {
             record_switch_cycles(end.wrapping_sub(self.start));
         }
     }
+
+    /// RAII bracket for a single crypto op (HMAC fold or AES decrypt) in the
+    /// create path. Not inline(always): used at 4 sites; out-of-line keeps one
+    /// copy so the bench-eval boot image stays within _SECURE_BOOT_TEXT_MEMORY_.
+    pub struct CryptoGuard {
+        start: u32,
+    }
+
+    impl CryptoGuard {
+        pub fn start() -> Self {
+            CryptoGuard { start: cycles::read() }
+        }
+    }
+
+    impl Drop for CryptoGuard {
+        fn drop(&mut self) {
+            let end = cycles::read();
+            record_crypto_cycles(end.wrapping_sub(self.start));
+        }
+    }
 }
 
 // ── bench-eval OFF: no-op stubs so the NSC veneer always links ───────
@@ -177,8 +230,10 @@ pub use imp::{dump, init};
 // The bracketed timing primitives are referenced only from
 // `#[cfg(feature = "bench-eval")]` call sites in `api_impl::enclave_*`,
 // so they are re-exported solely in that build.
+// record_switch_cycles / record_crypto_cycles are driven only by their RAII
+// guards (Drop), so they are not re-exported.
 #[cfg(feature = "bench-eval")]
-pub use imp::{read_cycles, record_boot_sec_cycles, record_switch_cycles, SwitchGuard};
+pub use imp::{read_cycles, record_boot_sec_cycles, record_miss, CryptoGuard, SwitchGuard};
 
 /// NSC veneer entry point: invoked by the NS host via
 /// `umbra_bench_dump()`. Prints the Secure-side accumulators to UART

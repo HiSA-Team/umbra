@@ -29,6 +29,23 @@ CROSS = os.environ.get("UMBRA_CROSS", "arm-none-eabi-")
 # differ between ARM Thumb and RISC-V.
 IS_RISCV = "riscv" in CROSS
 
+
+def assert_demand_paging_safe(demand_paging, reloc_count):
+    """Refuse demand-paging on a blob with cross-block data references.
+
+    Demand-paging evicts non-entry blocks; a data load to an evicted block
+    would silently read 0xDEDEDEDE (no HW data-read trap on L552) and walk a
+    wild pointer. reloc_count > 0 means such cross-block data refs exist, so we
+    fail the build instead. Only code-only blobs (reloc_count == 0) are allowed.
+    """
+    if demand_paging and reloc_count > 0:
+        sys.exit(
+            f"Error: UMBRA_DEMAND_PAGING set but blob has {reloc_count} "
+            f"cross-block data references (reloc_count > 0); not safe for "
+            f"demand-paging mode (only code-only benches with reloc_count == 0)."
+        )
+
+
 # RISC-V control-flow mnemonics with a STATIC target (the reachability edge).
 # jalr/jr/ret/c.jr/c.jalr are indirect (no statically-known target) → excluded.
 # jal/c.jal are calls (they return → the block also falls through).
@@ -795,6 +812,8 @@ def main():
             continue
         reloc_entries.append(off)
     reloc_count = len(reloc_entries)
+    demand_paging = os.environ.get("UMBRA_DEMAND_PAGING", "0") == "1"
+    assert_demand_paging_safe(demand_paging, reloc_count)
     _reloc_family = "R_RISCV_32" if IS_RISCV else "R_ARM_ABS32 + R_ARM_GOT_BREL"
     print(f"[Protect] Static-PIE relocs ({_reloc_family}): "
           f"{reloc_count} entries (plaintext-relative offsets, fixed up at block install).")

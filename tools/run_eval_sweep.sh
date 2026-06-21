@@ -62,7 +62,7 @@ OOCD_LOG="${SWEEP_DIR}/openocd_${CELL_TAG}.log"
 GDB_LOG="${SWEEP_DIR}/gdb_${CELL_TAG}.log"
 
 # CSV schema (one row per cell, header injected once on first write):
-CSV_HEADER="slot_bytes,cache_limit,speculation,app,rep_idx,host_mode,blob_size,boot_ns_cycles,boot_sec_cycles,runtime_cycles,switch_min_cycles,switch_mean_cycles,switch_max_cycles,switch_count,null_svc_cycles,pass_fail,uart_log_path,build_hash"
+CSV_HEADER="slot_bytes,cache_limit,speculation,app,rep_idx,host_mode,blob_size,boot_ns_cycles,boot_sec_cycles,runtime_cycles,switch_min_cycles,switch_mean_cycles,switch_max_cycles,switch_count,null_svc_cycles,pass_fail,uart_log_path,build_hash,crypto_sec_cycles"
 
 # Initialise CSV header if file is missing or empty.
 if [ ! -s "${CSV_LOG}" ]; then
@@ -151,7 +151,7 @@ source ./settings.sh >/dev/null 2>&1 || true
 }
 
 # ── Locate ELFs ────────────────────────────────────────────────────────
-BOOT_ELF="${ROOT_DIR}/src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
+BOOT_ELF="${ROOT_DIR}/target/${TARGET_ARCH}/release/${BOOT_CRATE_NAME}"
 HOST_ELF="${ROOT_DIR}/host/stm32l552/tock/bin/tock.elf"
 
 [ -f "${BOOT_ELF}" ] || {
@@ -350,6 +350,7 @@ RUNTIME_CYCLES=$(get_field runtime    cycles)
 BOOT_NS_CYCLES=$(get_field boot_ns    cycles)
 NULL_SVC_CYCLES=$(get_field null_svc  cycles)
 BOOT_SEC_CYCLES=$(get_field boot      sec_cycles)
+CRYPTO_CYCLES=$(get_field crypto      cycles)
 SWITCH_MIN=$(get_field switch         min)
 SWITCH_MEAN=$(get_field switch        mean)
 SWITCH_MAX=$(get_field switch         max)
@@ -360,13 +361,14 @@ RUNTIME_CYCLES=${RUNTIME_CYCLES:-0x00000000}
 BOOT_NS_CYCLES=${BOOT_NS_CYCLES:-0x00000000}
 NULL_SVC_CYCLES=${NULL_SVC_CYCLES:-0x00000000}
 BOOT_SEC_CYCLES=${BOOT_SEC_CYCLES:-0x00000000}
+CRYPTO_CYCLES=${CRYPTO_CYCLES:-0x00000000}
 SWITCH_MIN=${SWITCH_MIN:-0x00000000}
 SWITCH_MEAN=${SWITCH_MEAN:-0x00000000}
 SWITCH_MAX=${SWITCH_MAX:-0x00000000}
 SWITCH_COUNT=${SWITCH_COUNT:-0x00000000}
 
 # ── Append CSV row ─────────────────────────────────────────────────────
-echo "${SWEEP_SLOT},${SWEEP_CACHE},${SWEEP_SPEC},${SWEEP_APP},${SWEEP_REP},tock,${BLOB_SIZE},${BOOT_NS_CYCLES},${BOOT_SEC_CYCLES},${RUNTIME_CYCLES},${SWITCH_MIN},${SWITCH_MEAN},${SWITCH_MAX},${SWITCH_COUNT},${NULL_SVC_CYCLES},PASS,${UART_LOG},${BUILD_HASH}" >> "${CSV_LOG}"
+echo "${SWEEP_SLOT},${SWEEP_CACHE},${SWEEP_SPEC},${SWEEP_APP},${SWEEP_REP},tock,${BLOB_SIZE},${BOOT_NS_CYCLES},${BOOT_SEC_CYCLES},${RUNTIME_CYCLES},${SWITCH_MIN},${SWITCH_MEAN},${SWITCH_MAX},${SWITCH_COUNT},${NULL_SVC_CYCLES},PASS,${UART_LOG},${BUILD_HASH},${CRYPTO_CYCLES}" >> "${CSV_LOG}"
 
 echo "  RESULT: PASS"
 echo "    runtime=${RUNTIME_CYCLES}  boot_ns=${BOOT_NS_CYCLES}  boot_sec=${BOOT_SEC_CYCLES}"

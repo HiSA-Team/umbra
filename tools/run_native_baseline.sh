@@ -66,7 +66,7 @@ source ./settings.sh >/dev/null 2>&1 || true
     exit 1
 }
 
-BOOT_ELF="${ROOT_DIR}/src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
+BOOT_ELF="${ROOT_DIR}/target/${TARGET_ARCH}/release/${BOOT_CRATE_NAME}"
 NATIVE_ELF="${ROOT_DIR}/host/stm32l552/tock/bin/tock_native.elf"
 [ -f "${BOOT_ELF}" ] || { echo "  FAIL — boot ELF missing: ${BOOT_ELF}"; exit 1; }
 
