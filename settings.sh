@@ -217,6 +217,13 @@ if [ "$UMBRA_CACHE_ZERO_MODE" = "1" ]; then
     fi
     echo -e "${SUCCESS}[cache-zero-mode] ESS=0 mode ENABLED${VANILLA}"
 fi
+if [ "${UMBRA_DEMAND_PAGING:-0}" = "1" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features demand-paging"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},demand-paging"
+    fi
+fi
 
 # runtime instrumentation
 export UMBRA_BENCH_EVAL=${UMBRA_BENCH_EVAL:-0}

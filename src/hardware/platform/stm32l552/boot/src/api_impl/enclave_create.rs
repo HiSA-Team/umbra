@@ -285,6 +285,8 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
             if let Some(crypto_engine) = kernel.crypto.as_mut() {
                 use kernel::key_storage_server::key_generator::KeyGenerator;
                 let mut generator = KeyGenerator::new(*crypto_engine);
+                #[cfg(feature = "bench-eval")]
+                let _cg = crate::bench_eval::CryptoGuard::start();
                 if generator
                     .update_chain(&mut kernel.chain_state, reloc_bytes)
                     .is_err()
@@ -437,6 +439,18 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         }
     }
 
+    // Demand-paging eviction intentionally REMOVED. The idea was to evict
+    // all-but-block-0 here so code-only enclaves demand-page at runtime and the
+    // overhead-vs-ESS-size curve reappears. Hardware proved it unsafe on L552:
+    // with bsort (4 blocks, 3 evicted) the runtime ESS-miss counter
+    // (`bench_eval::record_miss`) read 0 — the enclave never faulted, because
+    // cross-block DATA loads to evicted slots have no hardware trap and silently
+    // return UDF (0xDEDEDEDE), corrupting the computation without a miss. The
+    // `protect_enclave.py` reloc_count guard does NOT catch this (direct in-blob
+    // data loads are not relocations). See
+    // docs/superpowers/specs/2026-06-21-demand-paging-mode-design.md. The
+    // `demand-paging` feature + guard are kept as scaffold; eviction is not
+    // reintroducible until the target has a hardware data-read trap.
     unsafe {
         NEXT_ENCLAVE_ID += 1;
     }

@@ -207,7 +207,7 @@ fi
 # matplotlib, etc.) to produce the paper's runtime-overhead chart.
 echo "bench,host_app,blob_size_bytes,pass_fail,wall_clock_seconds,uart_bytes,heartbeat_count,drift_max_cycles,healthy_pct" >"${CSV_LOG}"
 
-BOOT_ELF="${ROOT_DIR}/src/hardware/platform/stm32l552/boot/target/thumbv8m.main-none-eabi/release/boot"
+BOOT_ELF="${ROOT_DIR}/target/${TARGET_ARCH}/release/${BOOT_CRATE_NAME}"
 HOST_ELF="${ROOT_DIR}/host/stm32l552/${HOST_APP}/bin/${HOST_APP}.elf"
 APP_DIR="${ROOT_DIR}/host/stm32l552/taclebench/app"
 

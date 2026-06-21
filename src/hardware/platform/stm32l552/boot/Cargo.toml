@@ -33,6 +33,10 @@ benchmark = []
 i_acknowledge_benchmark_is_research_only = []
 cache-zero-mode = ["kernel/cache-zero-mode"]
 bench-eval = ["kernel/bench-eval"]
+# Evict all-but-entry after force-load so code-only enclaves demand-page at
+# runtime (restores the overhead-vs-ESS-size curve). Requires ess_miss_recovery.
+# Use only on code-only benches; the protect_enclave.py guard enforces this.
+demand-paging = []
 # Propagate the speculation feature to the kernel crate. See
 # kernel/Cargo.toml for the rationale.
 umbra-speculation = ["kernel/umbra-speculation"]

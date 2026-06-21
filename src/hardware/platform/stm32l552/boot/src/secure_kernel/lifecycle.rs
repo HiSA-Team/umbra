@@ -51,6 +51,12 @@ impl Kernel {
             CODE_BLOCK_SIZE as V_CODE_BLOCK_SIZE,
         };
 
+        // Count real runtime misses (not boot force-load, which passes polling=false).
+        #[cfg(feature = "bench-eval")]
+        if polling {
+            crate::bench_eval::record_miss();
+        }
+
         // 1. Locate the enclave in ESS and compute flash + ESS addresses.
         //
         // CJ3 guard: `block_idx` reaches this site from
@@ -299,6 +305,8 @@ impl Kernel {
             let iv = [0u8; 16];
             let ess_slice =
                 core::slice::from_raw_parts_mut(ess_write_addr as *mut u8, V_CODE_BLOCK_SIZE);
+            #[cfg(feature = "bench-eval")]
+            let _cg = crate::bench_eval::CryptoGuard::start();
             let _ = crypto.aes_decrypt(&self.enc_key, &iv, ess_slice);
         }
 
