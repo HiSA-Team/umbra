@@ -642,9 +642,20 @@ def main():
     # divergent meta interpretation.
     MAX_REACHABLE = 4
 
-    # Seed the running chain key with the master key (matches the kernel's
-    # `Kernel::begin_measurement` which copies `master_key::MASTER_KEY`).
-    chain_state = master_key
+    # N657 only, gated by UMBRA_EPOCH_BIND=1 (set in settings.sh): seed the
+    # chain with the build epoch so the enclave binds to EXACTLY this FSBL
+    # version. Byte-identical to the N657 kernel's begin_measurement:
+    # HMAC(master_key, EPOCH_LABEL + version_le32) — label 14 B, version 4-byte
+    # LE u32. This tool is SHARED, so the change MUST be opt-in: L552 / RISC-V
+    # keep the plain master_key seed their FSBLs still expect.
+    if os.environ.get("UMBRA_EPOCH_BIND") == "1":
+        EPOCH_LABEL = b"umbra-epoch-v1"
+        fsbl_version = int(os.environ.get("UMBRA_FSBL_VERSION", "1"))
+        chain_state = hmac.new(
+            master_key, EPOCH_LABEL + struct.pack("<I", fsbl_version), hashlib.sha256
+        ).digest()
+    else:
+        chain_state = master_key
 
     # Subkey used for the per-block HMAC prefix under ess_miss_recovery. Must
     # stay byte-for-byte in sync with `key_derivation::HMAC_KEY_LABEL` in the

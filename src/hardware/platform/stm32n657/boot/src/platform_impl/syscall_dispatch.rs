@@ -15,6 +15,12 @@ pub fn init_security() {
 
     // VTOR already set by main.rs (0x34180000).
 
+    // 0. DEV-ONLY: open the debug access port before anything else locks down,
+    // so a debugger can attach to the FSBL on closed/locked parts. No-op on
+    // this open Nucleo. Gated behind `dev_debug` — never in production.
+    #[cfg(feature = "dev_debug")]
+    super::power::enable_dev_debug();
+
     // 1. Enable configurable fault handlers (SHCSR) and clear residual
     // Secure-side stack limits left by Boot ROM. PSPLIM_S in particular
     // was found set high enough to corrupt enclave PSP exception
@@ -164,6 +170,12 @@ pub fn configure_untrusted_boot() {
 }
 
 pub fn jump_to_untrusted() -> ! {
+    // The very last Secure action before NS. Raise HDPL1→HDPL2 so the
+    // HDPL1 DHUK that wrapped enc_key is no longer derivable by NS or
+    // enclaves. CRYP's already-shared key (KEYVALID) survives the bump, so
+    // runtime enclave decrypt keeps working. Reversible (POR clears HDPL).
+    crate::hdpl::raise_hdpl_to_2();
+
     // Copy the NS host image from XSPI2 (where flash_n657.sh placed it
     // at 0x70080000) into AXISRAM1 via the NS alias 0x24000000. Writing
     // through the NS alias is required: after init_security configured

@@ -33,5 +33,12 @@ ess_miss_recovery = []
 # N657 hardware AES path via CRYP1 + SAES1.
 n657_aes_hw = []
 
+# DEV-ONLY: open the Cortex-M55 debug access port from the FSBL (BSEC_DBGCR /
+# BSEC_AP_UNLOCK), mirroring embassy-boot-stm32, so a debugger can attach even
+# on a closed/locked product state. SECURITY: defeats debug isolation — must
+# NEVER be in a production image. Injected by `cargo xtask flash n657`
+# (UMBRA_DEV_DEBUG=1 in settings.sh); OFF in plain `cargo xtask build`.
+dev_debug = []
+
 # Profiles live at the workspace root since the boot crate absorbed
 # them. See /Cargo.toml [profile.dev] and [profile.release].

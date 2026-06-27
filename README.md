@@ -64,6 +64,31 @@ Operational rules, threat-model invariants, panic policy, and the
 reviewer checklist live in the mdBook (`book/`) and are published at
 [hisa-team.github.io/umbra](https://hisa-team.github.io/umbra/).
 
+## STM32N6 root of trust
+
+On STM32N6, Umbra runs as the signed First-Stage Boot Loader (FSBL) and
+hardens the root of trust with increments that stay reversible on the
+BSEC-open development board (no OTP fuse is burned, debug stays enabled):
+
+- **HDPL temporal isolation** — the FSBL raises the Hide-Protection Level
+  before the Non-Secure handoff, so the hardware-unique key it derived is
+  not recoverable by later stages.
+- **DHUK key delivery** — the enclave AES key is wrapped under the device
+  Derived Hardware-Unique Key and shared to the `CRYP` engine over the
+  on-chip `SAES → CRYP` key bus, so it never sits in CPU-readable memory.
+- **Dual-FSBL fail-safe** — two FSBL copies at the Boot-ROM offsets; a
+  structurally-bad image 1 falls back to image 2 (demonstrated on hardware).
+- **ECDSA-P256 signing** — the FSBL is emitted as a signed STM32 v2.3 image
+  with an anti-rollback version field.
+- **Enclave ↔ FSBL version binding** — the enclave measurement is seeded
+  with a build epoch, so an enclave runs only under the FSBL it was built
+  for.
+
+Signature and confidentiality *enforcement* require the irreversible OTP
+`secure_boot` close (out of scope for the open dev board); see the
+[STM32N657 hardware page](https://hisa-team.github.io/umbra/hardware/stm32n657.html)
+for the full rationale and the open-board-vs-post-close split.
+
 ## Install Dependencies
 To build Umbra, rust is required
 ```

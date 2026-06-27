@@ -5,7 +5,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 pub mod aes;
+pub mod bkpsram;
 pub mod cryp;
+pub mod crypto_wait;
 pub mod dma;
 pub mod gpio;
 pub mod hash;

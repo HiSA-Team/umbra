@@ -12,16 +12,14 @@ use super::ecb::AesEngine;
 use super::keyreg::AesHardware;
 
 impl<M: MmioAccess> AesEngine for AesHardware<M> {
-    fn init(&mut self, key: &[u8], _iv: Option<&[u8]>) {
-        if key.len() != 16 {
-            panic!("AesHardware: only 128-bit keys supported");
-        }
-        self.key.copy_from_slice(&key[..16]);
-        // SW-load CRYP key directly in ECB mode. ECB is the safe default
-        // for `encrypt_block`/`decrypt_block`. `ctr_xform` reconfigures to
-        // CTR on entry. The SAES shared-bus path requires DHUK-wrapped
-        // keys per RM0486 §48.4.15 (see saes.rs).
-        self.cryp.configure_ecb_128_sw_key(&self.key);
+    fn init(&mut self, _key: &[u8], _iv: Option<&[u8]>) {
+        // DHUK shared-key path (issue #45): CRYP is keyed by the boot-time
+        // SAES share (`dhuk_provision::provision_and_share_enc_key`), NOT by a
+        // software key load. The passed key is therefore vestigial and
+        // intentionally ignored — `init` only puts CRYP back into ECB-shared
+        // mode (no KEYRx writes). This REQUIRES the SAES share to have already
+        // run (CRYP KEYVALID set); the orchestrator runs first in init_kernel.
+        self.cryp.configure_ecb_shared();
     }
 
     fn encrypt_block(&self, input: &[u8; 16], output: &mut [u8; 16]) {
@@ -50,10 +48,11 @@ impl<M: MmioAccess> AesEngine for AesHardware<M> {
             return;
         }
 
-        // Reload CRYP in CTR mode with cached key + provided IV. The
-        // ascending K2LR→K3RR sequence triggers KEYVALID again inside
-        // configure_ctr_128_sw_key.
-        self.cryp.configure_ctr_128_sw_key(&self.key, iv);
+        // Reconfigure CRYP to CTR mode with the SAES-shared key (no KEYRx
+        // writes). If V4 finds the shared key does not survive the ECB→CTR
+        // switch, the orchestrator re-shares before the decrypt; see
+        // configure_ctr_shared docs.
+        self.cryp.configure_ctr_shared(iv);
 
         let mut block = [0u8; 16];
         let mut out_block = [0u8; 16];

@@ -184,6 +184,14 @@ elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export MCU=stm32n657
     export BOOT_FEATURES=""
     export BOOT_CRATE_NAME=umbra-n657-boot
+    # Single build-epoch source for N657. UMBRA_FSBL_VERSION feeds the FSBL
+    # signing (-iv), the FSBL build (build.rs -> FSBL_VERSION), and the enclave
+    # measurement seed; they MUST agree or the matched build fails measurement.
+    # UMBRA_EPOCH_BIND opts the SHARED protect_enclave.py into the epoch seed —
+    # only N657's begin_measurement matches it; L552 keeps the plain master_key
+    # seed, so this MUST stay N657-gated.
+    export UMBRA_FSBL_VERSION=${UMBRA_FSBL_VERSION:-1}
+    export UMBRA_EPOCH_BIND=1
     echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q)${VANILLA}"
 elif [ "$MCU_VARIANT" = "riscv32" ]; then
     export MCU=riscv32
@@ -206,6 +214,18 @@ if [ "$UMBRA_BENCHMARK" = "1" ]; then
         export BOOT_FEATURES="${BOOT_FEATURES},benchmark"
     fi
     echo -e "${SUCCESS}[benchmark] CHES26 EFB crypto benchmark ENABLED${VANILLA}"
+fi
+
+# Append the N657 dev-debug feature if requested (set by `cargo xtask flash
+# n657`). Opens the Cortex-M55 debug access port from the FSBL. N657-only —
+# the `dev_debug` feature exists only on the umbra-n657-boot crate.
+if [ "$UMBRA_DEV_DEBUG" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features dev_debug"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},dev_debug"
+    fi
+    echo -e "${SUCCESS}[dev_debug] FSBL debug access port ENABLED (do NOT ship)${VANILLA}"
 fi
 
 export UMBRA_CACHE_ZERO_MODE=${UMBRA_CACHE_ZERO_MODE:-0}
