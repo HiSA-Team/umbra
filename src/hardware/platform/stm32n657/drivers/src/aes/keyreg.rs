@@ -1,71 +1,39 @@
-//! Hardware AES key-register loading (SW-load path).
-//! Holds the `AesHardware` struct plus its constructor. The actual KEYRx
-//! ascending-write sequence (K2LR → K2RR → K3LR → K3RR) lives in
-//! `cryp.rs::configure_ecb_128_sw_key` and `configure_ctr_128_sw_key`;
-//! this module owns the cached-key buffer that those routines consume.
-//! Future DHUK-wrap key-isolation path will replace the SW-load here
-//! with a SAES → CRYP shared-bus handshake (see module-level docs).
+//! `AesHardware` — CRYP1-backed AES-128 whose key is delivered over the
+//! SAES → CRYP DHUK shared-key bus (issue #45), never loaded from software.
+//! `init` configures CRYP for ECB with the shared key (no KEYRx writes);
+//! `ctr_xform` switches CRYP to native CTR (both in `aes/ctr.rs`). The AES key
+//! never sits in a CPU-visible `AesHardware` field — the cached `key:[u8;16]`
+//! was removed (the DoD of #45). The boot-time wrap/share itself is driven by
+//! `boot/dhuk_provision.rs`; this constructor only brings up the crypto clocks.
 
 use peripheral_regs::{MmioAccess, RealMmio};
 
-/// Hardware AES via CRYP1.
-/// `init` SW-loads the key into CRYP and configures ECB mode (used by
-/// `encrypt_block` / `decrypt_block`). `ctr_xform` switches the engine to
-/// native CTR mode: CRYP generates the keystream, XORs with input, and
-/// increments the counter (IV1RR) internally per block — no manual loop
-/// in software. The SAES driver is preserved for a future DHUK-wrapped
-/// key-isolation path (`saes.rs`).
-/// Generic over the MMIO backend so
-/// host tests can inject `MmioHandle`. Default `M = RealMmio` keeps
-/// every existing `AesHardware::new()` call site unchanged at the source
-/// level — the firmware build monomorphises to `AesHardware<RealMmio>`.
+/// Hardware AES via CRYP1, keyed over the SAES shared-key bus. Generic over the
+/// MMIO backend (default `RealMmio`) so the `AesEngine` impl in `ctr.rs` can be
+/// monomorphised; the firmware path is always `AesHardware<RealMmio>`.
 pub struct AesHardware<M: MmioAccess = RealMmio> {
-    #[allow(dead_code)] // clocked + ready for DHUK-wrap key isolation path
-    pub(super) saes: crate::saes::Saes<M>,
     pub(super) cryp: crate::cryp::Cryp1<M>,
-    // Cached most-recent key — `init()` writes it into CRYP_K* (ECB
-    // config) so that `encrypt_block`/`decrypt_block` work for
-    // `boot_tests` math sanity. `ctr_xform()` re-uses this byte buffer
-    // when reconfiguring CRYP from ECB → CTR for a streaming decrypt;
-    // CRYP key registers are reloaded as part of `configure_ctr_128_sw_key`
-    // (the ascending K2LR→K3RR sequence must be repeated to land KEYVALID).
-    pub(super) key: [u8; 16],
 }
 
 impl AesHardware<RealMmio> {
     pub fn new() -> Self {
         use crate::rcc::{self, Rcc};
         let rcc = Rcc::new();
+        // Bring up both crypto clocks: CRYP1 for AES, SAES for the boot-time
+        // DHUK wrap/share (`dhuk_provision` creates its own `Saes` once clocked).
         rcc.enable_ahb3_clock(rcc::SAESEN);
         rcc.enable_ahb3_clock(rcc::CRYP1EN);
-        // SAFETY: The two preceding enable_ahb3 writes are volatile MMIO writes
-        // to RCC_AHB3ENR (0x56028258). The DSB ensures those writes are visible
-        // to the SAES and CRYP1 peripheral buses before the Saes::new() and
-        // Cryp1::new() constructors below access their registers.
-        // core::arch::asm! is used because cortex_m::asm::dsb() is not
-        // available in this no_std driver crate. ARM-only intrinsic — gated
-        // for host-test builds.
+        // SAFETY: the two preceding enable_ahb3 writes are volatile MMIO writes
+        // to RCC_AHB3ENR (0x5602_8258). The DSB ensures they are visible to the
+        // SAES/CRYP1 peripheral buses before Cryp1::new() accesses its
+        // registers. core::arch::asm! is used because cortex_m::asm::dsb() is
+        // not available in this no_std driver crate — ARM-only, host-gated.
         #[cfg(target_arch = "arm")]
         unsafe {
             core::arch::asm!("dsb");
         }
         Self {
-            saes: crate::saes::Saes::new(),
             cryp: crate::cryp::Cryp1::new(),
-            key: [0u8; 16],
-        }
-    }
-}
-
-impl<M: MmioAccess> AesHardware<M> {
-    /// Test constructor — composes pre-built Saes + Cryp1 with in-memory backends.
-    /// Skips the RCC clock-enable that the firmware constructor performs.
-    #[allow(dead_code)]
-    pub fn new_with_peripherals(saes: crate::saes::Saes<M>, cryp: crate::cryp::Cryp1<M>) -> Self {
-        Self {
-            saes,
-            cryp,
-            key: [0u8; 16],
         }
     }
 }

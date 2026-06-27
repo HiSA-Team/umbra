@@ -88,22 +88,12 @@ echo "[1/8] Converting ELF to binary..."
 "$OBJCOPY" -O binary "$BOOT_ELF" "$BOOT_BIN"
 echo "      ${BOOT_BIN} ($(wc -c < "$BOOT_BIN" | tr -d ' ') bytes)"
 
-# Add FSBL header (unsigned, dev mode)
-# -la 0x34180000  : Load address — Boot ROM copies signed image here (AXISRAM2 base)
-# -ep 0x34180641  : Entry point — first Thumb instruction (vector table reset addr +1)
-# -of 0x80000000  : Option flags
-# -align          : 0x400 byte alignment for payload
-echo "[2/8] Adding FSBL header (unsigned, hv 2.3)..."
-"$SIGNING_TOOL" \
-    -bin "$BOOT_BIN" \
-    -nk \
-    -la 0x34180000 \
-    -of 0x80000000 \
-    -t fsbl \
-    -hv 2.3 \
-    -o "$FSBL_TRUSTED" \
-    -dump "$FSBL_TRUSTED" \
-    -align
+# Sign the FSBL (ECDSA-P256, authenticated v2.3 header, -of 0x80000001).
+# Fresh throwaway keys per build; see tools/sign_fsbl_n657.sh. The Boot ROM
+# does not enforce the signature on the BSEC-open board (that needs the OTP
+# close), so a signed image boots identically — this is the FSBL signing pipeline.
+echo "[2/8] Signing FSBL (ECDSA-P256 v2.3, fresh keys)..."
+"${ROOT_DIR}/tools/sign_fsbl_n657.sh" "$BOOT_BIN" "$FSBL_TRUSTED"
 echo "      ${FSBL_TRUSTED} ($(wc -c < "$FSBL_TRUSTED" | tr -d ' ') bytes)"
 
 # Clear TAMP_BKP[0] so FSBL re-runs the encryption oracle.
@@ -135,6 +125,17 @@ echo "[5/8] Flashing FSBL to XSPI2 (0x70000000)..."
     -el "$EXT_LOADER" \
     -hardRst \
     -w "$FSBL_TRUSTED" 0x70000000
+
+# Flash FSBL copy 2 to XSPI2 at 0x70040000 (UM3234 §3.5.3: ROM searches FSBL1
+# @0x0 and FSBL2 @0x40000, falling back to FSBL2 if FSBL1 fails to load). Same
+# signed image — the fail-safe second copy. Host @0x70080000 is unaffected
+# (both FSBL slots fit [0x00000, 0x80000)).
+echo "[5b/8] Flashing FSBL copy 2 to XSPI2 (0x70040000)..."
+"$PROGRAMMER" \
+    -c port=SWD mode=HOTPLUG ap=1 \
+    -el "$EXT_LOADER" \
+    -hardRst \
+    -w "$FSBL_TRUSTED" 0x70040000
 
 # Flash host (NS bare-metal) to XSPI2 at 0x70080000.
 # Path B-lite: the bin embeds the enclave (header + protect_enclave.py

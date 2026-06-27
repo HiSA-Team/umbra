@@ -53,7 +53,7 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Build { platform } => build(&platform),
+        Cmd::Build { platform } => build(&platform, false),
         Cmd::Flash { platform } => flash(&platform),
         Cmd::Test { host } => test(host),
         Cmd::CheckBinarySize { platform } => check_binary_size(&platform),
@@ -91,19 +91,27 @@ fn bare_metal_bin_rel(platform: &str) -> &'static str {
         "l552" | "l562" => "host/stm32l552/bare_metal/bin/bare_metal.bin",
         "n657" => "host/stm32n657/bare_metal/bin/bare_metal.bin",
         // The RISC-V host is a Cargo crate; its artifact is the ELF (no .bin).
-        "riscv32" => "host/riscv32/bare_metal/target/riscv32imac-unknown-none-elf/release/bare_metal",
+        "riscv32" => {
+            "host/riscv32/bare_metal/target/riscv32imac-unknown-none-elf/release/bare_metal"
+        }
         _ => unreachable!("clap restricts the value to PLATFORMS"),
     }
 }
 
-fn build(platform: &str) -> Result<()> {
+fn build(platform: &str, dev_debug: bool) -> Result<()> {
     // rebuild_all.sh + settings.sh read the platform from the MCU_VARIANT
     // env var (defaulting to stm32n657 when unset). Argv is ignored. Set
     // the env var explicitly so `cargo xtask build <plat>` actually builds
     // the requested platform regardless of the user's shell environment.
+    //
+    // `dev_debug` (true only on the n657 flash path) sets UMBRA_DEV_DEBUG=1,
+    // which settings.sh turns into `--features dev_debug` for the boot crate —
+    // opening the FSBL debug access port. Plain `cargo xtask build` passes
+    // false, keeping it out of the artefact.
     let status = Command::new("./rebuild_all.sh")
         .current_dir(repo_root())
         .env("MCU_VARIANT", mcu_variant(platform))
+        .env("UMBRA_DEV_DEBUG", if dev_debug { "1" } else { "0" })
         .arg(platform)
         .status()
         .context("Failed to spawn ./rebuild_all.sh — is it executable from repo root?")?;
@@ -125,7 +133,10 @@ fn flash(platform: &str) -> Result<()> {
     // newer key than the host's bundled fib HMAC, producing
     // `chained-measurement FAIL` at runtime. Always build first to keep
     // the master_key chain end-to-end consistent.
-    build(platform)?;
+    //
+    // dev_debug is enabled on the n657 flash path so the flashed FSBL opens
+    // its debug access port (the `dev_debug` feature exists only on n657).
+    build(platform, platform == "n657")?;
 
     // Absorb SIGINT in xtask so the user's Ctrl+C reaches the GDB child
     // (which interrupts its inferior — standard GDB UX) WITHOUT also
@@ -202,6 +213,78 @@ fn flash(platform: &str) -> Result<()> {
         .args(mk_files)
         .status();
     eprintln!("[xtask flash] master_key residue auto-reverted (NEVER_DO rule 10).");
+
+    // n657: after flashing, let the user move the BOOT1 jumper, then launch the
+    // attach-mode openocd + gdb session that resets the micro and breaks at
+    // init_kernel (tools/n657_debug.gdb does the `monitor reset halt`).
+    if platform == "n657" {
+        println!();
+        println!(">>> Set JP2 (BOOT1) to position 1-2 (Flash Boot), press the RESET button,");
+        print!(">>> then press Enter to start GDB at init_kernel... ");
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+        let mut _line = String::new();
+        let _ = std::io::stdin().read_line(&mut _line);
+
+        // Kill any stale openocd holding the ST-LINK / :3333 from a previous
+        // manual session — otherwise the new openocd can't bind and gdb
+        // attaches to the confused old one ("Remote replied unexpectedly to
+        // 'vMustReplyEmpty'"). Give it a moment to release the USB probe + port.
+        let _ = Command::new("pkill").args(["-x", "openocd"]).status();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+
+        // openocd in the background (attach cfg = no reset on connect); its
+        // chatter goes to a log so the gdb console stays clean.
+        let oc_log = std::fs::File::create("/tmp/openocd_n657.log")
+            .context("Failed to create /tmp/openocd_n657.log")?;
+        let oc_err = oc_log
+            .try_clone()
+            .context("Failed to clone openocd log fd")?;
+        // process_group(0): put openocd in its OWN process group so a terminal
+        // Ctrl+C (delivered to xtask+gdb's foreground group) does NOT reach it.
+        // Otherwise SIGINT shuts openocd down ("shutdown command invoked" ->
+        // "Connection reset by peer") instead of letting gdb interrupt the
+        // inferior — the user expects Ctrl+C to HALT the running NS-world loop.
+        use std::os::unix::process::CommandExt as _;
+        let mut openocd = Command::new("openocd")
+            .current_dir(&root)
+            .args(["-f", "openocd_scripts/stm32n6x_attach.cfg"])
+            .stdout(oc_log)
+            .stderr(oc_err)
+            .process_group(0)
+            .spawn()
+            .context("Failed to spawn openocd — is it on PATH?")?;
+
+        // Wait until openocd actually accepts connections (telnet :4444, a benign
+        // readiness proxy for the gdb :3333 it opens at the same time), instead
+        // of a blind sleep that can race on a slow/contended probe.
+        let mut ready = false;
+        for _ in 0..30 {
+            if std::net::TcpStream::connect("127.0.0.1:4444").is_ok() {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        if !ready {
+            let _ = openocd.kill();
+            let _ = openocd.wait();
+            anyhow::bail!("openocd never opened its ports — see /tmp/openocd_n657.log");
+        }
+        println!("[xtask flash] openocd attached (log: /tmp/openocd_n657.log)");
+
+        // Interactive gdb; -nx skips the user's Python-laden ~/.gdbinit.
+        let gdb_res = Command::new("arm-none-eabi-gdb")
+            .current_dir(&root)
+            .args(["-nx", "-x", "tools/n657_debug.gdb"])
+            .status();
+
+        // gdb exited -> tear down openocd so the ST-LINK probe is freed.
+        let _ = openocd.kill();
+        let _ = openocd.wait();
+        gdb_res.context("Failed to spawn arm-none-eabi-gdb — is it on PATH?")?;
+    }
+
     Ok(())
 }
 

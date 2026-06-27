@@ -37,6 +37,7 @@
     .extern DMA1_Channel6_Handler
     .extern DMA1_Channel7_Handler
     .extern DMA1_Channel8_Handler
+    .extern SAES1_IRQHandler
     .extern umbra_yield_handler
 
     // =====================================================================
@@ -70,9 +71,14 @@
         .word _umb_PendSV_Handler+1
         .word _umb_SysTick_Handler+1
 
-    // External Interrupts — N657 IRQ layout. 128 slots default to the
-    // shared default handler; specific drivers override their slot.
-        .rept 128
+    // External Interrupts — N657 IRQ layout. Specific drivers override their
+    // slot; the rest default to the shared handler. SAES_IRQn = 36 (issue #45
+    // W0: DHUK wrap/share CCF is interrupt-driven via CryptoWait).
+        .rept 36
+        .word _umb_Default_Handler
+        .endr
+        .word SAES1_IRQHandler+1                    // IRQ 36 — SAES1 completion
+        .rept 91
         .word _umb_Default_Handler
         .endr
 

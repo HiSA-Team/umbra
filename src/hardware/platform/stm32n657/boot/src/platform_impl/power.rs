@@ -63,6 +63,32 @@ pub fn init_uart() {
     crate::raw_print::print_str("[UMBRASecureBoot] Secure Boot started\n");
 }
 
+/// DEV-ONLY: open the Cortex-M55 debug access port and enable secure +
+/// non-secure debug from the FSBL, mirroring embassy-boot-stm32. On a
+/// closed/locked product state the Boot ROM leaves debug shut when booting
+/// from flash; these two BSEC writes re-open it so GDB / STM32CubeProgrammer
+/// can attach. On this BSEC-open Nucleo debug is already open, so it is
+/// effectively a no-op — it exists for closed-part bring-up and parity with
+/// the reference bootloader.
+///
+/// SECURITY: this DEFEATS debug isolation. It is gated behind the `dev_debug`
+/// feature (injected only by `cargo xtask flash n657`) and MUST NEVER ship in
+/// a production image.
+///
+/// BSEC base 0x5600_9000 (Secure). Both registers are write-once per cold
+/// reset and persist until the next cold power-on (ST community: "How to allow
+/// debugger to attach on STM32N6 when booting from flash"). Values + order are
+/// taken verbatim from embassy-boot-stm32.
+#[cfg(feature = "dev_debug")]
+pub fn enable_dev_debug() {
+    unsafe {
+        // Open the debug access port to the Cortex-M55 (offset 0xE90).
+        core::ptr::write_volatile(0x5600_9E90 as *mut u32, 0xB451_B400);
+        // Enable the non-secure/secure debug (offset 0xE8C).
+        core::ptr::write_volatile(0x5600_9E8C as *mut u32, 0xB451_B400);
+    }
+}
+
 pub fn init_kernel() {
     unsafe {
         core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
@@ -84,72 +110,13 @@ pub fn init_kernel() {
         // NIST SP800-38A F.1.1 ECB-AES128 Vector 1 (matches L552 KAT).
         #[cfg(feature = "n657_aes_hw")]
         {
-            use drivers::aes::AesEngine;
-            let mut kat = drivers::aes::AesHardware::new();
-            let key: [u8; 16] = [
-                0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
-                0x4f, 0x3c,
-            ];
-            let input: [u8; 16] = [
-                0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93,
-                0x17, 0x2a,
-            ];
-            let expected: [u8; 16] = [
-                0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66,
-                0xef, 0x97,
-            ];
-            let mut output = [0u8; 16];
-            kat.init(&key, None);
-            kat.encrypt_block(&input, &mut output);
-            crate::raw_print::print_str("[UMBRASecureBoot] AES KAT (HW): ");
-            crate::raw_print::print_hex_bytes(&output);
-            if output == expected {
-                crate::raw_print::print_str(" PASS\n");
-            } else {
-                crate::raw_print::print_str(" FAIL\n");
-                panic!("AES-128-ECB KAT failed — HW AES path broken");
-            }
-
-            // AES-128-CTR KAT — NIST SP800-38A F.5.1 (Vectors 1+2).
-            // Validates the native CTR path: ALGOMODE=0x6, IV load,
-            // HW counter increment between blocks, internal XOR. Key
-            // is the same as ECB above so the same KEYVALID path is
-            // exercised; IV is the F.5.1 counter; plaintext is F.5.1
-            // block 1+2 concatenated.
-            let ctr_key: [u8; 16] = [
-                0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
-                0x4f, 0x3c,
-            ];
-            let ctr_iv: [u8; 16] = [
-                0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
-                0xfe, 0xff,
-            ];
-            let mut ctr_buf: [u8; 32] = [
-                // Block 1 plaintext (F.5.1)
-                0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93,
-                0x17, 0x2a, // Block 2 plaintext
-                0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf,
-                0x8e, 0x51,
-            ];
-            let ctr_expected: [u8; 32] = [
-                // Block 1 ciphertext (F.5.1)
-                0x87, 0x4d, 0x61, 0x91, 0xb6, 0x20, 0xe3, 0x26, 0x1b, 0xef, 0x68, 0x64, 0x99, 0x0d,
-                0xb6, 0xce, // Block 2 ciphertext
-                0x98, 0x06, 0xf6, 0x6b, 0x79, 0x70, 0xfd, 0xff, 0x86, 0x17, 0x18, 0x7b, 0xb9, 0xff,
-                0xfd, 0xff,
-            ];
-            kat.init(&ctr_key, None);
-            kat.ctr_xform(&ctr_iv, &mut ctr_buf);
-            crate::raw_print::print_str("[UMBRASecureBoot] CTR KAT (HW): ");
-            crate::raw_print::print_hex_bytes(&ctr_buf[0..16]);
-            crate::raw_print::print_str(" ");
-            crate::raw_print::print_hex_bytes(&ctr_buf[16..32]);
-            if ctr_buf == ctr_expected {
-                crate::raw_print::print_str(" PASS\n");
-            } else {
-                crate::raw_print::print_str(" FAIL\n");
-                panic!("AES-128-CTR KAT failed — HW CTR path broken");
-            }
+            // KAT moved post-share (issue #45): the AES key now arrives over
+            // the SAES->CRYP DHUK shared bus. `provision_and_share_enc_key` runs
+            // after `init_keys` (where enc_key exists), so a fixed-vector
+            // SW-load KAT no longer applies — AesHardware has no SW key load.
+            // A self-consistency KAT (CRYP-shared vs AesEmulated(enc_key))
+            // follows in a later increment; for now the DHUK share itself is the
+            // fail-closed gate (CRYP KEYVALID).
 
             // AEAD trait surface check.
             // Compile-time: verifies that AesHardware satisfies the
@@ -192,6 +159,46 @@ pub fn init_kernel() {
                 crate::raw_print::print_str("[UMBRASecureBoot] key-init FAIL\n");
                 loop {
                     core::hint::spin_loop();
+                }
+            }
+
+            // issue #45: wrap the derived enc_key under DHUK and share it to
+            // CRYP over the SAES silicon bus, so the AES key reaches CRYP off
+            // the CPU register path. Runs here (after init_keys) because that is
+            // where enc_key exists. Uses the first 16 bytes (AES-128) of the
+            // 32-byte derived key. Fail-closed on CRYP KEYVALID inside.
+            #[cfg(feature = "n657_aes_hw")]
+            {
+                let mut enc_key = [0u8; 16];
+                enc_key.copy_from_slice(&k.enc_key[..16]);
+                crate::dhuk_provision::provision_and_share_enc_key(&enc_key);
+
+                // Self-consistency KAT (issue #45). No fixed NIST vector is
+                // possible — enc_key is rebuild-random — so the SW AES is the
+                // oracle: encrypt a known block via CRYP (DHUK-shared key) and
+                // via AesEmulated(enc_key); equality proves CRYP's shared key
+                // equals enc_key end-to-end. Fail-closed.
+                use drivers::aes::AesEngine;
+                let pt: [u8; 16] = [
+                    0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73,
+                    0x93, 0x17, 0x2a,
+                ];
+                let mut hw = drivers::aes::AesHardware::new();
+                hw.init(&enc_key, None); // configure_ecb_shared; key arg ignored
+                let mut hw_ct = [0u8; 16];
+                hw.encrypt_block(&pt, &mut hw_ct);
+
+                let mut sw = drivers::aes::AesEmulated::new();
+                sw.init(&enc_key, None);
+                let mut sw_ct = [0u8; 16];
+                sw.encrypt_block(&pt, &mut sw_ct);
+
+                crate::raw_print::print_str("[UMBRASecureBoot] DHUK KAT: ");
+                if hw_ct == sw_ct {
+                    crate::raw_print::print_str("PASS\n");
+                } else {
+                    crate::raw_print::print_str("FAIL\n");
+                    panic!("DHUK self-consistency KAT failed — shared key != enc_key");
                 }
             }
         }

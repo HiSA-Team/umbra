@@ -84,6 +84,7 @@ pub fn print_hex(val: u32) {
 /// Print a byte slice as lowercase hex (two chars per byte).
 #[cfg(feature = "boot_tests")]
 #[inline(never)]
+#[allow(dead_code)] // kept for the upcoming issue #45 self-consistency KAT
 pub fn print_hex_bytes(data: &[u8]) {
     let (tdr, isr) = uart_ptrs();
     let mut i: usize = 0;

@@ -1,37 +1,48 @@
 # Author: Salvatore Bramante <salvatore.bramante@imtlucca.it>
 #
-# DHUK availability on N657 Nucleo (BSEC-open dev silicon)
-# Run: openocd -f openocd_scripts/stm32n6x.cfg &
-#      arm-none-eabi-gdb -batch -nx -x tools/dhuk_probe.gdb
+# DHUK / Secure-crypto register probe on the N657 Nucleo (BSEC-open dev silicon).
 #
-# WARNING: monitor reset halt resets the chip — do not run during an active firmware debug session.
+# IMPORTANT — read before running:
+#   The OLD version of this script did `monitor reset halt`, which lands the
+#   CPU BEFORE the Boot ROM -> FSBL handoff. In that state RIF leaves SAES /
+#   RIFSC / BSEC unclocked and unconfigured, so every read returned 0 /
+#   "Failed to read memory" (see project_n657_rifsc_blocked memory). Peripheral
+#   RISUP filtering is by security+privilege (NOT CID), so the fix is simply to
+#   attach to the ALREADY-BOOTED FSBL from the Secure AP — no reset.
 #
-# Key register bases (cross-check these against RM0486 before trusting reads):
-#   BSEC base 0x54000000 (Secure alias) — to verify against RM §4 deep-read
-#   RIFSC base 0x54024000 (Secure alias) — per src/hardware/platform/stm32n657/boot/src/platform_impl.rs:24
-#   RCC_BASE 0x56028000 (Secure alias)  — per src/hardware/platform/stm32n657/drivers/src/rcc.rs:15
-#   AHB3ENR offset 0x258                — per src/hardware/platform/stm32n657/drivers/src/rcc.rs:18
+# Run (NO-RESET attach):
+#   1. Boot the board: BOOT1=Flash-Boot, press RESET, confirm banner @115200.
+#   2. openocd -f openocd_scripts/stm32n6x_attach.cfg &
+#   3. arm-none-eabi-gdb -batch -nx -x tools/dhuk_probe.gdb
+#
+# PROVEN alternative (no GDB) — STM32CubeProgrammer HOTPLUG read on the running
+# FSBL. This is the same SWD/HOTPLUG/ap=1 path flash_n657.sh uses to write the
+# Secure register 0x5600_4100, so it reliably reaches Secure peripherals:
+#   STM32_Programmer_CLI -c port=SWD mode=HOTPLUG ap=1 -r32 0x54021004 0x1   # SAES_SR
+#   STM32_Programmer_CLI -c port=SWD mode=HOTPLUG ap=1 -r32 0x54024018 0x1   # RIFSC_SECCFGR2
+#
+# Verified addresses (do NOT add the unverified BSEC base back without checking
+# the full RM register table — a wrong MMIO read BusFaults the target):
+#   SAES1   base 0x5402_1000 (Secure)  — proven by the working AES KATs
+#   RIFSC   base 0x5402_4000 (Secure)  — per project_n657_rifsc_register_map
+#   SAES_SR        = base+0x04
+#   RIFSC_SECCFGR2 = base+0x18  (SECCFGRx = 0x10 + 4*x; SAES=bit14, CRYP1=bit16)
+#   RIFSC_RIMC_CR  = base+0xC00 (DAPCID[10:8], reset 0x710)
 
 set pagination off
 target extended-remote :3333
-monitor reset halt
 
-# BSEC base 0x54000000 (Secure alias — to verify against RM §4 deep-read)
-# CPU halts in Secure state after monitor reset halt, so Secure alias is correct.
-# HDPLSR is one of the lower offsets — typical Cortex-M ST layout
-printf "=== BSEC_HDPLSR (expected HDPL=2 for OEM/Umbra) ===\n"
-x/w 0x54000400
+# Attach to the running FSBL — DO NOT reset.
+monitor halt
 
-# RCC_BASE=0x56028000 (Secure) + AHB3ENR_OFFSET=0x258
-# src/hardware/platform/stm32n657/drivers/src/rcc.rs:15 (RCC_BASE Secure)
-# src/hardware/platform/stm32n657/drivers/src/rcc.rs:18 (AHB3ENR_OFFSET)
-printf "=== AHB3ENR (expected CRYP1+SAES1 OFF before our enable) ===\n"
-x/w 0x56028258
+printf "=== SAES_SR (bit7=KEYVALID, bit2=WRERRF, bit1=RDERRF, bit3=BSY) ===\n"
+x/w 0x54021004
 
-# RIFSC base 0x54024000 (Secure) + SECCFGR2 offset 0x18
-# src/hardware/platform/stm32n657/boot/src/platform_impl.rs:24 (RIFSC base Secure)
-printf "=== Current RIFSC_SECCFGR2 (CRYP1=bit 16 if RISUP 80; SAES TBD) ===\n"
+printf "=== RIFSC_SECCFGR2 (SAES=bit14, CRYP1=bit16 -> 1=Secure-only) ===\n"
 x/w 0x54024018
+
+printf "=== RIFSC_RIMC_CR (DAPCID at [10:8]; reset 0x710 -> DAP CID=7) ===\n"
+x/w 0x54024c00
 
 monitor resume
 detach

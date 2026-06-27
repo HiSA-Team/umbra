@@ -198,8 +198,8 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     // [block_id | code | meta] into the running HMAC chain.
     // `protect_enclave.py` builds the same chain offline in numeric
     // order and stamps the final value into header.hmac.
-    kernel.begin_measurement();
     let mut hash = drivers::hash::Hash::new();
+    kernel.begin_measurement(&mut hash);
 
     let mut blk: u32 = 0;
     while blk < num_blocks {

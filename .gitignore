@@ -83,3 +83,6 @@ host/*/bare_metal/*.bin
 # RISC-V (riscv32) bare-metal host is a Cargo crate — Cargo build output dir.
 host/riscv32/bare_metal/target/
 
+
+# N657 W3 throwaway FSBL signing keys (regenerated every build, never committed)
+tools/.n657_signing_keys/

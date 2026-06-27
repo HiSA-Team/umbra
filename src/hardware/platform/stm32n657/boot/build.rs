@@ -52,6 +52,20 @@ fn main() {
             println!("cargo:rerun-if-changed={}", abs.display());
         }
     }
+
+    // Emit FSBL_VERSION from UMBRA_FSBL_VERSION (default 1) so the enclave
+    // measurement seed (secure_kernel::begin_measurement) binds to the build
+    // epoch. include!'d by secure_kernel.rs.
+    let fsbl_version: u32 = std::env::var("UMBRA_FSBL_VERSION")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    std::fs::write(
+        PathBuf::from(&out_dir).join("fsbl_version.rs"),
+        format!("pub const FSBL_VERSION: u32 = {};\n", fsbl_version),
+    )
+    .expect("write fsbl_version.rs");
+    println!("cargo:rerun-if-env-changed=UMBRA_FSBL_VERSION");
 }
 
 fn assemble(src: &str, obj: &str) {

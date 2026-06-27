@@ -24,6 +24,8 @@ use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 
 mod api_impl;
 mod crypto_impl;
+mod dhuk_provision;
+mod hdpl;
 mod secure_kernel;
 // the NSC veneer `umbra_bench_dump` references `umbra_bench_dump_imp`
 // regardless of the feature flag — without bench-eval enabled, the
@@ -113,6 +115,15 @@ extern "C" {
 // DMA IRQ handlers — referenced by the startup_n657.s vector table. No-ops
 // on N657 because the boot path does not drive DMA-completion interrupts.
 fn handle_dma_irq(_channel: usize) {}
+
+// SAES1 completion IRQ (issue #45). The DHUK wrap/share CCF waits are
+// interrupt-driven via `CryptoWait`; this ISR records completion, clears CCF,
+// and disables the CCF enable until the next arm(). Placed at vector slot 36
+// (SAES_IRQn) by startup_n657.s.
+#[no_mangle]
+pub extern "C" fn SAES1_IRQHandler() {
+    drivers::crypto_wait::on_saes_irq();
+}
 
 #[no_mangle]
 pub extern "C" fn DMA1_Channel1_Handler() {
