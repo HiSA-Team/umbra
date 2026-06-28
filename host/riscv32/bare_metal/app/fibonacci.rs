@@ -67,13 +67,20 @@ pub extern "C" fn dummy_filler_c(val: &mut i32) {
 }
 
 /// Enclave entry — a plain function placed FIRST in the enclave code (so it
-/// lands at `base + 48`). The monitor `mret`s here in S-mode with `ra` set to a
+/// lands at `base + 48`). The monitor `mret`s here in U-mode with `ra` set to a
 /// return sentinel; when `fibonacci` returns, the monitor catches it and reads
 /// the result from `a0`. The enclave never calls an exit ecall — Umbra handles
 /// the exit, exactly as the L552 EFB model does.
 #[link_section = ".app.enclave_entry"]
 #[no_mangle]
 pub extern "C" fn fibonacci() -> i32 {
+    #[cfg(feature = "neg_iso_enc")]
+    {
+        // SAFETY: deliberately forbidden — the U-mode enclave must trap reading
+        // the S-mode host region; the monitor's fault dump shows V=80100000.
+        let _ = unsafe { core::ptr::read_volatile(0x8010_0000 as *const u32) };
+    }
+
     let n = 12;
     let mut t1: i32 = 0;
     let mut t2: i32 = 1;

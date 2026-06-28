@@ -20,8 +20,8 @@ if [ "${MCU_VARIANT}" = "riscv32" ]; then
     "${PYTHON}" "${ROOT_DIR}/tools/gen_key.py"
     echo -e "${BOLD:-}[riscv32] Building M-mode monitor (${BOOT_CRATE_NAME})${VANILLA:-}"
     ( cd "${SECBOOT_DIR}" && ${CARGO} build --release )
-    echo -e "${BOLD:-}[riscv32] Building U-mode host (${HOST_NAME})${VANILLA:-}"
-    ( cd "${HOST_DIR}" && ${CARGO} build --release )
+    echo -e "${BOLD:-}[riscv32] Building S-mode host (${HOST_NAME})${VANILLA:-}"
+    ( cd "${HOST_DIR}" && ${CARGO} build --release ${HOST_FEATURES:+--features "$HOST_FEATURES"} )
     echo -e "${BOLD:-}[riscv32] Protecting embedded enclave (EFB block division + chained measurement)${VANILLA:-}"
     UMBRA_CROSS="${GCC_PREFIX}" UMBRA_CHAINED=1 UMBRA_ESS_MISS_RECOVERY=1 \
         "${PYTHON}" "${ROOT_DIR}/tools/protect_enclave.py" \

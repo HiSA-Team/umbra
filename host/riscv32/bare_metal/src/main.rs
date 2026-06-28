@@ -39,6 +39,15 @@ extern "C" {
 pub extern "C" fn host_main() -> ! {
     umbra_debug_print("[USER] Hello Untrusted World!\n");
 
+    #[cfg(feature = "neg_iso_host")]
+    {
+        umbra_debug_print("[NEG-ISO] host(S) probing ESS 0x80200000\n");
+        // SAFETY: deliberately forbidden — the monitor must trap this access.
+        let _ = unsafe { core::ptr::read_volatile(0x8020_0000 as *const u32) };
+        umbra_debug_print("[NEG-ISO] FAIL: host read ESS without trapping\n");
+        loop { core::hint::spin_loop(); }
+    }
+
     let mut enclave_ids = [0u32; MAX_ENCLAVES];
     let mut enclave_count: usize = 0;
 

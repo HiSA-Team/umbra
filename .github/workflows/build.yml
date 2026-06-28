@@ -318,3 +318,43 @@ jobs:
           # assert the enclave result landed on the UART.
           ( timeout 60 ./debug.sh || true ) | tee smoke.log
           grep -q "R0=0x72CA33A8" smoke.log
+
+      - name: Negative isolation — S-host denied enclave ESS (PMP)
+        env:
+          MCU_VARIANT: riscv32
+          PYTHON: python3
+        run: |
+          set -euo pipefail
+          HOST_FEATURES=neg_iso_host ./rebuild_all.sh
+          ( timeout 60 ./debug.sh || true ) | tee neg_host.log
+          # S-mode host read of the enclave ESS is PMP-denied: the host-world PMP
+          # grant stops at ESS_BASE, so the access is a load access fault (mcause 5)
+          # at mtval=0x80200000. sPMP does not gate S-mode — this fence is pure PMP.
+          grep -q "V=80200000" neg_host.log
+          grep -q "C=00000005" neg_host.log
+          ! grep -q "R0=0x72CA33A8" neg_host.log
+          ! grep -q "NEG-ISO. FAIL" neg_host.log
+
+      - name: Negative isolation — U-enclave denied host region (sPMP)
+        env:
+          MCU_VARIANT: riscv32
+          PYTHON: python3
+        run: |
+          set -euo pipefail
+          HOST_FEATURES=neg_iso_enc ./rebuild_all.sh
+          ( timeout 60 ./debug.sh || true ) | tee neg_enc.log
+          # U-mode enclave read of the host region has no U-mode sPMP rule, so it
+          # is sPMP-denied: a load page fault (mcause 13) at mtval=0x80100000. The
+          # enclave never completes (no R0=).
+          grep -q "V=80100000" neg_enc.log
+          grep -q "C=0000000d" neg_enc.log
+          ! grep -q "R0=0x72CA33A8" neg_enc.log
+
+      - name: Restore demo keys
+        if: always()
+        run: |
+          git checkout -- \
+            src/hardware/platform/riscv32/boot/src/master_key.rs \
+            src/hardware/platform/stm32l552/boot/src/master_key.rs \
+            src/hardware/platform/stm32n657/boot/src/master_key.rs \
+            tools/master_key.bin 2>/dev/null || true

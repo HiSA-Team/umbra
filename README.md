@@ -24,13 +24,25 @@ Currently supported targets:
 | NUCLEO-L552ZE-Q | STM32L552 | Cortex-M33 | Software AES, DMA block loading |
 | STM32L562E-DK | STM32L562 | Cortex-M33 | Hardware AES, OCTOSPI + OTFDEC |
 | NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, HW HMAC-SHA256, HW AES (CRYP1), NPU-in-enclave demo |
-| QEMU `virt` (RV32) | RISC-V RV32 (M/S/U) | rv32imac | EFB block demand-paging, SW AES-128-CTR + SHA-256, PMP/SPMP isolation, ePMP `.text` self-lock — hardware-free (QEMU) |
+| QEMU `virt` (RV32) | RISC-V RV32 (M/S/U) | rv32imac | EFB block demand-paging, SW AES-128-CTR + SHA-256, M-mode monitor (TCB) · S-mode untrusted host · U-mode trusted enclave, M-mode per-world PMP+sPMP swap, ePMP `.text` self-lock — hardware-free (QEMU) |
 
 > **Trust model note.** The STM32 targets derive their guarantees from a silicon
 > root of trust. The RISC-V target runs on an **SPMP-patched** `qemu-system-riscv32`
 > (SPMP is not yet upstream) and has **no hardware root of trust / attestation** —
 > it is a fully-open, reproducible reference/emulation target for the isolation
-> model (PMP/SPMP/ePMP), not a silicon-equivalent secure deployment.
+> model (PMP/sPMP/ePMP), not a silicon-equivalent secure deployment.
+>
+> **Ring assignment.** The three RISC-V privilege levels carry a deliberate trust
+> inversion relative to the conventional RTOS model: **M-mode** is the Umbra
+> monitor (the TCB — sole owner of PMP and sPMP, mediates every ring transition,
+> `.text` ePMP-locked); **S-mode** is the *untrusted* host (the future RTOS),
+> fenced by PMP alone (sPMP does not gate S-mode); **U-mode** is the *trusted*
+> enclave, confined by both PMP and sPMP (U-mode is sPMP-denied by default, so
+> the monitor must explicitly install R-X code + R-W stack sPMP grants before
+> entering the enclave). Isolation is enforced by an M-mode per-world PMP+sPMP
+> context swap on every enter/exit; neither domain can widen its own window (PMP
+> CSRs are M-only). The PMP→sPMP trap-and-emulate gateway (Smstateen) and a real
+> OS guest in S-mode are forthcoming in a later stage.
 
 ## Architecture
 
@@ -57,7 +69,9 @@ umbra-error  <-  umbra-hal  <-  umbra-api  <-  umbra-kernel  <-  per-platform PA
   `umbra-n657-boot`, `umbra-n657-drivers`).
 - **`src/hardware/architecture/riscv/`** (`umbra-riscv-arch`) +
   **`src/hardware/platform/riscv32/boot/`** (`umbra-riscv32-boot`) — the RISC-V
-  RV32 arch layer (PMP/SPMP/CSR/trap policy, host-tested) and M-mode monitor.
+  RV32 arch layer (PMP/sPMP/CSR/trap policy, host-tested) and M-mode monitor
+  (M = monitor/TCB, S = untrusted host, U = trusted enclave; per-world PMP+sPMP
+  context swap enforces the inter-domain boundary).
 - **`xtask/`** — Rust build/flash/test orchestration; entry-point for `cargo xtask`.
 
 Operational rules, threat-model invariants, panic policy, and the

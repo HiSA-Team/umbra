@@ -2,16 +2,15 @@
 //!
 //! On QEMU `virt` the clocks and GPIO need no setup, the "UART init" just emits
 //! the boot line, and the security phase installs the whole M-mode protection
-//! stack: MMU off (Bare), trap vector + trap stack, `ecall` routing to M, the
-//! outer PMP fence, and the per-purpose SPMP regions.
+//! stack: MMU off (Bare), trap vector + trap stack, `ecall` routing to M, and
+//! the outer PMP fence (the host-world context).
 
-use umbra_riscv_arch::csr::{self, PmpCfg};
+use umbra_riscv_arch::csr;
 use umbra_riscv_arch::pmp::{self, Region};
-use umbra_riscv_arch::{spmp, trap};
+use umbra_riscv_arch::trap;
 
 use super::Rv32VirtPlatform;
 use crate::{crypto_impl, raw_print, secure_kernel};
-use secure_kernel::{ENC_REGION_BASE, ENC_REGION_SIZE, HOST_REGION_BASE, HOST_REGION_SIZE};
 
 extern "C" {
     fn _mtrap_entry();
@@ -44,7 +43,7 @@ impl Rv32VirtPlatform {
 
     /// Install the M-mode protection stack: keep the MMU off (physical
     /// addressing only), point `mtvec` at the trap entry, route all `ecall`s to
-    /// M, program the outer PMP fence, and set up the SPMP regions.
+    /// M, and install the host-world PMP context (sPMP is off in this slice).
     pub(super) fn init_security_impl(&self) {
         csr::disable_mmu();
         trap::set_mtvec(_mtrap_entry as *const () as usize);
@@ -54,24 +53,20 @@ impl Rv32VirtPlatform {
         // ePMP self-lock (PMP slot 1, lowest index → highest priority): a Locked
         // R+X rule over the monitor's own `.text`. The Lock bit binds it to
         // M-mode too, so the monitor cannot overwrite its own code — a store
-        // into `.text` faults. Programmed BEFORE the broad grant so it wins for
-        // the `.text` range.
+        // into `.text` faults. Programmed BEFORE `enter_host_world` so it wins
+        // for the `.text` range (slot 1 < slot 3 → lower PMP index = higher
+        // priority).
         // SAFETY: linker-defined bounds of the monitor's `.text`.
         let stext = core::ptr::addr_of!(_stext) as u32;
         let etext = core::ptr::addr_of!(_etext) as u32;
         let _ = pmp::self_lock_monitor(1, &Region::new(stext, etext));
-        // Outer PMP fence (slot 3, higher index): grant the inter-domain RAM
-        // window. Unlocked, so M-mode bypasses it (retaining its data access to
-        // the host image + Secure ESS); U/S get the envelope and SPMP restricts
-        // within. The `.text` lock above takes priority for its sub-range.
-        let _ = pmp::set_tor(
-            3,
-            &Region::new(0x8000_0000, 0x9000_0000),
-            PmpCfg::new().rwx(),
-        );
-        setup_spmp();
+        // Outer fence is now per-world (see secure_kernel::enter_host_world /
+        // enter_enclave_world). Install the host-world context for the initial
+        // hand-off into the S-mode host; sPMP stays off (mpmpdeleg = 64) — the
+        // PMP/sPMP gateway is a later slice.
+        secure_kernel::enter_host_world();
         raw_print::print_str(
-            "[UMBRASecureBoot] PMP/sPMP setup completed (monitor .text ePMP-locked)\n",
+            "[UMBRASecureBoot] PMP world-switch armed (host-world; monitor .text ePMP-locked)\n",
         );
     }
 
@@ -88,26 +83,3 @@ impl Rv32VirtPlatform {
     }
 }
 
-/// Program the SPMP regions for the externally-loaded U-mode host and its
-/// embedded enclave (S-mode and M-mode default-allow; U-mode is default-denied
-/// unless a rule grants it):
-///
-/// - host working region — **UMODE** R|W|X: the host runs entirely here
-///   (code/rodata/data/bss/stack).
-/// - enclave + scan region — **SHARED** R|X: the host (U) reads it to scan for
-///   the enclave header, and the enclave (S) fetches its code from it.
-/// - the enclave stack (`ENC_SP`) and everything else is left **unruled**, so
-///   S-mode default-allows it while U-mode is default-denied — that denial is
-///   the SPMP fence keeping the untrusted host out of the enclave's stack and
-///   the monitor's memory.
-fn setup_spmp() {
-    use spmp::cfg_bits as c;
-    spmp::set_mpmpdeleg(32); // delegate rules so entries are programmable + active
-    spmp::write_napot_entry(0, ENC_REGION_BASE, ENC_REGION_SIZE, c::R | c::X | c::SHARED);
-    spmp::write_napot_entry(
-        1,
-        HOST_REGION_BASE,
-        HOST_REGION_SIZE,
-        c::R | c::W | c::X | c::UMODE,
-    );
-}

@@ -1,6 +1,6 @@
 //! M-mode trap decode + frame.
 //!
-//! Every `ecall` from U (host) and S (enclave), and every PMP access fault,
+//! Every `ecall` from U (the trusted enclave) and S (the untrusted host), and every PMP access fault,
 //! funnels through the monitor's trap handler — the single mediation point that
 //! keeps the M-mode monitor the sole arbiter. This module owns the pure decode
 //! (host-tested) and the mapping of PMP faults onto [`UmbraError`]; the trap
@@ -29,19 +29,26 @@ const MSTATUS_MPP_S: u32 = 0b01 << 11;
 // MPP = 00 is U-mode (no bits set).
 
 impl TrapFrame {
-    /// Make the next `mret` from this frame land in S-mode (used to enter the
-    /// enclave). The trapped-from value is U (the host), so this rewrites MPP.
+    /// Make the next `mret` from this frame land in S-mode. Retained for S-mode
+    /// host-context paths; in the flipped model the enclave is entered via
+    /// [`return_to_user`] (U-mode), not this.
     pub fn return_to_supervisor(&mut self) {
         self.mstatus = (self.mstatus & !MSTATUS_MPP_MASK) | MSTATUS_MPP_S;
+    }
+
+    /// Make the next `mret` from this frame land in U-mode (used to enter the
+    /// enclave, which is U in the flipped model). Clears `mstatus.MPP`.
+    pub fn return_to_user(&mut self) {
+        self.mstatus &= !MSTATUS_MPP_MASK;
     }
 }
 
 /// Decoded trap cause (the subset the monitor acts on).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Trap {
-    /// `ecall` from U-mode (the untrusted host).
+    /// `ecall` from U-mode (the trusted enclave).
     EcallFromU,
-    /// `ecall` from S-mode (the enclave).
+    /// `ecall` from S-mode (the untrusted host).
     EcallFromS,
     /// PMP-denied load — `addr` is `mtval` (the faulting address).
     LoadAccessFault { addr: u32 },
@@ -200,5 +207,20 @@ mod tests {
     #[test]
     fn ecall_is_not_a_mem_protect_error() {
         assert_eq!(decode(8, 0).as_mem_protect_error(), None);
+    }
+
+    #[test]
+    fn return_to_user_clears_mpp() {
+        let mut f = TrapFrame {
+            regs: [0; 32],
+            mepc: 0,
+            mcause: 0,
+            mtval: 0,
+            mstatus: 0,
+        };
+        f.return_to_supervisor(); // MPP = S (0b01 << 11)
+        assert_ne!(f.mstatus & (0b11 << 11), 0);
+        f.return_to_user(); // MPP = U (0b00)
+        assert_eq!(f.mstatus & (0b11 << 11), 0);
     }
 }

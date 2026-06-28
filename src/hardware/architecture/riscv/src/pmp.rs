@@ -69,6 +69,21 @@ pub fn self_lock_monitor(slot: usize, text: &Region) -> UmbraResult<()> {
     set_tor(slot, text, PmpCfg::new().r().x().lock())
 }
 
+/// Turn PMP entry `slot` OFF (mode `Off`, no permissions). Used when switching
+/// worlds to revoke an entry the other world owned, so no stale grant survives.
+///
+/// Unlike [`set_tor`], slot 0 is valid here: Off mode clears the entry's cfg byte
+/// and needs no predecessor `pmpaddr`, so the whole `0..=MAX_PMP_SLOT` range applies.
+pub fn disable(slot: usize) -> UmbraResult<()> {
+    if slot > MAX_PMP_SLOT {
+        return Err(UmbraError::InternalInvariant {
+            context: "PMP slot out of range (0..=15)",
+        });
+    }
+    write_pmpcfg_byte(slot, PmpCfg::new().bits())?;
+    Ok(())
+}
+
 // ── Target CSR writes (RV32) ────────────────────────────────────────────────
 
 #[cfg(target_arch = "riscv32")]
@@ -179,6 +194,22 @@ fn set_mseccfg_mml_mmwp() -> UmbraResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disable_rejects_out_of_range_slot() {
+        assert_eq!(
+            disable(16).unwrap_err(),
+            UmbraError::InternalInvariant {
+                context: "PMP slot out of range (0..=15)"
+            }
+        );
+    }
+
+    #[test]
+    fn disable_accepts_valid_slot() {
+        // On host the CSR write is a no-op; exercises the validation path.
+        assert!(disable(5).is_ok());
+    }
 
     #[test]
     fn pmpaddr_is_phys_shifted_right_two() {

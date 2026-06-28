@@ -4,7 +4,7 @@
 //! (`UmbraEnclaveHeader` / `EnclaveDescriptor`), exactly as L552 does.
 //!
 //! Execution is RISC-V-specific: the enclave is a plain function at the code
-//! start (`base + UMBRA_HEADER_SIZE`); the monitor enters it in S-mode with `ra`
+//! start (`base + UMBRA_HEADER_SIZE`); the monitor enters it in U-mode with `ra`
 //! set to a return sentinel, and when it returns the fetch at the sentinel
 //! faults back to M — **Umbra handles the exit** (the EFB model: the monitor
 //! catches the enclave's return rather than the enclave signalling completion).
@@ -13,6 +13,9 @@ use kernel::common::enclave::{EnclaveDescriptor, UmbraEnclaveHeader, UMBRA_HEADE
 use kernel::common::ess::{CACHE_LIMIT_PER_ENCLAVE, ESS_BASE};
 use kernel::key_storage_server::crypto::CryptoEngine;
 use umbra_error::{UmbraError, UmbraResult};
+use umbra_riscv_arch::csr::PmpCfg;
+use umbra_riscv_arch::pmp::{self, Region};
+use umbra_riscv_arch::spmp::{self, cfg_bits};
 use umbra_riscv_arch::trap::TrapFrame;
 
 use crate::crypto_impl;
@@ -27,13 +30,17 @@ pub const HOST_REGION_BASE: u32 = 0x8010_0000;
 pub const HOST_REGION_SIZE: u32 = 0x0004_0000; // 256 KB
 /// Initial host stack pointer (the host's `_host_start` resets it anyway).
 pub const HOST_SP: u32 = HOST_REGION_BASE + HOST_REGION_SIZE;
-/// Embedded-enclave + scan region `[base, base+size)`. The enclave header/code
-/// sit at the start; the rest covers the host's page-by-page scan range so the
-/// host (U-mode) can read it without faulting. Mapped SHARED R|X.
-pub const ENC_REGION_BASE: u32 = 0x8014_0000;
-pub const ENC_REGION_SIZE: u32 = 0x0004_0000; // 256 KB (covers the host scan range)
-/// Enclave stack — an unruled region (SPMP S-mode default-allow, U-mode deny).
-pub const ENC_SP: u32 = 0x800F_0000;
+/// Top of the host-world PMP grant: the host (S) owns `[HOST_REGION_BASE, ESS_BASE)`,
+/// which spans its code/data/stack and the embedded enclave ciphertext it scans.
+pub const HOST_WORLD_END: u32 = ESS_BASE;
+/// Enclave code (ESS) region `[ESS_BASE, ESS_CODE_END)` — enclave-world PMP R-X.
+/// The decrypted/demand-loaded blocks live and execute here in U-mode.
+pub const ESS_CODE_END: u32 = ESS_BASE + 0x0001_0000; // 64 KB
+/// Enclave stack region `[ENC_STACK_BASE, ENC_STACK_TOP)` — enclave-world PMP R-W.
+pub const ENC_STACK_BASE: u32 = 0x8021_0000;
+pub const ENC_STACK_TOP: u32 = 0x8022_0000;
+/// Initial enclave stack pointer (grows down from the top of the R-W region).
+pub const ENC_SP: u32 = ENC_STACK_TOP;
 /// `ra` the monitor installs before entering the enclave. The enclave's final
 /// `ret` jumps here; the fetch faults to M and is recognized as a clean return.
 pub const RETURN_SENTINEL: u32 = 0x0000_0000;
@@ -201,6 +208,59 @@ fn state() -> &'static mut State {
 /// `Kernel::init` slot; the software crypto engine has no state to set up here.
 pub fn init() {}
 
+/// Install the **host-world** PMP context: the host region RWX (slot 3), the
+/// enclave-stack entry disabled (slot 5). The ESS region is then uncovered, so
+/// the S-mode host is PMP-denied the decrypted enclave — the key S>U fence.
+pub fn enter_host_world() {
+    let _ = pmp::set_tor(
+        3,
+        &Region::new(HOST_REGION_BASE, HOST_WORLD_END),
+        PmpCfg::new().rwx(),
+    );
+    let _ = pmp::disable(5);
+}
+
+/// Install the **enclave-world** PMP context: ESS code R-X (slot 3) and the
+/// enclave stack R-W (slot 5). The host region is then uncovered, so the U-mode
+/// enclave is PMP-denied the host's memory.
+pub fn enter_enclave_world() {
+    let _ = pmp::set_tor(
+        3,
+        &Region::new(ESS_BASE, ESS_CODE_END),
+        PmpCfg::new().r().x(),
+    );
+    let _ = pmp::set_tor(
+        5,
+        &Region::new(ENC_STACK_BASE, ENC_STACK_TOP),
+        PmpCfg::new().r().w(),
+    );
+    // On the SPMP-patched QEMU every U/S access is checked against PMP AND sPMP,
+    // and U-mode is denied-by-default unless an sPMP rule grants it. Delegate
+    // rules and grant the U-mode enclave its code (R-X) and stack (R-W). The host
+    // region has no U-mode sPMP rule, so the enclave stays fenced out of it —
+    // defence-in-depth with the PMP swap. (The S-mode host is not gated by sPMP;
+    // its fence is purely PMP.)
+    //
+    // mpmpdeleg=32 is load-bearing twice: (a) num_deleg_rules = 64-32 = 32 so sPMP
+    //    entries 0/1 are delegated/active; (b) mpmpdeleg & 0x7F also clamps the PMP
+    //    enforcement window (max_pmp_index), so it must exceed our highest PMP slot (5)
+    //    AND the .text lock (entry 1) — too small a value would silently drop the
+    //    per-world PMP grants. 32 satisfies both with margin.
+    spmp::set_mpmpdeleg(32);
+    spmp::write_napot_entry(
+        0,
+        ESS_BASE,
+        ESS_CODE_END - ESS_BASE,
+        cfg_bits::UMODE | cfg_bits::R | cfg_bits::X,
+    );
+    spmp::write_napot_entry(
+        1,
+        ENC_STACK_BASE,
+        ENC_STACK_TOP - ENC_STACK_BASE,
+        cfg_bits::UMODE | cfg_bits::R | cfg_bits::W,
+    );
+}
+
 // ── Submodules (split to keep each file under the 600-LOC hard cap) ──────────
 mod create;
 mod ess_miss;
@@ -209,7 +269,7 @@ pub use create::create;
 pub use ess_miss::try_handle_ess_miss;
 
 /// Enter enclave `id`: snapshot the host context, then run the enclave in
-/// S-mode. A **fresh** enclave starts at its entry point with the return
+/// U-mode. A **fresh** enclave starts at its entry point with the return
 /// sentinel in `ra`; a **suspended** one (preempted earlier) resumes from its
 /// saved context verbatim. Either way the preemption time-slice is armed so the
 /// monitor regains control after one quantum.
@@ -228,18 +288,22 @@ pub fn enter(frame: &mut TrapFrame, id: u32) {
     st.host_ctx_valid = true;
     st.current = Some(idx);
 
+    // Swap to the enclave-world PMP context before running the enclave (U-mode):
+    // grants ESS code + enclave stack, revokes the host region.
+    enter_enclave_world();
+
     if st.slots[idx].suspended {
-        // Resume: restore the preempted register file + mepc + mstatus (MPP=S)
+        // Resume: restore the preempted register file + mepc + mstatus (MPP=U)
         // exactly as captured at the tick, so the enclave continues mid-stream.
         *frame = st.slots[idx].saved_ctx;
         st.slots[idx].suspended = false;
     } else {
-        // Fresh start: jump to the entry point in S-mode with the return
+        // Fresh start: jump to the entry point in U-mode with the return
         // sentinel in `ra` and the enclave stack in `sp`.
         frame.mepc = st.slots[idx].descriptor.entry_point;
         frame.regs[1] = RETURN_SENTINEL; // ra
         frame.regs[2] = ENC_SP; // sp
-        frame.return_to_supervisor();
+        frame.return_to_user();
     }
 
     // Arm the preemption tick for this slice. Disabled again the moment the
@@ -260,6 +324,8 @@ pub fn try_preempt(frame: &mut TrapFrame) -> bool {
         st.slots[idx].saved_ctx = *frame; // full enclave context (regs + mepc + mstatus)
         st.slots[idx].suspended = true;
         timer::disable();
+        // Re-enter host-world PMP before resuming the S-mode host.
+        enter_host_world();
         st.current = None;
         if st.host_ctx_valid {
             *frame = st.host_ctx;
@@ -290,6 +356,8 @@ pub fn try_handle_return(frame: &mut TrapFrame) -> bool {
 /// packed `(STATUS_TERMINATED << 8) | (result & 0xFF)` in `a0`. Also used by an
 /// enclave that opts to signal completion via the `exit` ecall.
 pub fn complete(frame: &mut TrapFrame, result: u32) {
+    // Re-enter host-world PMP before resuming the S-mode host.
+    enter_host_world();
     let st = state();
     // The enclave is done — no more preemption ticks for it.
     timer::disable();

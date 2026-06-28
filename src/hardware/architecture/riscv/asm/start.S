@@ -126,3 +126,15 @@ _enter_umode:
     csrw  mepc, a0
     mv    sp, a1
     mret
+
+# ── Initial hand-off into S-mode (boot → untrusted host). Does not return. ──
+# extern "C" fn _enter_smode(entry: usize /*a0*/, sp: usize /*a1*/) -> !
+    .globl _enter_smode
+_enter_smode:
+    li    t1, (3 << 11)            # mstatus.MPP mask (bits 12:11)
+    csrc  mstatus, t1             # clear MPP
+    li    t1, (1 << 11)            # MPP = 01  -> mret drops to S-mode
+    csrs  mstatus, t1
+    csrw  mepc, a0
+    mv    sp, a1
+    mret
