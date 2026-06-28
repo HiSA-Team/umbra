@@ -218,6 +218,11 @@ pub fn enter_host_world() {
         PmpCfg::new().rwx(),
     );
     let _ = pmp::disable(5);
+    // sPMP: the enclave's entries 0/1 must not govern the guest's U-tasks; the
+    // guest's own shadow entries (2+) come back.
+    spmp::disable_entry(0);
+    spmp::disable_entry(1);
+    paravirt::reinstall_shadow();
 }
 
 /// Install the **enclave-world** PMP context: ESS code R-X (slot 3) and the
@@ -241,12 +246,12 @@ pub fn enter_enclave_world() {
     // defence-in-depth with the PMP swap. (The S-mode host is not gated by sPMP;
     // its fence is purely PMP.)
     //
-    // mpmpdeleg=32 is load-bearing twice: (a) num_deleg_rules = 64-32 = 32 so sPMP
-    //    entries 0/1 are delegated/active; (b) mpmpdeleg & 0x7F also clamps the PMP
-    //    enforcement window (max_pmp_index), so it must exceed our highest PMP slot (5)
-    //    AND the .text lock (entry 1) — too small a value would silently drop the
-    //    per-world PMP grants. 32 satisfies both with margin.
-    spmp::set_mpmpdeleg(32);
+    // mpmpdeleg is load-bearing twice and is now set once at boot (not here):
+    // (a) num_deleg_rules = 64-32 = 32 so sPMP entries 0/1 are delegated/active;
+    // (b) it also clamps the PMP enforcement window (max_pmp_index) past our
+    // highest PMP slot (5) and the .text lock — see init_security_impl.
+    // The guest's UMODE shadow entries must not govern the enclave U-task.
+    paravirt::disable_shadow();
     spmp::write_napot_entry(
         0,
         ESS_BASE,
@@ -264,9 +269,11 @@ pub fn enter_enclave_world() {
 // ── Submodules (split to keep each file under the 600-LOC hard cap) ──────────
 mod create;
 mod ess_miss;
+mod paravirt;
 
 pub use create::create;
 pub use ess_miss::try_handle_ess_miss;
+pub use paravirt::try_handle_paravirt_csr;
 
 /// Enter enclave `id`: snapshot the host context, then run the enclave in
 /// U-mode. A **fresh** enclave starts at its entry point with the return

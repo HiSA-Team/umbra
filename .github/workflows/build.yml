@@ -350,6 +350,36 @@ jobs:
           grep -q "C=0000000d" neg_enc.log
           ! grep -q "R0=0x72CA33A8" neg_enc.log
 
+      - name: Gateway — guest PMP intent enforced via sPMP
+        env:
+          MCU_VARIANT: riscv32
+          PYTHON: python3
+        run: |
+          set -euo pipefail
+          HOST_FEATURES=gateway_demo ./rebuild_all.sh
+          ( timeout 60 ./debug.sh || true ) | tee gw.log
+          # The S-guest's PMP writes trap to M and are shadowed into clamped sPMP
+          # UMODE entries. Its U-task reads the granted region (OK), then the
+          # ungranted secret -> sPMP load page fault (mcause 0xd) at the secret
+          # address. Never the FAIL line (a successful forbidden read).
+          grep -q "param read OK" gw.log
+          grep -q "C=0000000d" gw.log
+          grep -q "V=80170000" gw.log
+          ! grep -q "GW. FAIL" gw.log
+
+      - name: Gateway — direct guest sPMP access denied (Smstateen)
+        env:
+          MCU_VARIANT: riscv32
+          PYTHON: python3
+        run: |
+          set -euo pipefail
+          HOST_FEATURES=gateway_evil ./rebuild_all.sh
+          ( timeout 60 ./debug.sh || true ) | tee gw_evil.log
+          # mstateen0 bit 60 (SVSLCT) is cleared, so the guest's DIRECT sPMP
+          # indirect-CSR write (csrw siselect) traps to M and the gateway denies
+          # it -- the monitor's deny line is the pass signal.
+          grep -q "denied direct guest sPMP write" gw_evil.log
+
       - name: Restore demo keys
         if: always()
         run: |

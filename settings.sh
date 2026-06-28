@@ -257,7 +257,10 @@ if [ "$MCU_VARIANT" = "riscv32" ]; then
     # The monitor is loaded at RAM ORIGIN (0x8000_0000) and the host image at 0x8010_0000.
     export TARGET_ARCH=riscv32imac-unknown-none-elf
     export TARGET_FLASH_START=0x80000000
-    export QEMU_CPU="${QEMU_CPU:-rv32,spmp=true}"
+    # smstateen=true activates mstateen0 gating so the monitor can deny the
+    # S-mode guest the indirect-CSR (siselect/sireg) path to sPMP (PMP->sPMP
+    # gateway hardening); without it the gate is inert. M always retains access.
+    export QEMU_CPU="${QEMU_CPU:-rv32,spmp=true,smstateen=true}"
 elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export OPENOCD_CONFIG=./openocd_scripts/stm32n6x.cfg
     export TARGET_FLASH_START=0x30000000

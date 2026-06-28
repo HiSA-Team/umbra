@@ -28,9 +28,12 @@ pub extern "C" fn rust_mtrap(frame: &mut TrapFrame) {
             // A non-ecall trap. In order: (1) the active enclave returning to
             // the sentinel (Umbra handles the exit); (2) an ESS miss — the
             // enclave fetched from a trap-filled, not-yet-resident block, so
-            // demand-load it and re-execute; (3) otherwise a genuine fault.
+            // demand-load it and re-execute; (3) a guest (S-mode) PMP CSR access
+            // — decode it and re-express it as a clamped sPMP entry (the
+            // gateway); (4) otherwise a genuine fault.
             if !secure_kernel::try_handle_return(frame)
                 && !secure_kernel::try_handle_ess_miss(frame)
+                && !secure_kernel::try_handle_paravirt_csr(frame)
             {
                 handlers::unexpected_trap(frame);
             }

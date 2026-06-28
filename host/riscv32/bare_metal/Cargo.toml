@@ -16,6 +16,8 @@ path = "src/main.rs"
 # a forbidden access; the monitor's fault dump confirms the deny via mtval.
 neg_iso_host = []     # S-mode host reads the enclave ESS -> must trap (V=80200000)
 neg_iso_enc = []      # U-mode enclave reads the host region -> must trap (V=80100000)
+gateway_demo = []   # S-guest programs PMP -> Umbra shadows to sPMP -> U-task fenced
+gateway_evil = []   # S-guest tries DIRECT sPMP (siselect) -> Smstateen gate traps -> denied
 
 [profile.release]
 panic = "abort"

@@ -5,8 +5,9 @@ swap) is implemented and runs on the SPMP-patched QEMU. *Corrected during QEMU
 bring-up: the U-mode enclave is sPMP-denied by default, so the per-world swap must
 also install the enclave's sPMP grants (a bare PMP-only swap caused `mcause 0xc`,
 sPMP instruction-fetch denial, on ESS entry). The fix is in commit a41c6a3.* The
-PMP→sPMP trap-and-emulate gateway and Smstateen remain a separate later slice; this
-ADR covers the flipped topology and the minimal sPMP entry programming it requires.
+PMP→sPMP trap-and-emulate gateway **and** the Smstateen hardening are now
+implemented — see [§ Gateway + Smstateen](#gateway--smstateen) below; this ADR's
+earlier "remains deferred" notes are superseded by that section.
 
 ## Context
 
@@ -189,6 +190,70 @@ Until both tests are green, the model is considered *designed and modelled* but 
 - The Smstateen / PMP→sPMP gateway slice remains fully orthogonal and can be added
   without revisiting the ring assignment or the PMP+sPMP world-switch mechanism
   documented here.
+
+## Gateway + Smstateen
+
+The PMP→sPMP trap-and-emulate gateway and the Smstateen hardening, deferred when
+this ADR was first written, are now implemented (the gateway slice). Three pieces:
+
+### PMP→sPMP shadow (trap-and-emulate)
+
+The S-mode guest is written as if it owns M-mode PMP. PMP CSRs are M-only, so the
+guest's `pmpcfg`/`pmpaddr` accesses trap to M as illegal instructions. A fourth
+trap-dispatch path, `try_handle_paravirt_csr` (after `try_handle_return` /
+`try_handle_ess_miss`), decodes the trapped Zicsr instruction (a pure, host-tested
+decoder in `umbra-riscv-arch::paravirt`), mirrors it in a per-guest shadow PMP
+table, and for each PMP entry the guest writes programs a clamped **U-mode sPMP**
+entry: guest PMP entry *i* → sPMP entry *(2 + i)*, `UMODE`, with `[base, end)`
+clamped to the guest's host-world PMP grant `[HOST_REGION_BASE, HOST_WORLD_END)`.
+Because every U/S access is `PMP ∧ sPMP`, the clamped `UMODE` rule can only
+*restrict* within the guest's PMP world — the guest can never widen past it. The
+gateway guards on `mcause == 2 && trapped_from_supervisor()`, so it never steals
+the enclave's U-mode trap-fill or a genuine illegal instruction. NAPOT only in
+this slice (TOR/NA4/OFF guest entries decode to "no grant" → the sPMP entry is
+disabled). Proven on QEMU (`gateway_demo`): a guest grants a U-task R-X over a
+region and leaves a secret ungranted; the U-task reads the granted region
+(`[GW] param read OK`) then page-faults on the secret (`mcause 0xd`, sPMP deny).
+
+### Per-transition sPMP reset (slice-1 deferral discharged)
+
+sPMP entries are global CSRs, so the world switch now owns them fully:
+`enter_host_world()` disables the enclave's sPMP entries 0/1 and reinstalls the
+guest shadow entries (2+); `enter_enclave_world()` disables the guest shadow and
+reinstalls entries 0/1. `mpmpdeleg = 32` is now set once at boot (it must precede
+the first `enter_host_world`, which programs sPMP). This closes the gap noted
+earlier ("a future host-in-U extension must reset the sPMP context"): a guest
+`UMODE` rule can never govern the enclave U-task, or vice versa. The enclave still
+returns `R0 = 0x72CA33A8` with the guest shadow present (no cross-leak).
+
+### Smstateen — direct-sPMP gate
+
+The shadow only mediates the guest's *PMP* CSRs. A guest that knows sPMP exists
+could try to program it directly via the indirect-CSR mechanism (`siselect 0x150`
+/ `sireg 0x151` / `sireg2 0x152`). Smstateen closes that: the monitor clears
+`mstateen0` bit 60 — the indirect-select enable, named `SVSLCT` in the patched
+QEMU (the architectural `CSRIND` control) — so an S-mode indirect-CSR access traps
+to M, where the gateway **denies** it (`[GW] denied direct guest sPMP write`). M
+always retains access (`smstateen_acc_ok` short-circuits for `priv == M`).
+
+Two implementation subtleties, both load-bearing:
+
+- **The CPU must have Smstateen.** A spike of the patched QEMU showed the gating
+  code path is correct (bit 60 gates `siselect`/`sireg`) but is *inert* unless
+  `riscv_cpu_cfg(env)->ext_smstateen` is set — and `ext_smstateen` defaults off,
+  enabled neither by `spmp` nor `sscsrind`. The reference QEMU config is therefore
+  `-cpu rv32,spmp=true,smstateen=true` (settings.sh). On a CPU without Smstateen
+  the gate is a no-op and a guest could program sPMP directly — but even then the
+  hard isolation holds: PMP dominance + the per-transition reset still fence the
+  enclave and monitor; a direct guest sPMP write could only re-grant *within the
+  guest's own PMP world*, affecting only the guest's own U-tasks.
+- **`mstateen0` resets to 0 = deny-all-to-S.** Enabling Smstateen flips every
+  `mstateen0`-gated feature (FCSR, AIA, envcfg, …) to deny-by-default for S. So the
+  monitor grants S **all** `mstateen0` bits and clears **only** bit 60
+  (`gate_guest_indirect_csr`), or the host would lose unrelated features.
+
+Proven on QEMU (`gateway_evil`): a guest's direct `csrw siselect` traps and the
+monitor prints the deny line; the write never takes effect.
 
 ## Cross-references
 

@@ -11,6 +11,7 @@
 
 pub mod aes_kat;
 pub mod csr;
+pub mod paravirt;
 pub mod pmp;
 pub mod pmp_world;
 pub mod spmp;

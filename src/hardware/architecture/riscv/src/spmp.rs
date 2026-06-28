@@ -65,9 +65,49 @@ pub fn write_napot_entry(index: u32, base: u32, size: u32, cfg: u32) {
     }
 }
 
+/// Disable sPMP entry `index` (cfg = 0 / OFF). Same indirect-CSR path as the
+/// writers. Used by the per-transition reset so an entry one world programmed
+/// never governs the other world.
+#[cfg(target_arch = "riscv32")]
+pub fn disable_entry(index: u32) {
+    use core::arch::asm;
+    // SAFETY: indirect SPMP CSR programming; requires prior set_mpmpdeleg.
+    unsafe {
+        asm!("csrw 0x150, {v}", v = in(reg) 0x100 + index); // siselect
+        asm!("csrw 0x152, {v}", v = in(reg) 0u32); // sireg2 = spmpcfg[index] = OFF
+    }
+}
+
+/// Smstateen: gate the indirect-CSR (`siselect`/`sireg`/`sireg2`) mechanism so an
+/// S-mode guest cannot program sPMP directly behind the PMP→sPMP gateway — its
+/// indirect-CSR access then traps to M (which always retains access via the
+/// `priv == M` short-circuit in `smstateen_acc_ok`). Grants S every *other*
+/// `mstateen0` bit (so the host keeps FCSR/AIA/envcfg/... — `mstateen0` resets to
+/// 0 = deny-all, so we must grant) and clears only bit 60, the indirect-select
+/// enable (named `SVSLCT` in the patched QEMU; the architectural `CSRIND`
+/// control). On RV32 `mstateen0` splits into `mstateen0` (CSR 0x30c, low 32) +
+/// `mstateen0h` (CSR 0x31c, high 32); bit 60 is bit 28 of the high word.
+/// Requires the CPU built with Smstateen (`-cpu ...,smstateen=true`); a no-op
+/// (and the gateway's direct-sPMP deny is moot) on a CPU without it.
+#[cfg(target_arch = "riscv32")]
+pub fn gate_guest_indirect_csr() {
+    use core::arch::asm;
+    // SAFETY: writes the architectural mstateen0/mstateen0h CSRs (M-mode).
+    unsafe {
+        asm!("csrw 0x30c, {v}", v = in(reg) 0xFFFF_FFFFu32); // mstateen0  = grant all
+        asm!("csrw 0x31c, {v}", v = in(reg) 0xFFFF_FFFFu32 & !(1u32 << 28)); // mstateen0h: clear SVSLCT(60)
+    }
+}
+
+#[cfg(not(target_arch = "riscv32"))]
+#[allow(missing_docs)]
+pub fn gate_guest_indirect_csr() {}
 #[cfg(not(target_arch = "riscv32"))]
 #[allow(missing_docs)]
 pub fn set_mpmpdeleg(_value: u32) {}
 #[cfg(not(target_arch = "riscv32"))]
 #[allow(missing_docs)]
 pub fn write_napot_entry(_index: u32, _base: u32, _size: u32, _cfg: u32) {}
+#[cfg(not(target_arch = "riscv32"))]
+#[allow(missing_docs)]
+pub fn disable_entry(_index: u32) {}

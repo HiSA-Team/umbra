@@ -60,10 +60,18 @@ impl Rv32VirtPlatform {
         let stext = core::ptr::addr_of!(_stext) as u32;
         let etext = core::ptr::addr_of!(_etext) as u32;
         let _ = pmp::self_lock_monitor(1, &Region::new(stext, etext));
-        // Outer fence is now per-world (see secure_kernel::enter_host_world /
-        // enter_enclave_world). Install the host-world context for the initial
-        // hand-off into the S-mode host; sPMP stays off (mpmpdeleg = 64) — the
-        // PMP/sPMP gateway is a later slice.
+        // Outer fence is per-world (see secure_kernel::enter_host_world /
+        // enter_enclave_world). Delegate sPMP rules once (num_deleg_rules =
+        // 64-32 = 32) AND set the PMP enforcement window (max_pmp_index = 32).
+        // Load-bearing for both the per-world PMP grants and the guest shadow /
+        // enclave sPMP entries. MUST precede enter_host_world(), which now
+        // programs sPMP (disable enclave entries 0/1 + reinstall guest shadow).
+        umbra_riscv_arch::spmp::set_mpmpdeleg(32);
+        // Smstateen hardening: deny the S-mode guest the indirect-CSR mechanism
+        // (siselect/sireg) so it cannot program sPMP directly — it must go
+        // through the PMP->sPMP gateway. M always retains access; the host keeps
+        // every other mstateen0 feature. Inert unless the CPU has Smstateen.
+        umbra_riscv_arch::spmp::gate_guest_indirect_csr();
         secure_kernel::enter_host_world();
         raw_print::print_str(
             "[UMBRASecureBoot] PMP world-switch armed (host-world; monitor .text ePMP-locked)\n",

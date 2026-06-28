@@ -64,5 +64,26 @@ SECTIONS {
     . = _enclave_code_start + 0x600;
   } > RAM
 
+  /* gateway_demo: a U-task (code+stack) the S-guest grants via shadowed sPMP,
+     plus a secret word it does NOT grant. Each section is 64 KB-aligned (so the
+     demo's NAPOT helper, size = 64 KB, covers it exactly) and defines its base
+     symbol INSIDE the section — a bare `_sym = .` between `> RAM` sections moves
+     only the symbol, not the section, so the two diverge (symbol at the aligned
+     `.`, code at the region pointer). Keeping the symbol inside binds it to the
+     real placement. All inside [0x80100000,0x80200000). */
+  .utask : ALIGN(0x10000) {
+    _utask_base = .;        /* = utask_entry; granted R-X via shadow */
+    KEEP(*(.utask))
+  } > RAM
+  .ustack (NOLOAD) : ALIGN(0x10000) {
+    _ustack_base = .;       /* U-task stack, granted R-W via shadow */
+    . += 0x1000;
+    _ustack_top = .;
+  } > RAM
+  .gwsecret (NOLOAD) : ALIGN(0x10000) {
+    _gw_secret = .;         /* one word the guest does NOT grant the U-task */
+    . += 4;
+  } > RAM
+
   /DISCARD/ : { *(.eh_frame .eh_frame_hdr) }
 }

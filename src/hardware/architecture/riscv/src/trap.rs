@@ -41,6 +41,13 @@ impl TrapFrame {
     pub fn return_to_user(&mut self) {
         self.mstatus &= !MSTATUS_MPP_MASK;
     }
+
+    /// True if the trap was taken from S-mode (mstatus.MPP == S). The gateway
+    /// emulates PMP CSR traps only from the S-mode guest, never from the U-mode
+    /// enclave.
+    pub fn trapped_from_supervisor(&self) -> bool {
+        self.mstatus & MSTATUS_MPP_MASK == MSTATUS_MPP_S
+    }
 }
 
 /// Decoded trap cause (the subset the monitor acts on).
@@ -222,5 +229,19 @@ mod tests {
         assert_ne!(f.mstatus & (0b11 << 11), 0);
         f.return_to_user(); // MPP = U (0b00)
         assert_eq!(f.mstatus & (0b11 << 11), 0);
+    }
+
+    #[test]
+    fn trapped_from_supervisor_reads_mpp() {
+        let mut f = TrapFrame {
+            regs: [0; 32],
+            mepc: 0,
+            mcause: 0,
+            mtval: 0,
+            mstatus: 0,
+        };
+        assert!(!f.trapped_from_supervisor()); // MPP=U
+        f.return_to_supervisor(); // MPP=S
+        assert!(f.trapped_from_supervisor());
     }
 }
