@@ -1,0 +1,29 @@
+# qemu_rv32_virt board relinked for Umbra. Same crate sources as upstream
+# (src/{main,lib,io}.rs copied from the pinned submodule) — only layout.ld
+# (ORIGIN 0x80100000) and the standalone build.rs differ. The bin is named
+# `tock` so settings.sh's `release/${HOST_NAME}` (HOST_NAME=tock) resolves it.
+[package]
+name = "qemu_rv32_virt_umbra"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "qemu_rv32_virt_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tock"
+path = "src/main.rs"
+
+[dependencies]
+components          = { workspace = true }
+sifive              = { workspace = true }
+rv32i               = { workspace = true }
+kernel              = { workspace = true }
+qemu_rv32_virt_chip = { workspace = true }
+capsules-core       = { workspace = true }
+capsules-extra      = { workspace = true }
+capsules-system     = { workspace = true }

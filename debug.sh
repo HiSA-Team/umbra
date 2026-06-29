@@ -20,7 +20,13 @@ if [ "${MCU_VARIANT}" = "riscv32" ]; then
         echo -e "${BOLD:-}[riscv32] QEMU halted for GDB on :1234 (target remote :1234)${VANILLA:-}"
     fi
     echo -e "${BOLD:-}[riscv32] Launching ${BOOT_BIN_NAME} + ${HOST_NAME} on QEMU (${QEMU_CPU})${VANILLA:-}"
+    # virtio-mmio.force-legacy=false presents the modern (v2) transport on the
+    # virt machine's 8 always-mapped virtio-mmio slots. Without it they default
+    # to the legacy (v1) personality and the Tock S-guest panics in its VirtIO
+    # transport ("Unknown VirtIO MMIO device version: 1"). Harmless for the
+    # bare-metal host, which uses no virtio.
     exec "${QEMU}" -machine virt -cpu "${QEMU_CPU}" -bios none \
+        -global virtio-mmio.force-legacy=false \
         -kernel "${MON_ELF}" -device loader,file="${HOST_ELF}" \
         -display none -serial stdio -monitor none ${GDB_FLAGS}
 fi

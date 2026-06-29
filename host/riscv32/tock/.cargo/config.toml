@@ -1,0 +1,10 @@
+# Build-std rebuilds `core`/`compiler_builtins` for the bare riscv32 target
+# (mirrors host/stm32l552/tock/.cargo/config.toml). `-Tlayout.ld` is NOT set
+# here — it lives in the board crate's build.rs so it applies only to the
+# kernel bin, not to every workspace crate.
+[build]
+target = "riscv32imac-unknown-none-elf"
+
+[unstable]
+build-std = ["core", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]

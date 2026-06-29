@@ -1,0 +1,37 @@
+# Standalone overlay workspace: the upstream qemu_rv32_virt board relinked to
+# Umbra's host region (0x80100000) so Tock boots as the untrusted S-mode guest.
+# Mirrors host/stm32l552/tock/Cargo.toml. Path-deps point into the Tock submodule
+# pinned at b35fad8 in host/riscv32/tock/lib/tock; bump the SHA only intentionally.
+[workspace]
+resolver = "2"
+members = ["boards/qemu_rv32_virt_umbra"]
+exclude = ["lib"] # Tock has its own root workspace.
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Salvatore Bramante <salvatore.bramante@yahoo.it>"]
+publish = false
+
+[workspace.dependencies]
+kernel              = { path = "lib/tock/kernel" }
+rv32i               = { path = "lib/tock/arch/rv32i" }
+sifive              = { path = "lib/tock/chips/sifive" }
+qemu_rv32_virt_chip = { path = "lib/tock/chips/qemu_rv32_virt_chip" }
+capsules-core       = { path = "lib/tock/capsules/core" }
+capsules-extra      = { path = "lib/tock/capsules/extra" }
+capsules-system     = { path = "lib/tock/capsules/system" }
+components          = { path = "lib/tock/boards/components" }
+
+[profile.dev]
+panic = "abort"
+opt-level = "z"
+debug = true
+lto = false
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+debug = true
+lto = true
+codegen-units = 1

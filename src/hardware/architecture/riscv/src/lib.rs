@@ -6,8 +6,8 @@
 //! trap interface. This crate is deliberately decoupled from `kernel` so its
 //! pure policy logic is host-testable in isolation.
 //!
-//! Phase 1 lands the [`pmp_world`] isolation proof model. PMP/CSR/trap modules
-//! arrive with the M-mode monitor (later phases).
+//! Provides the [`pmp_world`] isolation proof model; the PMP/CSR/trap modules
+//! back the M-mode monitor.
 
 pub mod aes_kat;
 pub mod csr;

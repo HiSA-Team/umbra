@@ -83,3 +83,6 @@ host/*/bare_metal/*.bin
 # RISC-V (riscv32) bare-metal host is a Cargo crate — Cargo build output dir.
 host/riscv32/bare_metal/target/
 
+# RISC-V (riscv32) TockOS S-guest overlay workspace — Cargo build output dir.
+host/riscv32/tock/target/
+

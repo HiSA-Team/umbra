@@ -5,7 +5,8 @@
 //! U-tasks. The host (S) is never gated by sPMP; only its U-tasks are.
 
 use umbra_riscv_arch::paravirt::{
-    apply_csr, clamp_to_world, decode_csr, decode_pmp_napot, is_pmp_csr, pmp_csr_index,
+    apply_csr, clamp_to_world, decode_csr, decode_pmp_napot, is_mcsr, is_mcsr_rw, is_pmp_csr,
+    mcsr_ro_value, pmp_csr_index, CsrOp, MCSR_RW,
 };
 use umbra_riscv_arch::spmp::{self, cfg_bits};
 use umbra_riscv_arch::trap::TrapFrame;
@@ -28,7 +29,10 @@ use core::cell::UnsafeCell;
 struct Shadow(UnsafeCell<GuestPmp>);
 // SAFETY: single-hart cooperative monitor; the trap handler is the sole accessor.
 unsafe impl Sync for Shadow {}
-static SHADOW: Shadow = Shadow(UnsafeCell::new(GuestPmp { cfg: [0; 4], addr: [0; 16] }));
+static SHADOW: Shadow = Shadow(UnsafeCell::new(GuestPmp {
+    cfg: [0; 4],
+    addr: [0; 16],
+}));
 
 fn shadow() -> &'static mut GuestPmp {
     // SAFETY: sole accessor in the cooperative single-hart handler.
@@ -40,6 +44,91 @@ fn cfg_byte(g: &GuestPmp, i: usize) -> u8 {
     (g.cfg[i / 4] >> ((i % 4) * 8)) as u8
 }
 
+/// Virtual machine-CSR file for the S-mode guest. One slot per `MCSR_RW` entry,
+/// indexed by position in `MCSR_RW`. Read-only CSRs come from `mcsr_ro_value`.
+struct GuestMCsr {
+    vals: [u32; MCSR_RW.len()],
+}
+
+struct MCsrCell(UnsafeCell<GuestMCsr>);
+// SAFETY: single-hart cooperative monitor; the trap handler is the sole accessor.
+unsafe impl Sync for MCsrCell {}
+static MCSR: MCsrCell = MCsrCell(UnsafeCell::new(GuestMCsr {
+    vals: [0; MCSR_RW.len()],
+}));
+
+fn mcsr() -> &'static mut GuestMCsr {
+    // SAFETY: sole accessor in the cooperative single-hart handler.
+    unsafe { &mut *MCSR.0.get() }
+}
+
+/// Read the guest's view of machine CSR `csr` (RO constant or RW shadow).
+fn read_mcsr(g: &GuestMCsr, csr: u16) -> u32 {
+    if let Some(v) = mcsr_ro_value(csr) {
+        return v;
+    }
+    match MCSR_RW.iter().position(|&c| c == csr) {
+        Some(i) => g.vals[i],
+        None => 0,
+    }
+}
+
+/// Read the real machine `mip` CSR (hardware interrupt-pending bits).
+fn read_real_mip() -> u32 {
+    let v: u32;
+    // SAFETY: reads the architectural mip CSR (M-mode).
+    unsafe { core::arch::asm!("csrr {r}, mip", r = out(reg) v) };
+    v
+}
+
+/// Emulate a machine-CSR op against the virtual file. Returns `true` (handled).
+fn emulate_mcsr(frame: &mut TrapFrame, op: CsrOp) -> bool {
+    use umbra_riscv_arch::paravirt::CsrKind::*;
+    let operand = match op.kind {
+        Rwi | Rsi | Rci => op.rs1_uimm as u32,
+        _ => g_reg(frame, op.rs1_uimm),
+    };
+    let g = mcsr();
+    let old = read_mcsr(g, op.csr);
+    // `mip` (0x344) is hardware-driven: MTIP tracks `mtime >= mtimecmp` (the vtimer
+    // keeps the real `mtimecmp` = the guest's deadline) and MEIP tracks the PLIC
+    // (independent of the MEIE mask). The guest must read the REAL pending bits, not
+    // the shadow — otherwise it busy-loops servicing a timer/PLIC interrupt whose
+    // CSR view never clears (it "disables" the timer by writing `mtimecmp`, which the
+    // vtimer absorbs without touching the shadow `mip`).
+    let rd_val = if op.csr == 0x344 {
+        read_real_mip()
+    } else {
+        old
+    };
+    if op.rd != 0 {
+        frame.regs[op.rd as usize] = rd_val; // read-return the (real, for mip) value
+    }
+    if is_mcsr_rw(op.csr) {
+        let new = apply_csr(op.kind, old, operand);
+        if let Some(i) = MCSR_RW.iter().position(|&c| c == op.csr) {
+            g.vals[i] = new; // shadow only — no real machine effect (incl. mseccfg)
+        }
+    }
+    frame.mepc += 4; // Zicsr is always 32-bit
+    true
+}
+
+/// Read the guest's shadow value of machine CSR `csr` (RW shadow slot; 0 if
+/// the CSR is not in the shadow). For RO CSRs use `mcsr_ro_value`.
+pub fn shadow_get(csr: u16) -> u32 {
+    read_mcsr(mcsr(), csr)
+}
+
+/// Write the guest's shadow value of machine CSR `csr` (no effect if `csr` is
+/// not an `MCSR_RW` entry).
+pub fn shadow_set(csr: u16, val: u32) {
+    let pos = MCSR_RW.iter().position(|&c| c == csr);
+    if let Some(i) = pos {
+        mcsr().vals[i] = val;
+    }
+}
+
 /// Program (or disable) sPMP entry `2 + i` from shadow PMP entry `i`.
 fn program_spmp_for(g: &GuestPmp, i: usize) {
     let spmp_idx = SHADOW_SPMP_BASE + i as u32;
@@ -47,16 +136,24 @@ fn program_spmp_for(g: &GuestPmp, i: usize) {
         return; // beyond the shadow budget
     }
     match decode_pmp_napot(cfg_byte(g, i), g.addr[i]) {
-        Some((base, end, r, w, x)) => match clamp_to_world(base, end, HOST_REGION_BASE, HOST_WORLD_END) {
-            Some((b, e)) => {
-                let mut bits = cfg_bits::UMODE;
-                if r { bits |= cfg_bits::R; }
-                if w { bits |= cfg_bits::W; }
-                if x { bits |= cfg_bits::X; }
-                spmp::write_napot_entry(spmp_idx, b, e - b, bits);
+        Some((base, end, r, w, x)) => {
+            match clamp_to_world(base, end, HOST_REGION_BASE, HOST_WORLD_END) {
+                Some((b, e)) => {
+                    let mut bits = cfg_bits::UMODE;
+                    if r {
+                        bits |= cfg_bits::R;
+                    }
+                    if w {
+                        bits |= cfg_bits::W;
+                    }
+                    if x {
+                        bits |= cfg_bits::X;
+                    }
+                    spmp::write_napot_entry(spmp_idx, b, e - b, bits);
+                }
+                None => spmp::disable_entry(spmp_idx), // outside world → deny
             }
-            None => spmp::disable_entry(spmp_idx), // outside world → deny
-        },
+        }
         None => spmp::disable_entry(spmp_idx), // OFF / non-NAPOT → no grant
     }
 }
@@ -82,6 +179,13 @@ pub fn try_handle_paravirt_csr(frame: &mut TrapFrame) -> bool {
         crate::raw_print::print_str("[GW] denied direct guest sPMP write\n");
         frame.mepc += 4;
         return true;
+    }
+    if is_mcsr(op.csr) {
+        let handled = emulate_mcsr(frame, op);
+        if matches!(op.csr, 0x300 | 0x304) {
+            crate::secure_kernel::interrupt::redeliver_pending(frame);
+        }
+        return handled;
     }
     if !is_pmp_csr(op.csr) {
         return false; // not an emulated CSR → genuine illegal instruction
@@ -119,7 +223,11 @@ pub fn try_handle_paravirt_csr(frame: &mut TrapFrame) -> bool {
 
 /// Read register `n` from the trap frame (x0 reads as 0).
 fn g_reg(frame: &TrapFrame, n: u8) -> u32 {
-    if n == 0 { 0 } else { frame.regs[n as usize] }
+    if n == 0 {
+        0
+    } else {
+        frame.regs[n as usize]
+    }
 }
 
 /// Re-install every live guest shadow sPMP entry (called on entry to host-world).

@@ -64,6 +64,8 @@ pub enum Trap {
     /// Machine timer interrupt (CLINT `mtimecmp` expired) — the preemption tick
     /// that lets the monitor suspend a running enclave.
     TimerInterrupt,
+    /// Machine external interrupt (PLIC — UART RX/TX etc.), reflected to the S-guest.
+    ExternalInterrupt,
     /// Any other cause (carries the raw `mcause`).
     Other(u32),
 }
@@ -72,6 +74,8 @@ pub enum Trap {
 const MCAUSE_INTERRUPT: u32 = 1 << 31;
 /// Machine timer interrupt code (low bits of `mcause` when the interrupt bit set).
 const IRQ_MACHINE_TIMER: u32 = 7;
+/// Machine external interrupt code (PLIC).
+const IRQ_MACHINE_EXTERNAL: u32 = 11;
 
 /// Decode `mcause`/`mtval` into a [`Trap`]. Interrupts have `mcause` bit 31 set
 /// (machine timer = 7); exception codes: 8 = ecall from U, 9 = ecall from S,
@@ -82,6 +86,7 @@ pub fn decode(mcause: u32, mtval: u32) -> Trap {
     if mcause & MCAUSE_INTERRUPT != 0 {
         return match mcause & !MCAUSE_INTERRUPT {
             IRQ_MACHINE_TIMER => Trap::TimerInterrupt,
+            IRQ_MACHINE_EXTERNAL => Trap::ExternalInterrupt,
             _ => Trap::Other(mcause),
         };
     }
@@ -200,6 +205,19 @@ mod tests {
     #[test]
     fn unknown_interrupt_keeps_raw_mcause() {
         assert_eq!(decode(0x8000_0003, 0), Trap::Other(0x8000_0003));
+    }
+
+    #[test]
+    fn machine_external_interrupt_decodes() {
+        // mcause = interrupt bit (31) | code 11.
+        assert_eq!(decode(0x8000_000B, 0), Trap::ExternalInterrupt);
+    }
+
+    #[test]
+    fn timer_and_external_interrupts_are_distinct() {
+        assert_eq!(decode(0x8000_0007, 0), Trap::TimerInterrupt);
+        assert_eq!(decode(0x8000_000B, 0), Trap::ExternalInterrupt);
+        assert_eq!(decode(0x8000_0003, 0), Trap::Other(0x8000_0003)); // soft int
     }
 
     #[test]

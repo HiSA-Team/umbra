@@ -255,6 +255,117 @@ Two implementation subtleties, both load-bearing:
 Proven on QEMU (`gateway_evil`): a guest's direct `csrw siselect` traps and the
 monitor prints the deny line; the write never takes effect.
 
+## TockOS S-mode guest (trap-and-emulate)
+
+Umbra runs **stock TockOS** (`qemu_rv32_virt` board) as the untrusted S-mode guest,
+trap-and-emulating Tock's *machine*-mode interface on top of the PMP→sPMP gateway.
+The progression below is: boot the guest to its idle loop by M-CSR emulation alone;
+make it a *live* OS by virtualizing its interrupts; then have it drive the enclave.
+
+### Boot-path M-op inventory + native feasibility
+
+TockOS rv32 is hard-wired M-mode (no `satp`/S-mode): `arch/riscv` writes
+`mscratch`/`mtvec` and ends its trap handler in `mret`; the board installs an MML
+ePMP and enables interrupts via `mie`/`mstatus`. Porting it to native S-mode would
+fork the upstream arch crate, so **trap-and-emulate is the chosen path**. A QEMU
+`-d in_asm` trace of the stock board (M-mode) enumerated the boot-path M-ops:
+`mhartid` (read), `mscratch`, `mtvec`, `mcause`, `mseccfg`, plus the gateway PMP
+CSRs; running under Umbra (no MML fault) additionally surfaced `mip`. Notably the
+stock trace *panics* at an MML access fault once `mseccfg` is really applied —
+exactly why Umbra **shadows `mseccfg` and never applies it** (see below).
+
+### Virtual M-CSR file (mechanism)
+
+A monitor-side per-guest shadow of the machine CSRs Tock touches, alongside the
+gateway `GuestPmp`. A trapped S-mode machine-CSR access (`mcause = 2`) is decoded by
+the pure `umbra-riscv-arch::paravirt` helpers and dispatched in
+`try_handle_paravirt_csr` (after the `0x150-0x152` direct-sPMP deny, before the PMP
+filter):
+
+- **RW shadow** (`MCSR_RW`): `mstatus`, `medeleg`, `mideleg`, `mie`, `mtvec`,
+  `mscratch`, `mepc`, `mcause`, `mtval`, `mip`, `mcounteren`, `menvcfg`, and
+  **`mseccfg` (0x747) — absorbed into the shadow and NEVER applied**, so Tock's
+  Smepmp/MML write cannot alter Umbra's real PMP semantics (and the MML access-fault
+  that crashes the stock kernel cannot occur). A write updates the shadow only; a
+  read returns it. `mip` shadows the real machine pending bits on read (below).
+- **RO constants** (`mcsr_ro_value`): `mhartid`/`mvendorid`/`marchid`/`mimpid` = 0,
+  `misa` = RV32IMAC, and the performance counters (`mcycle`/`minstret`/`mhpmcounter*`
+  + RV32 high halves) = 0 so Tock's panic printer completes.
+
+The table is host-tested in `umbra-riscv-arch` (`is_mcsr` / `is_mcsr_rw` /
+`mcsr_ro_value`) and is one-line-extensible — `mip` was added by reconciling the
+seed against the live boot (the stock trace died at the MML fault before reaching it).
+
+### Host-world MMIO grant + guest load
+
+Tock drives QEMU virt MMIO directly (16550 UART, VirtIO, PLIC, CLINT), unlike the
+bare-metal host which `ecall`s the monitor. `enter_host_world` therefore grants the
+low-MMIO window `[0, 0x2000_0000)` (two PMP TOR entries straddling the carved CLINT
+`mtimecmp` word — see the vtimer below) while S runs; it sits far below the monitor
+(`0x8000_0000`) and the enclave ESS (`0x8020_0000`), and enclave-world omits it. The
+board is relinked (`layout.ld` ORIGIN `0x8010_0000`, with flash/RAM kept
+power-of-two and base-aligned so Tock's NAPOT ePMP specs don't panic) and loaded as
+`HOST_APP=tock` via the existing `-device loader,file=` path; `debug.sh` adds
+`-global virtio-mmio.force-legacy=false` so Tock's VirtIO transport accepts the virt
+machine's (empty) v2 slots.
+
+### Interrupt virtualization — the live OS
+
+Booting to the idle loop is M-CSR-emulate-only: Tock's drivers are interrupt-driven,
+and every machine interrupt (UART TX/RX via PLIC, the CLINT timer) traps to M = Umbra,
+not the shadowed S-guest, so the async UART stalls after one `debug!` line and the
+scheduler never ticks. The live OS reflects those interrupts into Tock and emulates
+its `mret`, with a **virtualized CLINT timer** — full console output and a ticking
+scheduler timer. Three monitor-side primitives, built on the shadow M-CSR file above
+and pure host-tested bit-math in `umbra-riscv-arch::paravirt`:
+
+1. **`inject_guest_irq(cause)`** — reflect a machine interrupt (timer 7 / external 11)
+   into Tock by writing its shadow `mepc`/`mcause`/`mstatus` (`MPIE←MIE`, `MIE←0`,
+   `MPP←S`) and redirecting `frame.mepc` to the guest's `mtvec`; the dispatch's real
+   `mret` lands in S at Tock's `_start_trap`. The real source is masked until the
+   guest acks (else a level-asserted UART/PLIC line re-traps every instruction).
+2. **`mret` emulation** — Tock ends its handler with `mret`, which from S is an
+   illegal-instruction trap (`mcause=2`) to M. An exact-opcode check (`0x30200073`)
+   pops the virtual trap (`MIE←MPIE`, `MPIE←1`, real `mepc←shadow.mepc`); MPP-aware so
+   a future nested-U entry can return to U unchanged.
+3. **vtimer** — Umbra owns the real `mtimecmp`; Tock's `mtimecmp` word
+   (`[0x0200_4000, 0x0200_4008)`) is **carved** out of its host-world MMIO grant (two
+   TOR regions straddling the hole, PMP slots 4/5 + 6/7) so its writes fault into a
+   per-domain virtual `mtimecmp`. The real `mtimecmp = min(domain deadlines)` — the
+   `min()` is the hook for the enclave-preemption deadline. The guest's `mip` read
+   returns the **real** machine pending bits (MTIP tracks `mtime≥mtimecmp`, MEIP the
+   PLIC), or the guest busy-loops servicing a timer it can never clear in its view.
+
+**Regression safety is structural:** the machinery is inert for the bare-metal host
+(no PLIC/timer). Only `mie.{MTIE,MEIE}` is enabled — **never `mstatus.MIE`**, which
+gates *M-mode* interrupt-taking and would let an interrupt nest inside the monitor;
+while the hart runs in S/U, machine interrupts are taken regardless of it. The
+enclave preemption path (`try_preempt`) is unchanged and runs *before* the new
+vtimer branch. The default build still returns `R0 = 0x72CA33A8`.
+
+**Result:** Tock boots under Umbra through full board init and prints **through**
+`Entering main loop.` (+ the VirtIO lines) with no `unexpected_trap`. Reflecting RVC
+`mtimecmp` accesses required decoding `c.lw`/`c.sw` and advancing `mepc` by the
+instruction length (Tock is `riscv32imac`). **Out of scope (future):** interactive
+console *input* — a reflected UART RX interrupt reaches Tock's driver before its
+receive buffer is armed (a Tock invariant); the output side and the mechanism are
+proven. Tock U-mode *processes* and their trap reflection also remain future targets.
+
+### Tock drives the Umbra enclave
+
+Finally, Tock becomes the **untrusted S-mode loader** of the enclave: full
+three-ring coexistence (M monitor + S Tock + U enclave) in one boot. The enclave is
+embedded in the relinked board (`qemu_rv32_virt_umbra`) in a dedicated `encl` flash
+region (`[0x80170000, 0x80180000)`, inside the 512 KB NAPOT flash window so Tock's
+ePMP is unaffected), AES-128-CTR-encrypted + chain-HMAC-signed in place by
+`tools/protect_enclave.py` with the same master key the monitor embeds. At boot —
+*before* Tock arms its scheduler vtimer, so the two never contend for the real
+`mtimecmp` — the board `ecall`s the monitor's enclave API (`create` → loop `enter`,
+re-entering on a timer-preemption suspend → `status`) and prints
+`[TOCK] enclave R0=0x72CA33A8` via the monitor UART. The enclave-world PMP∧sPMP swap
+fences Tock out of the ESS exactly as for the bare-metal host; the enclave runs
+correctly with the full interrupt-virtualization machinery active.
+
 ## Cross-references
 
 - [ADR 000 — Threat model](000-threat-model.md): availability and memory isolation

@@ -13,3 +13,6 @@
 [submodule "tools/qemu-spmp/qemu"]
 	path = tools/qemu-spmp/qemu
 	url = https://gitlab.com/qemu-project/qemu.git
+[submodule "host/riscv32/tock/lib/tock"]
+	path = host/riscv32/tock/lib/tock
+	url = https://github.com/tock/tock.git

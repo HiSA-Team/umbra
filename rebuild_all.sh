@@ -16,12 +16,18 @@ if [ "${MCU_VARIANT}" = "riscv32" ]; then
     # writes tools/master_key.bin (read by the signer below) AND each platform's
     # master_key.rs (compiled into the monitor). Run BEFORE the monitor build so
     # crypto_impl::MASTER_KEY picks up the fresh key.
+    # Both the bare-metal host and the Tock host (sub-slice 3d) embed an enclave
+    # and are signed with this key, so the key must match the monitor's. (Revert
+    # master_key.rs + master_key.bin via git checkout after the build.)
     echo -e "${BOLD:-}[riscv32] Generating master key (tools/gen_key.py)${VANILLA:-}"
     "${PYTHON}" "${ROOT_DIR}/tools/gen_key.py"
     echo -e "${BOLD:-}[riscv32] Building M-mode monitor (${BOOT_CRATE_NAME})${VANILLA:-}"
     ( cd "${SECBOOT_DIR}" && ${CARGO} build --release )
     echo -e "${BOLD:-}[riscv32] Building S-mode host (${HOST_NAME})${VANILLA:-}"
     ( cd "${HOST_DIR}" && ${CARGO} build --release ${HOST_FEATURES:+--features "$HOST_FEATURES"} )
+    # Divide + protect the embedded enclave (EFB 320-byte blocks: AES-128-CTR +
+    # per-block HMAC + chained measurement). For HOST_APP=tock, HOST_ELF is the
+    # relinked Tock board, which embeds the enclave at _enclave_start (layout.ld).
     echo -e "${BOLD:-}[riscv32] Protecting embedded enclave (EFB block division + chained measurement)${VANILLA:-}"
     UMBRA_CROSS="${GCC_PREFIX}" UMBRA_CHAINED=1 UMBRA_ESS_MISS_RECOVERY=1 \
         "${PYTHON}" "${ROOT_DIR}/tools/protect_enclave.py" \

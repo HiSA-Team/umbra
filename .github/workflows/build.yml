@@ -380,6 +380,36 @@ jobs:
           # it -- the monitor's deny line is the pass signal.
           grep -q "denied direct guest sPMP write" gw_evil.log
 
+      - name: TockOS live guest + drives the enclave (advisory)
+        if: always()
+        continue-on-error: true
+        env:
+          MCU_VARIANT: riscv32
+          HOST_APP: tock
+          PYTHON: python3
+        run: |
+          set -euo pipefail
+          # Advisory: needs the riscv32 Tock submodule + its pinned nightly, which
+          # this job does not provision (no `submodules: recursive`, stable
+          # toolchain). Skip cleanly when absent so it never gates; the boot is
+          # proven off-CI (see ADR 008). To enable in CI: check out
+          # host/riscv32/tock/lib/tock and install the pinned nightly first.
+          if [ ! -e host/riscv32/tock/lib/tock/kernel/Cargo.toml ]; then
+            echo "Tock submodule absent — skipping advisory Tock smoke"; exit 0
+          fi
+          HOST_APP=tock ./rebuild_all.sh
+          ( timeout 90 ./debug.sh || true ) | tee tock.log
+          # 3c-i: Tock runs as a LIVE S-mode OS under Umbra — interrupts are
+          # reflected + the CLINT timer virtualized, so the async UART now drains
+          # all the way through "Entering main loop." (was buffered behind the
+          # TX-complete IRQ in 3a/3b). 3d: Tock then drives the enclave API and the
+          # U-mode enclave returns R0=0x72CA33A8 (M+S+U coexistence). Assert both,
+          # plus the absence of any monitor fault dump. Interactive console input
+          # stays a manual/local check (CI cannot inject stdin deterministically).
+          grep -q "Entering main loop" tock.log
+          grep -q "R0=0x72CA33A8" tock.log
+          ! grep -qE "unexpected_trap|^C=" tock.log
+
       - name: Restore demo keys
         if: always()
         run: |

@@ -491,9 +491,9 @@ export HOST_APP=${HOST_APP:-bare_metal}
 
 if [ "$MCU_VARIANT" = "riscv32" ]; then
     case "$HOST_APP" in
-        bare_metal) ;;
+        bare_metal|tock) ;;
         *)
-            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for RISC-V: $HOST_APP (expected bare_metal)${VANILLA}"
+            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for RISC-V: $HOST_APP (expected bare_metal or tock)${VANILLA}"
             return 1
             ;;
     esac

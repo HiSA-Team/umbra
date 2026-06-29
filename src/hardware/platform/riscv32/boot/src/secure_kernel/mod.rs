@@ -217,7 +217,31 @@ pub fn enter_host_world() {
         &Region::new(HOST_REGION_BASE, HOST_WORLD_END),
         PmpCfg::new().rwx(),
     );
-    let _ = pmp::disable(5);
+    // Carve the CLINT mtimecmp word (hart 0: [0x0200_4000,0x0200_4008)) out of the
+    // guest's low-MMIO grant so its writes fault into the vtimer. Region A below
+    // mtimecmp, region B above it through the rest of low MMIO. Slots 4/6 are the
+    // TOR bases (cfg stays OFF); slot 5 is reinstalled as the enclave stack on
+    // enclave entry, slot 7 (region B) is inert for U (sPMP-gated).
+    let _ = pmp::set_tor(5, &Region::new(0x0, 0x0200_4000), PmpCfg::new().rwx());
+    let _ = pmp::set_tor(
+        7,
+        &Region::new(0x0200_4008, 0x2000_0000),
+        PmpCfg::new().rwx(),
+    );
+    // Reflect the guest's timer + external interrupts: enable the machine
+    // timer/external sources in `mie`. While the hart runs in S/U (the guest, the
+    // enclave) machine interrupts are taken *unconditionally* — `mstatus.MIE` gates
+    // only M-mode itself — so `mie.{MTIE,MEIE}` is all that is needed to make a
+    // guest-bound IRQ trap into Umbra and be reflected (the same rule the enclave
+    // preemption timer already relies on; see platform_impl::timer). We deliberately
+    // do NOT set `mstatus.MIE`: the monitor is cooperative and must never take an
+    // interrupt while in M-mode. QEMU resets `mtimecmp` to 0, so `MTIP` is pending
+    // from boot; setting `mstatus.MIE` would fire a timer trap *inside* the M-mode
+    // monitor during init_security, whose trap entry assumes traps come only from
+    // S/U. Inert for the bare-metal host (it drives no timer/PLIC), so the enclave
+    // regression is unaffected.
+    // SAFETY: sets two architecturally-defined mie bits (MTIE=7, MEIE=11).
+    unsafe { core::arch::asm!("csrs mie, {b}", b = in(reg) (1u32 << 7) | (1u32 << 11)) };
     // sPMP: the enclave's entries 0/1 must not govern the guest's U-tasks; the
     // guest's own shadow entries (2+) come back.
     spmp::disable_entry(0);
@@ -269,11 +293,15 @@ pub fn enter_enclave_world() {
 // ── Submodules (split to keep each file under the 600-LOC hard cap) ──────────
 mod create;
 mod ess_miss;
+mod interrupt;
 mod paravirt;
+mod vtimer;
 
 pub use create::create;
 pub use ess_miss::try_handle_ess_miss;
+pub use interrupt::{inject_guest_irq, try_handle_mret};
 pub use paravirt::try_handle_paravirt_csr;
+pub use vtimer::{emulate_access as vtimer_emulate, guest_due as vtimer_guest_due, is_mtimecmp};
 
 /// Enter enclave `id`: snapshot the host context, then run the enclave in
 /// U-mode. A **fresh** enclave starts at its entry point with the return

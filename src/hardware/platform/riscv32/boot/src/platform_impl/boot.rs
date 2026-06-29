@@ -90,4 +90,3 @@ impl Rv32VirtPlatform {
         false
     }
 }
-

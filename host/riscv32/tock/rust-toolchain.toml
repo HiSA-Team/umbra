@@ -1,0 +1,6 @@
+# Match the Tock submodule pin's toolchain (lib/tock/rust-toolchain.toml,
+# b35fad8). rust-src is required for build-std; riscv32imac is the guest target.
+[toolchain]
+channel = "nightly-2026-04-21"
+components = ["rust-src", "llvm-tools"]
+targets = ["riscv32imac-unknown-none-elf"]
