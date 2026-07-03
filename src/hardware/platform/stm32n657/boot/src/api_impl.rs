@@ -198,8 +198,8 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     // [block_id | code | meta] into the running HMAC chain.
     // `protect_enclave.py` builds the same chain offline in numeric
     // order and stamps the final value into header.hmac.
+    kernel.begin_measurement();
     let mut hash = drivers::hash::Hash::new();
-    kernel.begin_measurement(&mut hash);
 
     let mut blk: u32 = 0;
     while blk < num_blocks {
@@ -220,12 +220,45 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         cortex_m::asm::isb();
     }
 
-    // 5. Finalize chained measurement against header.hmac. Mismatch =
-    // the on-flash blob has been tampered with (or the host's
+    // 5. Finalize. Default (feature off): legacy chained-measurement compare.
+    // Mismatch = the on-flash blob has been tampered with (or the host's
     // protect_enclave.py used a different master key).
-    if kernel.finalize_measurement(&header.hmac).is_err() {
-        crate::raw_print::print_str("[UMBRASecureBoot] chained-measurement FAIL\r\n");
-        ess_fail!(0xFFFF_FFF6);
+    #[cfg(not(feature = "enclave_version_bind"))]
+    {
+        if kernel.finalize_measurement(&header.hmac).is_err() {
+            crate::raw_print::print_str("[UMBRASecureBoot] chained-measurement FAIL\r\n");
+            ess_fail!(0xFFFF_FFF6);
+        }
+    }
+    // Feature on: derive the enclave version from the measurement and enforce
+    // anti-rollback. `kernel.chain_state` is BM (the version-independent block
+    // measurement); the version is bound by the offline trailing fold and is
+    // never stored in clear. Search candidates from the per-author floor; the
+    // one reproducing header.hmac is the authenticated version. Below floor =>
+    // below the search start => rejected (rollback). BM is MASTER_KEY-derived so
+    // header.hmac is unforgeable for attacker code.
+    #[cfg(feature = "enclave_version_bind")]
+    {
+        use kernel::key_storage_server::version_search::{search_version, MonotonicCounter};
+        let bm = kernel.chain_state;
+        let author_id = crate::secure_kernel::AUTHOR_ID;
+        let mut ctr = crate::antirollback::BackupFloorCounter::new();
+        let floor = ctr.floor(author_id);
+        let derived = search_version(&header.hmac, floor, |v| {
+            crate::secure_kernel::version_tag(&mut hash, &bm, author_id, v)
+        });
+        match derived {
+            None => {
+                crate::raw_print::print_str("[UMBRASecureBoot] version DENIED (rollback/tamper/out-of-window)\r\n");
+                ess_fail!(0xFFFF_FFF6);
+            }
+            Some(v) => {
+                ctr.bump(author_id, v);
+                if floor == 0 {
+                    crate::raw_print::print_str("[UMBRASecureBoot] rollback floor cold (0) — VBAT-trust assumed\r\n");
+                }
+            }
+        }
     }
 
     let assigned_id = unsafe { NEXT_ENCLAVE_ID };

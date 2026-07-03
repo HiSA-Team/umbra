@@ -182,17 +182,21 @@ elif [ "$MCU_VARIANT" = "stm32l562" ]; then
     echo -e "${SUCCESS}[mcu_selection] Selected STM32L562 (HW AES Enabled)${VANILLA}"
 elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export MCU=stm32n657
-    export BOOT_FEATURES=""
     export BOOT_CRATE_NAME=umbra-n657-boot
-    # Single build-epoch source for N657. UMBRA_FSBL_VERSION feeds the FSBL
-    # signing (-iv), the FSBL build (build.rs -> FSBL_VERSION), and the enclave
-    # measurement seed; they MUST agree or the matched build fails measurement.
-    # UMBRA_EPOCH_BIND opts the SHARED protect_enclave.py into the epoch seed —
-    # only N657's begin_measurement matches it; L552 keeps the plain master_key
-    # seed, so this MUST stay N657-gated.
-    export UMBRA_FSBL_VERSION=${UMBRA_FSBL_VERSION:-1}
-    export UMBRA_EPOCH_BIND=1
-    echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q)${VANILLA}"
+    # Enclave anti-rollback (N657-gated — the SHARED protect_enclave.py trailing
+    # fold must NOT reach L552/L562/RISC-V, whose kernels do the legacy finalize
+    # and would mismatch). Enabled by default here; override per build, e.g.
+    # `UMBRA_ENCLAVE_VERSION=1 ./rebuild_all.sh` for the rollback negative test,
+    # or `UMBRA_VERSION_BIND=0 ./rebuild_all.sh` for the legacy path.
+    export UMBRA_VERSION_BIND=${UMBRA_VERSION_BIND:-1}
+    export UMBRA_AUTHOR_ID=${UMBRA_AUTHOR_ID:-1}
+    export UMBRA_ENCLAVE_VERSION=${UMBRA_ENCLAVE_VERSION:-2}
+    if [ "$UMBRA_VERSION_BIND" = "1" ]; then
+        export BOOT_FEATURES="--features enclave_version_bind"
+    else
+        export BOOT_FEATURES=""
+    fi
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q) [version_bind=${UMBRA_VERSION_BIND} author=${UMBRA_AUTHOR_ID} v=${UMBRA_ENCLAVE_VERSION}]${VANILLA}"
 elif [ "$MCU_VARIANT" = "riscv32" ]; then
     export MCU=riscv32
     export BOOT_FEATURES=""

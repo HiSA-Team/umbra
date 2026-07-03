@@ -15,4 +15,8 @@ pub mod mce;
 pub mod rcc;
 pub mod risaf;
 pub mod saes;
+pub mod state_anchor;
+pub mod state_flash;
+pub mod state_store;
+pub mod tamp_store;
 pub mod uart;
