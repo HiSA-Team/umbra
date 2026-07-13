@@ -42,6 +42,9 @@
 - [ADR 006 — Master-Key Chain of Trust](decisions/006-master-key-chain.md)
 - [ADR 007 — Panic Policy](decisions/007-panic-policy.md)
 - [ADR 008 — RISC-V SPMP Arbitration](decisions/008-riscv-spmp-arbitration.md)
+- [ADR 009 — State Continuity Power-Session Boundary](decisions/009-state-continuity-power-session-boundary.md)
+- [ADR 010 — State-Continuity Commit (root-in-anchor)](decisions/010-state-continuity-commit-reconciliation.md)
+- [ADR 011 — Enclave Eviction Feasibility](decisions/011-enclave-eviction-feasibility.md)
 
 # Supported Hardware
 

@@ -7,6 +7,17 @@ fn main() {
     // its CWD. Linker scripts go through rustc as `-T<absolute path>` so
     // the linker's CWD (workspace root post-earlier absorption) doesn't
     // matter; relative paths broke after workspace absorption.
+    let author_id: u32 = std::env::var("UMBRA_AUTHOR_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    std::fs::write(
+        std::path::Path::new(&out_dir).join("author_id.rs"),
+        format!("#[allow(dead_code)]\npub const AUTHOR_ID: u32 = {};\n", author_id),
+    )
+    .expect("write author_id.rs");
+    println!("cargo:rerun-if-env-changed=UMBRA_AUTHOR_ID");
+
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     // boot/ → src/hardware/platform/stm32n657/boot/ →../../../../../ = workspace root
     let workspace_root = manifest_dir
@@ -52,20 +63,6 @@ fn main() {
             println!("cargo:rerun-if-changed={}", abs.display());
         }
     }
-
-    // Emit FSBL_VERSION from UMBRA_FSBL_VERSION (default 1) so the enclave
-    // measurement seed (secure_kernel::begin_measurement) binds to the build
-    // epoch. include!'d by secure_kernel.rs.
-    let fsbl_version: u32 = std::env::var("UMBRA_FSBL_VERSION")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    std::fs::write(
-        PathBuf::from(&out_dir).join("fsbl_version.rs"),
-        format!("pub const FSBL_VERSION: u32 = {};\n", fsbl_version),
-    )
-    .expect("write fsbl_version.rs");
-    println!("cargo:rerun-if-env-changed=UMBRA_FSBL_VERSION");
 }
 
 fn assemble(src: &str, obj: &str) {

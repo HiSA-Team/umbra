@@ -22,6 +22,14 @@ const CRYP_CR_OFFSET: u32 = 0x00;
 const CRYP_SR_OFFSET: u32 = 0x04;
 const CRYP_DIN_OFFSET: u32 = 0x08;
 const CRYP_DOUT_OFFSET: u32 = 0x0C;
+// DMA control (§49.8.3): DIEN (mem→DIN request), DOEN (DOUT→mem request). Arm-only —
+// the DMA feed is firmware; host tests exercise only the polling FIFO path.
+#[cfg(target_arch = "arm")]
+const CRYP_DMACR_OFFSET: u32 = 0x10;
+#[cfg(target_arch = "arm")]
+const DMACR_DIEN: u32 = 1 << 0;
+#[cfg(target_arch = "arm")]
+const DMACR_DOEN: u32 = 1 << 1;
 
 // Key registers (§49.4.16 Table 423). For AES-128 (KEYSIZE=0x0), the key
 // goes into K2LR/K2RR/K3LR/K3RR in ascending order — writing in any other
@@ -197,11 +205,14 @@ impl<M: MmioAccess> Cryp1<M> {
         self.mmio.write(CRYP_CR_OFFSET, cr | CR_CRYPEN);
     }
 
-    /// Like [`Cryp1::configure_ecb_shared`] but CTR mode + IV. No KEYRx writes.
-    /// If the SAES-shared key does not survive the ECB→CTR switch (plan V4,
-    /// confirmed on HW), the orchestrator re-shares before calling this.
-    #[allow(dead_code)]
-    pub fn configure_ctr_shared(&mut self, iv: &[u8; 16]) {
+    /// Configure CRYP for AES-128-CTR with the SAES-shared key (no KEYRx writes) + the
+    /// byte-swap DATATYPE the DMA feed needs: HPDMA reads little-endian words from memory
+    /// and CRYP expects MSB-first AES data, so DATATYPE=0b10 swaps the bytes inside CRYP.
+    /// The DMA feed is the only CTR path now — the CPU polling loop was removed. If the
+    /// SAES-shared key does not survive the ECB→CTR switch, the orchestrator re-shares
+    /// before calling this.
+    #[cfg(target_arch = "arm")]
+    pub fn configure_ctr_shared_for_dma(&mut self, iv: &[u8; 16]) {
         let mut cr = self.mmio.read(CRYP_CR_OFFSET);
         cr &= !CR_CRYPEN;
         self.mmio.write(CRYP_CR_OFFSET, cr);
@@ -212,7 +223,8 @@ impl<M: MmioAccess> Cryp1<M> {
         cr &= !(0x7 << 3);
         cr |= CR_ALGOMODE_CTR;
         cr &= !(0x3 << 8);
-        cr &= !(0x3 << 6);
+        cr &= !(0x3 << 6); // clear DATATYPE
+        cr |= 0b10 << 6; // byte-swap for the DMA word feed
         cr &= !(1 << 2);
         cr &= !(0x3 << 24);
         cr |= 0b10 << 24; // KMOD = shared
@@ -248,6 +260,19 @@ impl<M: MmioAccess> Cryp1<M> {
 
         let cr = self.mmio.read(CRYP_CR_OFFSET);
         self.mmio.write(CRYP_CR_OFFSET, cr | CR_CRYPEN);
+    }
+
+    /// Enable CRYP's DMA request lines — DMACR.DIEN (mem→DIN) + DOEN (DOUT→mem). Call
+    /// after `configure_ctr_shared_for_dma`, before arming the HPDMA channels.
+    #[cfg(target_arch = "arm")]
+    pub fn enable_dma(&mut self) {
+        self.mmio.write(CRYP_DMACR_OFFSET, DMACR_DIEN | DMACR_DOEN);
+    }
+
+    /// Clear CRYP's DMA request lines (return to the CPU polling FIFO path).
+    #[cfg(target_arch = "arm")]
+    pub fn disable_dma(&mut self) {
+        self.mmio.write(CRYP_DMACR_OFFSET, 0);
     }
 
     /// True if CRYP holds a valid key (`SR.KEYVALID`). Used by the DHUK

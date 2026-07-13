@@ -182,6 +182,77 @@ fn hmac_sha256_reads_hr5_hr6_hr7_from_split_bank() {
     );
 }
 
+/// Verifies the HW `sha256` CR configuration: ALGO[1:0]=0b11 (SHA-256),
+/// DATATYPE=0b10 (byte-swap), INIT=1, and — unlike `hmac_sha256` — MODE
+/// (bit 6) CLEAR (plain hash, not HMAC). A stray MODE bit would silently
+/// compute an HMAC with an empty key instead of a plain digest.
+#[test]
+fn sha256_writes_expected_cr_encoding_hash_mode() {
+    let mem = MmioMem::new(HASH_BASE_ADDR);
+    mem.preload_register(HASH_SR_OFFSET, SR_DINIS_MASK | SR_DCIS_MASK);
+
+    let mut hash = Hash::<_>::new_with_mmio(mem.handle());
+    let data = [0u8; 16];
+    let mut output = [0u8; 32];
+    hash.sha256(&data, &mut output);
+
+    let cr_addr = HASH_BASE_ADDR + HASH_CR_OFFSET;
+    let cr_val = last_write_to(&mem.write_log(), cr_addr).expect("sha256 must write CR");
+    assert_eq!((cr_val >> 17) & 0b11, 0b11, "CR.ALGO must be 0b11 (SHA-256)");
+    assert_eq!((cr_val >> 6) & 1, 0, "CR.MODE must be CLEAR (plain hash)");
+    assert_eq!((cr_val >> 4) & 0b11, 0b10, "CR.DATATYPE must be 0b10");
+    assert_eq!((cr_val >> 2) & 1, 1, "CR.INIT must be set");
+}
+
+/// The plain-hash path has ONE digest stage, so it must issue exactly two
+/// STR writes: NBLW then NBLW|DCAL (vs six for the three-stage HMAC).
+#[test]
+fn sha256_issues_single_dcal() {
+    let mem = MmioMem::new(HASH_BASE_ADDR);
+    mem.preload_register(HASH_SR_OFFSET, SR_DINIS_MASK | SR_DCIS_MASK);
+
+    let mut hash = Hash::<_>::new_with_mmio(mem.handle());
+    let data = [0u8; 16];
+    let mut output = [0u8; 32];
+    hash.sha256(&data, &mut output);
+
+    let str_addr = HASH_BASE_ADDR + HASH_STR_OFFSET;
+    let log = mem.write_log();
+    assert_eq!(count_writes_to(&log, str_addr), 2, "expected 2 STR writes (NBLW + NBLW|DCAL)");
+    assert_eq!(
+        last_write_to(&log, str_addr).map(|v| (v >> STR_DCAL_BIT) & 1),
+        Some(1),
+        "final STR write must trigger DCAL",
+    );
+}
+
+/// The HW `sha256` must read HR5..HR7 from the split bank (0x324), like
+/// `hmac_sha256` — misreading them yields correct first 160 bits + garbage.
+#[test]
+fn sha256_reads_hr5_hr6_hr7_from_split_bank() {
+    let mem = MmioMem::new(HASH_BASE_ADDR);
+    mem.preload_register(HASH_SR_OFFSET, SR_DINIS_MASK | SR_DCIS_MASK);
+    for i in 0..5u32 {
+        mem.preload_register(HASH_HR_OFFSET + i * 4, 0xAA00_0000 | i);
+    }
+    mem.preload_register(HASH_HR5_OFFSET, 0xBB00_0005);
+    mem.preload_register(HASH_HR5_OFFSET + 4, 0xBB00_0006);
+    mem.preload_register(HASH_HR5_OFFSET + 8, 0xBB00_0007);
+
+    let mut hash = Hash::<_>::new_with_mmio(mem.handle());
+    let mut digest = [0u8; 32];
+    hash.sha256(&[0u8; 16], &mut digest);
+
+    for i in 0..5u32 {
+        let want = (0xAA00_0000u32 | i).to_be_bytes();
+        let s = (i as usize) * 4;
+        assert_eq!(&digest[s..s + 4], &want, "HR{i} contiguous bank");
+    }
+    assert_eq!(&digest[20..24], &0xBB00_0005u32.to_be_bytes(), "HR5 split bank");
+    assert_eq!(&digest[24..28], &0xBB00_0006u32.to_be_bytes(), "HR6 split bank");
+    assert_eq!(&digest[28..32], &0xBB00_0007u32.to_be_bytes(), "HR7 split bank");
+}
+
 /// Sanity check the `Sha256Engine` SW path still computes a correct
 /// SHA-256 digest (NIST FIPS-180 test vector: empty string). The SW
 /// `Sha256` was not migrated to MMIO (it does pure-software SHA-256

@@ -327,6 +327,19 @@ def flat_protect(elf_file, key_file):
           f"over {len(cipher)} ciphertext bytes")
 
 
+ENCVER_LABEL = b"umbra-encver-v1"
+
+
+def version_tag(bm: bytes, author_id: int, version: int) -> bytes:
+    """Bind (author_id, version) to the block measurement BM by a trailing HMAC.
+    MUST match the kernel's version-derivation. The result replaces the stamped
+    measurement ONLY when UMBRA_VERSION_BIND=1; the version is never written in
+    clear, so it cannot be tampered without breaking this tag."""
+    return hmac.new(
+        bm, ENCVER_LABEL + struct.pack("<II", author_id, version), hashlib.sha256
+    ).digest()
+
+
 def main():
     # Strip optional flags out of argv so the positional parsing below is
     # unchanged. Flags: --hmac-over-plaintext (L562 path), --flat (RISC-V
@@ -642,20 +655,9 @@ def main():
     # divergent meta interpretation.
     MAX_REACHABLE = 4
 
-    # N657 only, gated by UMBRA_EPOCH_BIND=1 (set in settings.sh): seed the
-    # chain with the build epoch so the enclave binds to EXACTLY this FSBL
-    # version. Byte-identical to the N657 kernel's begin_measurement:
-    # HMAC(master_key, EPOCH_LABEL + version_le32) — label 14 B, version 4-byte
-    # LE u32. This tool is SHARED, so the change MUST be opt-in: L552 / RISC-V
-    # keep the plain master_key seed their FSBLs still expect.
-    if os.environ.get("UMBRA_EPOCH_BIND") == "1":
-        EPOCH_LABEL = b"umbra-epoch-v1"
-        fsbl_version = int(os.environ.get("UMBRA_FSBL_VERSION", "1"))
-        chain_state = hmac.new(
-            master_key, EPOCH_LABEL + struct.pack("<I", fsbl_version), hashlib.sha256
-        ).digest()
-    else:
-        chain_state = master_key
+    # Seed the running chain key with the master key (matches the kernel's
+    # `Kernel::begin_measurement` which copies `master_key::MASTER_KEY`).
+    chain_state = master_key
 
     # Subkey used for the per-block HMAC prefix under ess_miss_recovery. Must
     # stay byte-for-byte in sync with `key_derivation::HMAC_KEY_LABEL` in the
@@ -717,34 +719,45 @@ def main():
             'reachable_display': list(blk['reachable']),
         })
 
-    # Pass 2: Simulate the kernel's BFS fold order. Mirrors api_impl.rs's
-    # `umbra_enclave_create_imp` lines 100-159 — start at block 0, walk
-    # reachables in meta order (already sorted), skipping visited and
-    # out-of-range entries. Folding chain in this order is fix #4 from prior
-    # session findings; without it, host folds [0..num_blocks-1] in numeric
-    # order while kernel folds only the BFS-reachable subset, causing
-    # chained-measurement FAIL whenever the call graph leaves any block
-    # un-reached (e.g. prime's block 2 when block 1 ends with `pop {pc}`
-    # and has no branch to block 2).
+    # Pass 2: fold the chained measurement in the SAME order the target kernel
+    # recomputes it at create — otherwise the stamped HMAC never matches.
+    #
+    #   * L552/L562 kernels BFS-walk from block 0 (their `umbra_enclave_create_imp`
+    #     has an explicit reachability queue) and fold ONLY the BFS-reached subset.
+    #   * The N657 kernel folds EVERY block in plain numeric order 0..num_blocks-1
+    #     (api_impl.rs `umbra_enclave_create_imp` — no BFS). Select this with
+    #     UMBRA_NUMERIC_FOLD=1 (set by settings.sh for N657).
+    #
+    # Without the numeric option, any enclave whose call graph leaves a block
+    # un-reached by BFS (e.g. ammunition: 23 unreached blocks; prime's block 2 when
+    # block 1 ends `pop {pc}`) mismatches the N657 numeric recompute → chained-
+    # measurement FAIL. fib passes on either path only because its BFS order
+    # happens to equal numeric order.
     if chained_mode:
-        bfs_visit_order = []
-        bfs_visited = {0}
-        bfs_queue = [0]
-        while bfs_queue:
-            idx = bfs_queue.pop(0)
-            bfs_visit_order.append(idx)
-            for r in per_block[idx]['reachable_in_meta']:
-                if r not in bfs_visited and r < num_blocks:
-                    bfs_visited.add(r)
-                    bfs_queue.append(r)
+        numeric_fold = os.environ.get("UMBRA_NUMERIC_FOLD", "0") == "1"
+        if numeric_fold:
+            fold_order = list(range(num_blocks))
+        else:
+            bfs_visited = {0}
+            bfs_queue = [0]
+            fold_order = []
+            while bfs_queue:
+                idx = bfs_queue.pop(0)
+                fold_order.append(idx)
+                for r in per_block[idx]['reachable_in_meta']:
+                    if r not in bfs_visited and r < num_blocks:
+                        bfs_visited.add(r)
+                        bfs_queue.append(r)
 
-        for idx in bfs_visit_order:
+        for idx in fold_order:
             chain_state = hmac.new(chain_state, per_block[idx]['binding_input'], hashlib.sha256).digest()
 
-        if bfs_visit_order != list(range(num_blocks)):
-            print(f"[Protect] BFS chain fold order: {bfs_visit_order} "
+        if numeric_fold:
+            print(f"[Protect] Numeric chain fold (N657): all {num_blocks} blocks 0..{num_blocks - 1}")
+        elif fold_order != list(range(num_blocks)):
+            print(f"[Protect] BFS chain fold order: {fold_order} "
                   f"(numeric would be {list(range(num_blocks))})")
-            unreached = sorted(set(range(num_blocks)) - set(bfs_visit_order))
+            unreached = sorted(set(range(num_blocks)) - set(fold_order))
             if unreached:
                 print(f"[Protect] Unreached-by-BFS blocks (NOT in chain): {unreached}")
 
@@ -879,6 +892,15 @@ def main():
         # runtime, but we still populate it with a stable digest for tooling.
         if chained_mode:
             measurement = chain_state
+            # Enclave anti-rollback (gated, default OFF). When UMBRA_VERSION_BIND=1,
+            # bind (author_id, version) into the measurement by a trailing fold so the
+            # kernel can DERIVE the version (never stored in clear). Default OFF keeps
+            # L552/L562/RISC-V blobs byte-identical (their kernels compare the plain
+            # chain value).
+            if os.environ.get("UMBRA_VERSION_BIND") == "1":
+                _author_id = int(os.environ.get("UMBRA_AUTHOR_ID", "0"))
+                _enclave_version = int(os.environ.get("UMBRA_ENCLAVE_VERSION", "1"))
+                measurement = version_tag(measurement, _author_id, _enclave_version)
         else:
             measurement = hmac.new(hmac_key, final_blob, hashlib.sha256).digest()
         print(f"[Protect] Enclave Measurement ({mode_label}): {measurement.hex()}")

@@ -1,10 +1,11 @@
-//! HASH driver for STM32N657 — mixed SW SHA-256 + HW HMAC-SHA256.
-//! On N657 the HASH peripheral lives at the Secure alias `0x5402_0400`. The
-//! plain-SHA-256 algorithm runs in software (see the file-local `Sha256`
-//! state machine and `Sha256Engine` adapter — historical artefact of the
-//! RIFSC blocker that prevented enabling AHB3ENR.HASHEN from NS; see memory
-//!). The keyed HMAC-SHA-256 path keeps the
-//! hardware peripheral driver because the SW path does not implement HMAC.
+//! HASH driver for STM32N657 — HW SHA-256 + HW HMAC-SHA256 on the HASH peripheral
+//! (Secure alias `0x5402_0400`, clock enabled at boot). Both `Hash::sha256` and
+//! `Hash::hmac_sha256` drive the peripheral. Completion is polled on DCIS: a SHA-256
+//! digest is bounded compute with no external dependency, so — unlike the SAES/DHUK
+//! wait which could hang on an unpowered backup domain — a busy-poll is already
+//! fail-safe. The file-local SW `Sha256` + `Sha256Engine` adapter are kept as the
+//! host-testable `umbra_hal::Hash` trait backing (the HW path is method-only) and a
+//! fallback; the SW path is a legacy artefact of the old RIFSC AHB3ENR.HASHEN blocker.
 //! # Register map (RM0486 §28, verified empirically — layout differs from L5)
 //! HASH_CR = base + 0x00 SHA-256 algo = bits 17+18 (ALGO[1:0] = 0b11),
 //! MODE (HMAC) = bit 6, INIT = bit 2,
@@ -35,6 +36,7 @@ const HASH_HR5_OFFSET: u32 = 0x324; // HR5..HR7 — split-bank landmine
 
 // CR field encodings (see RM0486 §28 — N657 layout is NOT the L5 layout).
 const CR_INIT_BIT: u8 = 2;
+const CR_DMAE_BIT: u8 = 3; // DMA enable
 const CR_MODE_HMAC_BIT: u8 = 6;
 // SHA-256 = ALGO[1:0] = 0b11 → bits 17+18 in the N657 CR layout.
 const CR_ALGO_SHA256: u32 = 0b11 << 17;
@@ -287,6 +289,53 @@ impl<M: MmioAccess> Hash<M> {
     /// to the CR→DINIS→DIN→STR(NBLW)→STR(NBLW|DCAL)→DINIS sequence at
     /// each of the three stages (inner key, message, outer key); reordering
     /// silently corrupts the digest.
+    /// DMA-fed hardware SHA-256 (firmware only). Feeds the message to HASH_DIN via
+    /// HPDMA1 channel 0 (REQSEL 13 = HASH_IN, burst-4, Secure channel) instead of CPU
+    /// word writes; with MDMAT=0 the peripheral auto-triggers the final digest when the
+    /// DMA completes. Returns the HPDMA channel status word for diagnosis (TCF = clean;
+    /// DTEF/ULEF/USEF = error). Self-enables the HPDMA1 clock. `data` must live in
+    /// DMA-reachable memory (AXISRAM or the memory-mapped XSPI2 window).
+    #[cfg(target_arch = "arm")]
+    pub fn sha256_dma(&mut self, data: &[u8], output: &mut [u8]) -> u32 {
+        const HASH_DIN_ADDR: u32 = HASH_BASE_ADDR + HASH_DIN_OFFSET;
+        const HASH_IN_REQSEL: u8 = 13; // HPDMA1_REQUEST_HASH_IN (CMSIS)
+        const CH: u8 = 0;
+
+        crate::hpdma::enable_clock(); // self-sufficient: don't rely on boot-time bring-up
+
+        // NBLW (valid bits in the last word) must be programmed BEFORE the DMA is
+        // enabled (RM0486 §50.4.9). CR: SHA-256, byte-swap DATATYPE (same as the CPU
+        // path — HW-verified the DMA-fed digest matches CPU with this), INIT, DMAE=1
+        // (MDMAT=0 so the final digest auto-triggers when the DMA finishes).
+        let nblw = (8 * (data.len() % 4)) as u32;
+        self.mmio.write(
+            HASH_CR_OFFSET,
+            CR_ALGO_SHA256 | CR_DATATYPE_BYTE | (1 << CR_INIT_BIT) | (1 << CR_DMAE_BIT),
+        );
+        while self.mmio.read(HASH_SR_OFFSET) & SR_DINIS_MASK == 0 {}
+        self.mmio.write(HASH_STR_OFFSET, nblw);
+
+        // Clean the source out of D-cache so the DMA reads the CPU's latest bytes.
+        crate::hpdma::dcache_clean_range(data.as_ptr() as usize, data.len());
+
+        let dma = crate::hpdma::Hpdma1::new();
+        dma.set_channel_secure(CH); // Secure channel — else RIFSC drops writes to HASH
+        dma.reset_channel(CH);
+        let byte_count = ((data.len() + 3) & !3) as u32; // whole words
+        dma.configure_mem_to_periph(CH, data.as_ptr() as u32, HASH_DIN_ADDR, byte_count, HASH_IN_REQSEL);
+        dma.enable_channel(CH);
+        let dma_sr = dma.wait_complete(CH, 4_000_000);
+        dma.clear_flags(CH);
+
+        // MDMAT=0 → DCAL auto-set at end of DMA → final digest. Wait DCIS then read.
+        let mut budget = 2_000_000u32;
+        while self.mmio.read(HASH_SR_OFFSET) & SR_DCIS_MASK == 0 && budget > 0 {
+            budget -= 1;
+        }
+        self.read_digest(output);
+        dma_sr
+    }
+
     pub fn hmac_sha256(&mut self, key: &[u8], data: &[u8], output: &mut [u8]) {
         // Step 1: configure CR — algo + HMAC mode + byte-swap + INIT
         self.mmio.write(
@@ -386,10 +435,63 @@ impl<M: MmioAccess> Hash<M> {
         }
     }
 
+    /// Hardware SHA-256 using the N657 HASH peripheral. Same register sequence as
+    /// `hmac_sha256` minus the key stages (MODE = 0, plain hash): CR(ALGO | byte-swap
+    /// | INIT) → wait DINIS → feed message → STR(NBLW) → STR(NBLW | DCAL) → wait
+    /// digest → read HR0..HR7. Padding is done by the peripheral. Completion is
+    /// interrupt-driven on the firmware target (`HASH_IRQHandler` posts the flag; its
+    /// priority is raised above SVC so it preempts the SVC#2 checkpoint handler where
+    /// the hot-path digests run) with a DCIS poll fail-safe; host tests poll DCIS.
     pub fn sha256(&mut self, data: &[u8], output: &mut [u8]) {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        hasher.finalize(output);
+        // CR: SHA-256, hash mode (MODE=0), byte-swap, INIT.
+        self.mmio.write(
+            HASH_CR_OFFSET,
+            CR_ALGO_SHA256 | CR_DATATYPE_BYTE | (1 << CR_INIT_BIT),
+        );
+        // Wait until the input buffer is ready to accept data.
+        while self.mmio.read(HASH_SR_OFFSET) & SR_DINIS_MASK == 0 {}
+        // Feed the message, set the valid-bits of the last word.
+        self.feed_data(data);
+        let nblw = (8 * (data.len() % 4)) as u32;
+        self.mmio.write(HASH_STR_OFFSET, nblw);
+        // Arm the DCIS interrupt just before triggering the final digest (DCAL) —
+        // padding + length append are automatic.
+        #[cfg(target_arch = "arm")]
+        crate::crypto_wait::hash_arm();
+        self.mmio
+            .write(HASH_STR_OFFSET, nblw | (1u32 << STR_DCAL_BIT));
+        self.wait_digest_done();
+        self.read_digest(output);
+    }
+
+    /// Wait for the digest. Firmware: the HASH IRQ posts completion (DCIS-poll
+    /// fail-safe inside `block_until_hash_done` so it can never hang). Host tests:
+    /// poll DCIS on the mock (preloaded), keeping `sha256` host-testable.
+    fn wait_digest_done(&self) {
+        #[cfg(target_arch = "arm")]
+        crate::crypto_wait::block_until_hash_done();
+        #[cfg(not(target_arch = "arm"))]
+        while self.mmio.read(HASH_SR_OFFSET) & SR_DCIS_MASK == 0 {}
+    }
+
+    /// Read the 256-bit digest into `output`: HR0..HR4 from the contiguous bank
+    /// (0x0C) and HR5..HR7 from the split bank (0x324 — the same landmine as L552).
+    /// HR registers are big-endian.
+    fn read_digest(&self, output: &mut [u8]) {
+        let mut i: u32 = 0;
+        while i < 5 {
+            let w = self.mmio.read(HASH_HR_OFFSET + i * 4);
+            let idx = (i as usize) * 4;
+            output[idx..idx + 4].copy_from_slice(&w.to_be_bytes());
+            i += 1;
+        }
+        let mut j: u32 = 0;
+        while j < 3 {
+            let w = self.mmio.read(HASH_HR5_OFFSET + j * 4);
+            let idx = (5 + j as usize) * 4;
+            output[idx..idx + 4].copy_from_slice(&w.to_be_bytes());
+            j += 1;
+        }
     }
 }
 

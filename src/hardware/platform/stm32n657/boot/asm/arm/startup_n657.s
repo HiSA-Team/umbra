@@ -38,7 +38,9 @@
     .extern DMA1_Channel7_Handler
     .extern DMA1_Channel8_Handler
     .extern SAES1_IRQHandler
-    .extern umbra_yield_handler
+    .extern umbra_checkpoint_handler
+    .extern HASH_IRQHandler
+    .extern HPDMA1_Channel2_Handler
 
     // =====================================================================
     // Vector Table
@@ -78,8 +80,16 @@
         .word _umb_Default_Handler
         .endr
         .word SAES1_IRQHandler+1                    // IRQ 36 — SAES1 completion
-        .rept 91
-        .word _umb_Default_Handler
+        .rept 2
+        .word _umb_Default_Handler                  // IRQ 37 (CRYP), 38 (PKA)
+        .endr
+        .word HASH_IRQHandler+1                     // IRQ 39 — HASH DCIS/DINIS
+        .rept 30
+        .word _umb_Default_Handler                  // IRQ 40..69
+        .endr
+        .word HPDMA1_Channel2_Handler+1             // IRQ 70 — HPDMA1 ch2 (async prefetch TC)
+        .rept 57
+        .word _umb_Default_Handler                  // IRQ 71..127
         .endr
 
     // =====================================================================
@@ -202,8 +212,8 @@
         mrsne r0, psp
         ldr r1, [r0, #24]
         ldrb r1, [r1, #-2]
-        cmp r1, #1
-        beq _svc_yield
+        cmp r1, #2
+        beq _svc_checkpoint
 
     _svc_enter:
         ldr r1, [sp, #0]
@@ -232,17 +242,18 @@
         str r3, [r2, #-4]
         bx lr
 
-    _svc_yield:
+    // svc #2: per-block CHECKPOINT — save the context, commit a checkpoint, return to
+    // the enclave (transparent save-and-continue). r12/lr are clobbered by the calls,
+    // so recover the EXC_RETURN from ctx.lr (offset 36); control/psp stay the enclave's.
+    _svc_checkpoint:
         push {r4-r11}
         mov r12, lr
         bl save_enclave_context
-        bl umbra_yield_handler
-        str r0, [sp, #32]
+        bl umbra_checkpoint_handler
         pop {r4-r11}
-        movs r1, #0
-        msr control, r1
-        isb
-        ldr lr, =0xFFFFFFF9
+        ldr r0, =CURRENT_ENCLAVE_CTX_PTR
+        ldr r0, [r0]
+        ldr lr, [r0, #36]
         bx lr
 
     .thumb_func
@@ -253,10 +264,11 @@
 
     .thumb_func
     _umb_PendSV_Handler:
-        mov r12, lr
+        // Tail-call: leave EXC_RETURN in LR so umbra_pendsv_handler returns from the
+        // exception via its own epilogue. (A `mov r12,lr; bl; bx r12` form is broken —
+        // r12 is caller-saved, so the bl clobbers the saved EXC_RETURN → bx to garbage.)
         mov r0, sp
-        bl umbra_pendsv_handler
-        bx r12
+        b umbra_pendsv_handler
 
     .thumb_func
     save_enclave_context:
@@ -302,6 +314,33 @@
         // Normal path — enclave is running.
         bl save_enclave_context
         bl umbra_systick_handler
+        // r0 = (next_ctx_ptr | 1) → RESUME that enclave (Phase 4.2 overlay scheduler,
+        // interenclave_overlay feature), or an encoded status (bit0=0) → RETURN TO HOST
+        // (default build / no other runnable enclave). Pointers are 4-aligned so bit0 is a
+        // clean discriminator.
+        tst r0, #1
+        beq _systick_return_host
+
+        // ── Resume the NEXT enclave (context switch, mirrors _svc_enter) ──
+        bic r0, r0, #1             // strip the resume tag → next enclave's EnclaveContext ptr
+        add sp, sp, #32            // drop the pushed r4-r11 (already saved; load next's below)
+        ldm r0, {r4-r11}           // next enclave's callee-saved regs
+        ldr r2, [r0, #32]
+        msr psp, r2                // next enclave's PSP (its stacked exception frame)
+        ldr r2, [r0, #40]
+        msr control, r2            // next enclave's CONTROL (unprivileged, PSP)
+        isb
+        ldr lr, [r0, #36]          // next enclave's EXC_RETURN
+        ldr r2, =0xE000E014        // re-arm SysTick (same 1 ms window as _svc_enter)
+        ldr r3, =799999
+        str r3, [r2]
+        movs r3, #0
+        str r3, [r2, #4]
+        movs r3, #7
+        str r3, [r2, #-4]
+        bx lr                      // exception-return → resume the next enclave on its PSP
+
+    _systick_return_host:
         str r0, [sp, #32]
 
     _systick_done:

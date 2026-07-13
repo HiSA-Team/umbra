@@ -12,6 +12,12 @@
 #define ENCLAVE_ENTRY __attribute__((section(".app.enclave_code.entry")))
 #define ENCLAVE_CODE  __attribute__((section(".app.enclave_code")))
 
+/* Per-block state-continuity checkpoint. SVC #2 makes the Secure FSBL commit the
+ * enclave state to flash + TAMP and return here (transparent save-and-continue), one
+ * checkpoint per block boundary; a reset resumes from the last. A production tool
+ * would insert these at the real EFB boundaries — here they are placed by hand. */
+#define UMBRA_BLOCK_CHECKPOINT() __asm volatile("svc #2" ::: "memory")
+
 int fibonacci(void) ENCLAVE_ENTRY;
 int heavy_computation(int val) ENCLAVE_CODE;
 void dummy_filler_A(int *val) ENCLAVE_CODE;
@@ -60,9 +66,11 @@ int fibonacci(void) {
 
     t1 = heavy_computation(t1);
     dummy_filler_A(&t1);
+    UMBRA_BLOCK_CHECKPOINT(); /* block boundary 1 — after phase A */
 
     t2 = heavy_computation(t2);
     dummy_filler_B(&t2);
+    UMBRA_BLOCK_CHECKPOINT(); /* block boundary 2 — after phase B */
 
     for (int i = 3; i <= n; ++i) {
         t1 = t2;
@@ -75,6 +83,7 @@ int fibonacci(void) {
 
         nextTerm = t1 + t2;
     }
+    UMBRA_BLOCK_CHECKPOINT(); /* block boundary 3 — after the loop */
 
     return nextTerm;
 }

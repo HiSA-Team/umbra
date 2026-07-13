@@ -273,10 +273,23 @@ fn flash(platform: &str) -> Result<()> {
         }
         println!("[xtask flash] openocd attached (log: /tmp/openocd_n657.log)");
 
+        // NS host symbols: pick the ELF from HOST_APP (default bare_metal) so `bt` resolves in
+        // the host world — e.g. two_enclaves' main/run_overlay — instead of raw `0x2400xxxx in
+        // ?? ()`. Injected as a TRAILING -ex so it runs after n657_debug.gdb's `file <boot>`
+        // (which would otherwise discard an earlier add-symbol-file). The .text VMA is 0x24000100
+        // for every N657 host (shared linker layout). `set confirm off` in the script suppresses
+        // the add-symbol-file prompt.
+        let host_app = std::env::var("HOST_APP").unwrap_or_else(|_| "bare_metal".to_string());
+        let host_syms = format!(
+            "add-symbol-file host/stm32n657/{host_app}/bin/{host_app}.elf 0x24000100"
+        );
+
         // Interactive gdb; -nx skips the user's Python-laden ~/.gdbinit.
         let gdb_res = Command::new("arm-none-eabi-gdb")
             .current_dir(&root)
             .args(["-nx", "-x", "tools/n657_debug.gdb"])
+            .arg("-ex")
+            .arg(&host_syms)
             .status();
 
         // gdb exited -> tear down openocd so the ST-LINK probe is freed.

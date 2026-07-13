@@ -23,6 +23,8 @@
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 
 mod api_impl;
+#[cfg(feature = "enclave_version_bind")]
+mod antirollback;
 mod crypto_impl;
 mod dhuk_provision;
 mod hdpl;
@@ -36,6 +38,8 @@ mod bench_eval;
 mod boot_measurements;
 mod handlers;
 mod key_derivation;
+// Async speculative prefetch engine (background HPDMA1 load + TC IRQ + PendSV install).
+mod prefetch;
 mod master_key;
 mod raw_print;
 // `validator` module implements per-block HMAC + decrypt validation used at

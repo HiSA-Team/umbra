@@ -11,8 +11,16 @@ pub mod crypto_wait;
 pub mod dma;
 pub mod gpio;
 pub mod hash;
+/// Real HPDMA1 channel driver (firmware-only — raw MMIO + cache-maintenance asm).
+#[cfg(target_arch = "arm")]
+pub mod hpdma;
 pub mod mce;
 pub mod rcc;
 pub mod risaf;
 pub mod saes;
+pub mod state_anchor;
+pub mod state_flash;
+pub mod state_store;
+pub mod tamp_store;
 pub mod uart;
+pub mod xspi;
