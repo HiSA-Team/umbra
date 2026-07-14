@@ -52,17 +52,21 @@ _host_entry_point = 0x24000100;
 
 /*
     Umbra sections in AXISRAM2 Secure (after 0x400 signing header):
-      - _SECURE_BOOT_TEXT_MEMORY_    : 68 KB  (0x34180400) — boot .text + .rodata
-      - _SECURE_KERNEL_TEXT_MEMORY_  : 104 KB (0x34191400) — kernel API implementations
+      - _SECURE_BOOT_TEXT_MEMORY_    : 72 KB  (0x34180400) — boot .text + .rodata
+      - _SECURE_KERNEL_TEXT_MEMORY_  : 100 KB (0x34192400) — kernel API implementations
       - _NSC_TEXT_MEMORY_            : 4 KB   (0x341AB400) — NSC veneers (SAU-configured)
       - _SECURE_KERNEL_DATA_MEMORY_  : 128 KB (0x341AC400) — .data + .bss + stack
       - _NSC_DATA_MEMORY_            : 8 KB   (0x341CC400)
+
+   NOTE: boot grew 68K->72K by shrinking kernel-text 104K->100K (kernel had slack).
+   NSC / kernel-data / nsc-data ORIGINs are UNCHANGED, so the hardcoded NSC SAU base
+   (0x341AB400) and _umb_estack stay valid — only the boot/kernel boundary moved.
 */
 
 MEMORY
 {
-    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 68K
-    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x34191400,                   LENGTH = 104K
+    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 72K
+    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x34192400,                   LENGTH = 100K
     _NSC_TEXT_MEMORY_             (RXAL) : ORIGIN = 0x341AB400,                   LENGTH = 4K
     _SECURE_KERNEL_DATA_MEMORY_  (RWX)  : ORIGIN = 0x341AC400,                   LENGTH = 128K
     _NSC_DATA_MEMORY_            (RWX)  : ORIGIN = 0x341CC400,                   LENGTH = 8K

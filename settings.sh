@@ -232,6 +232,31 @@ if [ "$UMBRA_DEV_DEBUG" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
     echo -e "${SUCCESS}[dev_debug] FSBL debug access port ENABLED (do NOT ship)${VANILLA}"
 fi
 
+# DEV-ONLY: on-chip state-continuity proof-slice probe. Enable with
+# `UMBRA_STATE_PROBE=1 cargo xtask flash n657` (or before ./rebuild_all.sh). Runs the
+# checkpoint/restore loop on real TAMP + HASH at boot and prints [state-probe] over
+# UART. N657-only; never ship.
+if [ "${UMBRA_STATE_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features state_continuity_probe"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},state_continuity_probe"
+    fi
+    echo -e "${SUCCESS}[state-probe] on-chip state-continuity probe ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: on-chip XSPI2 write-path bring-up probe. Enable with
+# `UMBRA_XSPI_PROBE=1 UMBRA_VERSION_BIND=0 cargo xtask flash n657`. Prints [XP] over
+# UART. N657-only; never ship.
+if [ "${UMBRA_XSPI_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features xspi_write_probe"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},xspi_write_probe"
+    fi
+    echo -e "${SUCCESS}[xspi-probe] on-chip XSPI2 write-path probe ENABLED (do NOT ship)${VANILLA}"
+fi
+
 export UMBRA_CACHE_ZERO_MODE=${UMBRA_CACHE_ZERO_MODE:-0}
 if [ "$UMBRA_CACHE_ZERO_MODE" = "1" ]; then
     if [ -z "$BOOT_FEATURES" ]; then

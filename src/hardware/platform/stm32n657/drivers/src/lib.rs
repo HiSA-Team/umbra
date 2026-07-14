@@ -20,3 +20,4 @@ pub mod state_flash;
 pub mod state_store;
 pub mod tamp_store;
 pub mod uart;
+pub mod xspi;

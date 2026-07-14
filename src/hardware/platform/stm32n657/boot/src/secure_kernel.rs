@@ -34,6 +34,11 @@ use crate::boot_measurements::{
     MODEL_WEIGHTS_HMAC, MODEL_WEIGHTS_LEN,
 };
 
+/// Enclave state-continuity checkpoint/restore (runtime integration 2/4). Declared
+/// here — a clean, already-linked module — so no `mod` line is added to main.rs.
+#[path = "state_checkpoint.rs"]
+pub mod state_checkpoint;
+
 #[cfg(feature = "enclave_version_bind")]
 include!(concat!(env!("OUT_DIR"), "/author_id.rs"));
 
@@ -65,6 +70,8 @@ pub struct Kernel {
     pub chain_state: [u8; 32],
     pub enc_key: [u8; 32],
     pub hmac_key: [u8; 32],
+    /// Stable device secret that keys the state-continuity checkpoint anchor root.
+    pub state_root: [u8; 32],
     pub enclave_contexts: [EnclaveContext; 4],
     pub current_enclave_id: Option<u32>,
 }
@@ -112,6 +119,7 @@ impl Kernel {
             chain_state: [0u8; 32],
             enc_key: [0u8; 32],
             hmac_key: [0u8; 32],
+            state_root: [0u8; 32],
             enclave_contexts: [EnclaveContext::empty(); 4],
             current_enclave_id: None,
         }
@@ -126,6 +134,7 @@ impl Kernel {
             let crypto: &mut dyn CryptoEngine = &mut **crypto;
             self.enc_key = crate::key_derivation::derive_enc_key(crypto)?;
             self.hmac_key = crate::key_derivation::derive_hmac_key(crypto)?;
+            self.state_root = crate::key_derivation::derive_state_root(crypto)?;
         }
         Ok(())
     }

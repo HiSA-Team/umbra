@@ -70,6 +70,7 @@ pub fn checkpoint<S: SectorStore, A: AnchorStore>(
     dirty: u16,
     key: &[u8],
     enclave_id: u32,
+    state_format_version: u32,
     hmac: impl FnOnce(&[u8], &[&[u8]]) -> [u8; 32],
 ) -> Result<(), CheckpointError> {
     let (gen, parity) = match anchor.load() {
@@ -89,7 +90,7 @@ pub fn checkpoint<S: SectorStore, A: AnchorStore>(
     }
     let new_gen = gen.wrapping_add(1);
     let digests = committed_digests(store, new_parity);
-    let root = compute_root(key, enclave_id, new_gen, &digests, hmac);
+    let root = compute_root(key, enclave_id, state_format_version, new_gen, &digests, hmac);
     anchor.store(&Anchor { generation: new_gen, root, parity: new_parity });
     Ok(())
 }
@@ -100,6 +101,7 @@ pub fn restore<S: SectorStore, A: AnchorStore>(
     anchor: &A,
     key: &[u8],
     enclave_id: u32,
+    state_format_version: u32,
     hmac: impl FnOnce(&[u8], &[&[u8]]) -> [u8; 32],
 ) -> RestoreDecision {
     let a = match anchor.load() {
@@ -107,7 +109,7 @@ pub fn restore<S: SectorStore, A: AnchorStore>(
         _ => return RestoreDecision::ColdGenesis,
     };
     let digests = committed_digests(store, a.parity);
-    let recomputed = compute_root(key, enclave_id, a.generation, &digests, hmac);
+    let recomputed = compute_root(key, enclave_id, state_format_version, a.generation, &digests, hmac);
     if root_matches(&a.root, &recomputed) {
         RestoreDecision::Resume
     } else {

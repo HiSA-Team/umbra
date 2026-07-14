@@ -23,8 +23,9 @@ The freshness truth lives **entirely in the trusted anchor as a keyed root over
 the whole logical state**; flash is untrusted and holds only ciphertexts.
 
 - **Anchor (TAMP backup registers, Secure-write-only):** `generation` (monotonic)
-  + `root = HMAC(K, enclave_id ‖ generation ‖ H(sector_0) ‖ … ‖ H(sector_{N-1}))`
-  truncated to **128 bits** (see *Anchor atomicity* for why)
+  + `root = HMAC(K, enclave_id ‖ state_format_version ‖ generation ‖ H(sector_0) ‖ … ‖ H(sector_{N-1}))`
+  truncated to **128 bits** — field order NORMATIVE (see *Version coupling* and
+  *Anchor atomicity*)
   + one **committed-slot parity bit per sector**. `H(sector_i)` is an unkeyed
   SHA-256 of sector i's committed ciphertext; the KEYED root in the trusted anchor
   is what makes it fresh and authentic.
@@ -49,6 +50,32 @@ the whole logical state**; flash is untrusted and holds only ciphertexts.
   lands. The 128-bit root is what makes both copies fit the register budget
   (2×7 = 14 registers vs 22 at 256 bits); 2^-128 forgery resistance is ample for
   anti-rollback (the attacker must forge the keyed MAC, not find a collision).
+
+## Version coupling: state-format, not code version
+
+An open question was whether to fold the enclave's CODE version into the root, so a snapshot
+from code v1 would be refused after an update to v2. A design-review panel rejected that:
+
+- Under the warm-reset threat model it closes **no attack**: the code-version floor already
+  refuses an old binary and the keyed root already refuses a forged state. The only v1 state
+  reaching a running v2 is what a *legitimate* prior version left behind — that is continuity,
+  not an attack.
+- The real risk it touches is a **migration-safety** fault (v2 deserializing a v1 layout), not
+  rollback. Folding the code version in would also **wipe continuity on every routine update**,
+  even when the layout is unchanged.
+
+So the root binds an author-owned **`state_format_version`** instead — bumped ONLY when the
+serialized snapshot layout changes. An incompatible layout then fails closed (Reject); a
+compatible update keeps its state. "Is this code recent enough?" stays with the floor; "is this
+layout mine to interpret?" is the format version. The two anti-rollback controls stay
+**decoupled**; cross-version state migration is the enclave's responsibility, not the kernel's.
+
+The preimage order — `enclave_id ‖ state_format_version ‖ generation ‖ digests`, little-endian,
+128-bit truncation — is **normative** and frozen here, because it is the on-anchor format:
+changing it once roots are persisted is a migration event. A future per-enclave `author_id`
+field or an OTP/BSEC epoch is a deliberate append, and a spare TAMP register (BKP26–31) is
+reserved for an opt-in migrate-policy tag if governed cross-version re-seal is ever needed —
+deferred until multi-version updates and snapshot serialization actually exist.
 
 ## Checkpoint cadence
 Unchanged: not per-preemption-tick. A 4 KB NOR subsector erase takes tens–hundreds
