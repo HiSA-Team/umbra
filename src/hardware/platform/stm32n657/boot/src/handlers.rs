@@ -201,6 +201,29 @@ pub unsafe extern "C" fn umbra_mem_manage_handler(psp: u32) -> u32 {
         }
     }
 
+    // Overlay async switch: the incoming enclave touched a chunk the background chain
+    // has not restored yet — drain synchronously and resume. Same DACCVIOL→MMFAR /
+    // IACCVIOL→stacked-PC address rule as the blocks above.
+    // NOTE: relies on the optional mpu_evict_probe/async_ess_miss blocks above declining
+    // faults outside their armed ranges; the overlay chain must not be live while those
+    // demonstrators are armed (dev-only, mutually exclusive by convention).
+    #[cfg(feature = "interenclave_overlay")]
+    {
+        let fault_addr = if (mmfsr & 0x02) != 0 && (mmfsr & 0x80) != 0 {
+            ptr::read_volatile(SCB_MMFAR) // DACCVIOL → MMFAR
+        } else if (mmfsr & 0x01) != 0 {
+            ptr::read_volatile((psp as *const u32).add(6)) // IACCVIOL → stacked PC
+        } else {
+            0
+        };
+        if fault_addr != 0 && crate::overlay_chain::on_fault(fault_addr) {
+            // Silent on purpose: one UART line per fault (~2.6 ms at 115200) dwarfs the
+            // drain itself and skews timing runs. CHAIN_FAULTS still counts every recovery.
+            ptr::write_volatile(cfsr_ptr, mmfsr as u32); // W1C the MMFSR sub-bits
+            return 0; // RECOVER — the faulting instruction re-executes
+        }
+    }
+
     let is_iaccviol = (mmfsr & 0x01) != 0;
 
     if is_iaccviol {
@@ -474,10 +497,17 @@ pub extern "C" fn umbra_debug_mon_handler(_sp: u32) {
 }
 
 /// PendSV: the deferred install tail of the async prefetch pipeline. Runs at the lowest
-/// priority — outside the enclave/SysTick execution window — so the cache-maintenance
-/// window never overlaps unprivileged enclave code (mirrors the L552 G3 design).
+/// priority — outside the enclave/SysTick execution window. For the prefetch fall-through
+/// that means the cache-maintenance window never overlaps unprivileged enclave code
+/// (mirrors the L552 G3 design). The overlay chain's PendSV, by contrast, DELIBERATELY
+/// reprograms MPU region 5 over the live enclave — the progressive reveal that grows the
+/// visible window as restored chunks land (see overlay_chain.rs).
 #[no_mangle]
 pub extern "C" fn umbra_pendsv_handler(_sp: u32) {
+    #[cfg(feature = "interenclave_overlay")]
+    if crate::overlay_chain::on_pendsv() {
+        return;
+    }
     crate::prefetch::on_pendsv();
 }
 
@@ -485,6 +515,10 @@ pub extern "C" fn umbra_pendsv_handler(_sp: u32) {
 /// channel flags and sets PendSV pending to defer the install.
 #[no_mangle]
 pub extern "C" fn HPDMA1_Channel2_Handler() {
+    #[cfg(feature = "interenclave_overlay")]
+    if crate::overlay_chain::on_tc_irq() {
+        return;
+    }
     crate::prefetch::on_dma_complete();
 }
 
@@ -529,6 +563,11 @@ pub extern "C" fn umbra_systick_handler(ctx_ptr: *mut u8) -> u32 {
     // If no OTHER enclave is runnable, fall through to the return-to-host path (default build).
     #[cfg(feature = "interenclave_overlay")]
     {
+        // A chain from the previous switch still in flight (µs-scale DMA vs 1 ms tick —
+        // belt and braces): finish it before the checkpoint below reads the window.
+        unsafe {
+            crate::overlay_chain::drain();
+        }
         let cur_id = kernel.current_enclave_id.unwrap_or(0);
         let slots = kernel.ess.loaded_enclaves.len();
         let mut cur_slot = None;
@@ -577,16 +616,22 @@ pub extern "C" fn umbra_systick_handler(ctx_ptr: *mut u8) -> u32 {
                         });
                     }
                 }
-                // window switch: evict current -> backing[cs], restore next <- backing[ns].
+                // Speculative window switch: move only B's resume-PC chunk synchronously,
+                // resume B on the rotated MPU reveal, and let the background chain carry
+                // the other 7 chunk pairs (overlay_chain.rs). Region 4 (stack) + region 5
+                // full extent first — begin_switch then shrinks region 5 to the reveal.
                 unsafe {
-                    crate::prefetch::overlay::make_resident(
-                        ns,
-                        kernel::common::ess::ESS_BASE,
-                        false,
-                    );
-                    // reprogram the incoming enclave's per-enclave MPU regions (stack + code),
-                    // else the exception-return unstacking from its PSP faults MemManage.
                     crate::api_impl::overlay_reconfigure_mpu(kernel, ns);
+                    let in_psp = kernel.enclave_contexts[ns].psp;
+                    let resume_pc = core::ptr::read_volatile((in_psp as *const u32).add(6));
+                    let (code_base, code_limit) = match kernel.ess.loaded_enclaves[ns].as_ref() {
+                        Some(le) => (
+                            le.start_address,
+                            le.start_address + le.descriptor.code_size - 1,
+                        ),
+                        None => continue, // checked runnable above; defensive
+                    };
+                    crate::overlay_chain::begin_switch(cs, ns, resume_pc, code_base, code_limit);
                 }
                 kernel.enclave_contexts[ns].status = EnclaveState::Running;
                 kernel.current_enclave_id = Some(next_id);
@@ -619,6 +664,11 @@ pub extern "C" fn umbra_checkpoint_handler() {
         unsafe { crate::secure_kernel::CURRENT_ENCLAVE_CTX_PTR } as *const EnclaveContext;
     if ctx_ptr.is_null() {
         return;
+    }
+    // The checkpoint hashes the resident window — finish any in-flight chain first.
+    #[cfg(feature = "interenclave_overlay")]
+    unsafe {
+        crate::overlay_chain::drain();
     }
     let kernel = unsafe {
         match crate::secure_kernel::Kernel::get() {

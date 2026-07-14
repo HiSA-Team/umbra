@@ -52,8 +52,8 @@ _host_entry_point = 0x24000100;
 
 /*
     Umbra sections in AXISRAM2 Secure (after 0x400 signing header):
-      - _SECURE_BOOT_TEXT_MEMORY_    : 83 KB  (0x34180400) — boot .text + .rodata
-      - _SECURE_KERNEL_TEXT_MEMORY_  : 89 KB  (0x34195000) — kernel API implementations
+      - _SECURE_BOOT_TEXT_MEMORY_    : 89 KB  (0x34180400) — boot .text + .rodata
+      - _SECURE_KERNEL_TEXT_MEMORY_  : 83 KB  (0x34196800) — kernel API implementations
       - _NSC_TEXT_MEMORY_            : 4 KB   (0x341AB400) — NSC veneers (SAU-configured)
       - _SECURE_KERNEL_DATA_MEMORY_  : 128 KB (0x341AC400) — .data + .bss + stack
       - _NSC_DATA_MEMORY_            : 8 KB   (0x341CC400)
@@ -63,15 +63,17 @@ _host_entry_point = 0x24000100;
    read_digest (hpdma + sha256_dma are pulled into any build that reaches read_digest, e.g.
    the xspi_write_probe). The 83K step fits the DEV-ONLY async_ess_miss demonstrator module;
    it is off in production builds, so the extra 1K is just unused boot headroom there and can be
-   reclaimed if the feature is dropped. NSC / kernel-data / nsc-data ORIGINs are UNCHANGED, so
+   reclaimed if the feature is dropped. The 87K step fits the overlay async-switch chain
+   (overlay_chain.rs, default via interenclave_overlay): .rodata overflowed 83K by ~3.3K. NSC / kernel-data / nsc-data ORIGINs are UNCHANGED, so
    the hardcoded NSC SAU base (0x341AB400) and _umb_estack stay valid — only the boot/kernel
-   boundary moved.
+   boundary moved. The 89K step fits the hot-chunk prefetch + non-destructive miss recovery
+   (overlay_chain.rs, under interenclave_overlay); kernel-text uses ~3.7K of its budget.
 */
 
 MEMORY
 {
-    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 83K
-    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x34195000,                   LENGTH = 89K
+    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 89K
+    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x34196800,                   LENGTH = 83K
     _NSC_TEXT_MEMORY_             (RXAL) : ORIGIN = 0x341AB400,                   LENGTH = 4K
     _SECURE_KERNEL_DATA_MEMORY_  (RWX)  : ORIGIN = 0x341AC400,                   LENGTH = 128K
     _NSC_DATA_MEMORY_            (RWX)  : ORIGIN = 0x341CC400,                   LENGTH = 8K

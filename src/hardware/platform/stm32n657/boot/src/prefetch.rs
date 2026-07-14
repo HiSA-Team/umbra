@@ -542,11 +542,13 @@ pub mod async_ess {
 // ── Inter-enclave OVERLAY: time-multiplex the EFBC across TWO live enclaves ────────
 // The feasible eviction (project_n657_eviction_feasibility): two enclaves both linked to
 // the EFBC base can't coexist (their images overlap / exceed 64 blocks), so only ONE is
-// resident at a time; the other lives in an SRAM backing. `make_resident(slot)` evicts the
-// currently-resident enclave's window → its backing and restores the requested enclave ←
-// its backing (whole-window DMA, generalizing the HW-verified inter_evict::round_trip). The
-// kernel calls this at enclave_create (2nd create evicts the 1st) and enclave_enter (entering
-// a non-resident enclave switches). Backings are sized to the full 16 KB window.
+// resident at a time; the other lives in an SRAM backing. The SysTick preemption switch
+// uses `overlay_chain::begin_switch` (speculative per-chunk chain: sync resume-PC prefix +
+// background DMA + progressive MPU reveal). `make_resident(slot)` serves only the COLD
+// host-driven paths — enclave_create (2nd create evicts the 1st) and enclave_enter
+// (entering a non-resident enclave) — as a fully synchronous, drain-guarded whole-window
+// evict→restore (generalizing the HW-verified inter_evict::round_trip). Backings are
+// sized to the full 16 KB window and shared with the chain via `backing_addr`.
 #[cfg(feature = "interenclave_overlay")]
 pub mod overlay {
     use arm::mmio::{ICIALLU, MPU_RBAR, MPU_RNR};
@@ -554,7 +556,7 @@ pub mod overlay {
 
     const CH: u8 = 2; // background DMA channel (shared with the async engine; used synchronously here)
     const WINDOW_BYTES: usize = 0x4000; // full 16 KB EFBC window = umbra-ess-core ESS_SIZE
-    const NUM_SLOTS: usize = 2; // MAX_ENCLAVES_CTX
+    pub const NUM_SLOTS: usize = 2; // MAX_ENCLAVES_CTX
 
     #[repr(C, align(4))]
     struct Backing([u8; WINDOW_BYTES]);
@@ -612,8 +614,13 @@ pub mod overlay {
     /// about to load the image itself, e.g. at create), restore `slot` ← its backing. Tracks
     /// RESIDENT. Returns true if a switch (evict and/or restore) happened.
     ///
+    /// Cold host-driven paths ONLY (enclave_create / enclave_enter): fully synchronous,
+    /// drain-guarded. The SysTick preemption switch does NOT come through here — it uses
+    /// `overlay_chain::begin_switch` (speculative chunk chain).
+    ///
     /// SAFETY: single-threaded Secure; `slot < NUM_SLOTS`; `efbc` is the ESS window base.
     pub unsafe fn make_resident(slot: usize, efbc: u32, fresh_load: bool) -> bool {
+        crate::overlay_chain::drain(); // never overlap a live chain with a sync window copy
         let cur = RESIDENT.load(Ordering::SeqCst);
         if cur == slot as i32 {
             return false; // already resident — no switch
@@ -636,6 +643,7 @@ pub mod overlay {
     /// so the outgoing enclave's image survives in its backing for a later restore-on-enter.
     /// SAFETY: single-threaded Secure; `efbc` = ESS window base.
     pub unsafe fn evict_current(efbc: u32) {
+        crate::overlay_chain::drain(); // never overlap a live chain with a sync window copy
         let cur = RESIDENT.load(Ordering::SeqCst);
         if cur >= 0 {
             evict(cur as usize, efbc);
@@ -647,5 +655,11 @@ pub mod overlay {
     /// `enclave_create`). No DMA; pairs with `evict_current`.
     pub fn set_resident(slot: usize) {
         RESIDENT.store(slot as i32, Ordering::SeqCst);
+    }
+
+    /// Base address of slot `slot`'s backing store (for the async chain's per-chunk DMA).
+    /// SAFETY-relevant: callers stay within `[addr, addr + WINDOW_BYTES)`.
+    pub fn backing_addr(slot: usize) -> u32 {
+        unsafe { core::ptr::addr_of_mut!(BACKINGS[slot]) as u32 }
     }
 }

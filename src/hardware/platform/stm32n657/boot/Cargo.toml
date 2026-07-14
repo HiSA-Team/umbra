@@ -87,6 +87,9 @@ interenclave_evict = []
 # enclave (HIT), with a synchronous MemManage fallback if the enclave outruns it (FAULT).
 # The production enclave never misses (all blocks loaded+measured at create), so this can
 # only be a demonstrator. Enclave must still finish R0=0x72CA33A8. Default OFF. Never ship.
+# Mutually exclusive at runtime with the overlay chain (which is default via
+# `interenclave_overlay`); demonstrator builds should not rely on both being armed on the
+# same enclave.
 async_ess_miss = []
 
 # Inter-enclave OVERLAY: time-multiplex the tight 16 KB EFBC across TWO live enclaves that
@@ -96,8 +99,16 @@ async_ess_miss = []
 # enclaves stay ALIVE simultaneously and are switched by the host loop / SysTick preemption.
 # Enables the 32 KB of per-enclave backings. DEFAULT-ON (in `default` above): the kernel
 # time-multiplexes automatically — a no-op for single-enclave hosts (nothing to switch), an
-# automatic swap when a second enclave is created into the full window. No build flag needed.
+# automatic swap when a second enclave is created into the full window. The SysTick switch
+# uses the speculative non-blocking chunk chain by default (overlay_chain.rs);
+# `overlay_sync_switch` forces the old fully-synchronous behavior. No build flag needed.
 interenclave_overlay = []
+
+# Bisection aid for the overlay ASYNC switch: force every SysTick window switch to
+# complete synchronously (drain immediately after the sync prefix) instead of running
+# the background chunk chain. Functionally equivalent to the pre-async behavior;
+# CHAIN_HITS stays 0. Only meaningful together with `interenclave_overlay`.
+overlay_sync_switch = []
 
 # Profiles live at the workspace root since the boot crate absorbed
 # them. See /Cargo.toml [profile.dev] and [profile.release].

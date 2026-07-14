@@ -346,6 +346,17 @@ fi
 # when a second enclave is created into the full window. The two_enclaves host always drives it
 # (its Makefile defines -DUMBRA_OVERLAY unconditionally).
 
+# Force the overlay SysTick switch fully synchronous (bisection aid for the async chain).
+# Enable with `UMBRA_OVERLAY_SYNC_SWITCH=1` alongside UMBRA_INTERENCLAVE_OVERLAY=1.
+if [ "${UMBRA_OVERLAY_SYNC_SWITCH:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features overlay_sync_switch"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},overlay_sync_switch"
+    fi
+    echo -e "${SUCCESS}[overlay-sync-switch] overlay switch forced SYNCHRONOUS (bisection)${VANILLA}"
+fi
+
 export UMBRA_CACHE_ZERO_MODE=${UMBRA_CACHE_ZERO_MODE:-0}
 if [ "$UMBRA_CACHE_ZERO_MODE" = "1" ]; then
     if [ -z "$BOOT_FEATURES" ]; then

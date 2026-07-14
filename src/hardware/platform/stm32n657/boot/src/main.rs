@@ -40,6 +40,8 @@ mod handlers;
 mod key_derivation;
 // Async speculative prefetch engine (background HPDMA1 load + TC IRQ + PendSV install).
 mod prefetch;
+#[cfg(feature = "interenclave_overlay")]
+mod overlay_chain;
 mod master_key;
 mod raw_print;
 // `validator` module implements per-block HMAC + decrypt validation used at
