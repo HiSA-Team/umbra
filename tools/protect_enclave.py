@@ -719,34 +719,45 @@ def main():
             'reachable_display': list(blk['reachable']),
         })
 
-    # Pass 2: Simulate the kernel's BFS fold order. Mirrors api_impl.rs's
-    # `umbra_enclave_create_imp` lines 100-159 — start at block 0, walk
-    # reachables in meta order (already sorted), skipping visited and
-    # out-of-range entries. Folding chain in this order is fix #4 from prior
-    # session findings; without it, host folds [0..num_blocks-1] in numeric
-    # order while kernel folds only the BFS-reachable subset, causing
-    # chained-measurement FAIL whenever the call graph leaves any block
-    # un-reached (e.g. prime's block 2 when block 1 ends with `pop {pc}`
-    # and has no branch to block 2).
+    # Pass 2: fold the chained measurement in the SAME order the target kernel
+    # recomputes it at create — otherwise the stamped HMAC never matches.
+    #
+    #   * L552/L562 kernels BFS-walk from block 0 (their `umbra_enclave_create_imp`
+    #     has an explicit reachability queue) and fold ONLY the BFS-reached subset.
+    #   * The N657 kernel folds EVERY block in plain numeric order 0..num_blocks-1
+    #     (api_impl.rs `umbra_enclave_create_imp` — no BFS). Select this with
+    #     UMBRA_NUMERIC_FOLD=1 (set by settings.sh for N657).
+    #
+    # Without the numeric option, any enclave whose call graph leaves a block
+    # un-reached by BFS (e.g. ammunition: 23 unreached blocks; prime's block 2 when
+    # block 1 ends `pop {pc}`) mismatches the N657 numeric recompute → chained-
+    # measurement FAIL. fib passes on either path only because its BFS order
+    # happens to equal numeric order.
     if chained_mode:
-        bfs_visit_order = []
-        bfs_visited = {0}
-        bfs_queue = [0]
-        while bfs_queue:
-            idx = bfs_queue.pop(0)
-            bfs_visit_order.append(idx)
-            for r in per_block[idx]['reachable_in_meta']:
-                if r not in bfs_visited and r < num_blocks:
-                    bfs_visited.add(r)
-                    bfs_queue.append(r)
+        numeric_fold = os.environ.get("UMBRA_NUMERIC_FOLD", "0") == "1"
+        if numeric_fold:
+            fold_order = list(range(num_blocks))
+        else:
+            bfs_visited = {0}
+            bfs_queue = [0]
+            fold_order = []
+            while bfs_queue:
+                idx = bfs_queue.pop(0)
+                fold_order.append(idx)
+                for r in per_block[idx]['reachable_in_meta']:
+                    if r not in bfs_visited and r < num_blocks:
+                        bfs_visited.add(r)
+                        bfs_queue.append(r)
 
-        for idx in bfs_visit_order:
+        for idx in fold_order:
             chain_state = hmac.new(chain_state, per_block[idx]['binding_input'], hashlib.sha256).digest()
 
-        if bfs_visit_order != list(range(num_blocks)):
-            print(f"[Protect] BFS chain fold order: {bfs_visit_order} "
+        if numeric_fold:
+            print(f"[Protect] Numeric chain fold (N657): all {num_blocks} blocks 0..{num_blocks - 1}")
+        elif fold_order != list(range(num_blocks)):
+            print(f"[Protect] BFS chain fold order: {fold_order} "
                   f"(numeric would be {list(range(num_blocks))})")
-            unreached = sorted(set(range(num_blocks)) - set(bfs_visit_order))
+            unreached = sorted(set(range(num_blocks)) - set(fold_order))
             if unreached:
                 print(f"[Protect] Unreached-by-BFS blocks (NOT in chain): {unreached}")
 

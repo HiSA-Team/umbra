@@ -21,6 +21,9 @@ use kernel::common::enclave::{
 use kernel::common::ess::{
     enclave_psp_top, EfbDescriptor, ENCLAVE_PSP_STACK_SIZE, MAX_EFBS, MAX_ENCLAVES_CTX,
 };
+// The shared 16 KB EFBC window base — both overlay enclaves live here, time-multiplexed.
+#[cfg(feature = "interenclave_overlay")]
+use kernel::common::ess::ESS_BASE;
 
 use crate::secure_kernel::{
     Kernel, BLOCK_META_OFFSET, BLOCK_META_SIZE, CODE_BLOCK_SIZE, TOTAL_BLOCK_SIZE,
@@ -173,6 +176,43 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         Some(n) => n,
         None => return nsc_status(UmbraError::OffsetOverflow),
     };
+
+    // Lazy reap: free the EFBC window + registration slot of any already-terminated
+    // (or faulted) enclave before allocating. `terminate` leaves them live so the NS
+    // host can read their result via `umbra_enclave_status` post-terminate; this is
+    // where they are actually freed, so a fresh create can reuse the tight 16 KB /
+    // 64-block N657 window (running two enclaves in one boot otherwise leaks the slots
+    // → EssRegionExhausted on the 2nd create). `.as_ref().map` copies the extent so the
+    // shared borrow ends before the mutable release. create re-inits the reused
+    // context to `Ready` below, so a reaped slot is clean for the new enclave.
+    for i in 0..MAX_ENCLAVES_CTX {
+        let done = matches!(
+            kernel.enclave_contexts[i].status,
+            EnclaveState::Terminated | EnclaveState::Faulted
+        );
+        if !done {
+            continue;
+        }
+        let extent = kernel.ess.loaded_enclaves[i]
+            .as_ref()
+            .map(|le| (le.start_address, le.descriptor.code_size));
+        if let Some((start, size)) = extent {
+            kernel.ess.release(start, size);
+            kernel.ess.loaded_enclaves[i] = None;
+        }
+    }
+
+    // Overlay: the two live enclaves share the ESS window (both blobs linked to ESS_BASE); the
+    // 2nd enclave's `allocate` would fail (window full of the 1st), so bypass the allocator,
+    // evict the currently-resident enclave's image → its SRAM backing (it survives there for a
+    // restore-on-enter), and load THIS enclave fresh at ESS_BASE. Non-overlay builds keep the
+    // normal per-enclave bump allocation.
+    #[cfg(feature = "interenclave_overlay")]
+    let ess_addr = {
+        unsafe { crate::prefetch::overlay::evict_current(ESS_BASE) };
+        ESS_BASE
+    };
+    #[cfg(not(feature = "interenclave_overlay"))]
     let ess_addr = match kernel.ess.allocate(total_ram_needed) {
         Ok(addr) => addr,
         Err(e) => return nsc_status(e),
@@ -257,6 +297,14 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
                 if floor == 0 {
                     crate::raw_print::print_str("[UMBRASecureBoot] rollback floor cold (0) — VBAT-trust assumed\r\n");
                 }
+                // Always confirm on the UART, cold or not — a silent pass on a
+                // non-zero floor was indistinguishable from the feature being
+                // compiled out entirely, which cost a debugging round-trip.
+                crate::raw_print::print_str("[UMBRASecureBoot] enclave version OK (author=");
+                crate::raw_print::print_hex(author_id);
+                crate::raw_print::print_str(", version=");
+                crate::raw_print::print_hex(v);
+                crate::raw_print::print_str(")\r\n");
             }
         }
     }
@@ -305,6 +353,10 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         }
         idx
     };
+    // Overlay: this enclave's image is now loaded fresh at ESS_BASE — mark it resident so the
+    // next create/enter evicts it before reusing the window.
+    #[cfg(feature = "interenclave_overlay")]
+    crate::prefetch::overlay::set_resident(enclave_idx);
     if enclave_idx < MAX_ENCLAVES_CTX {
         let psp_top = enclave_psp_top(enclave_idx);
         let frame_base = psp_top - 32; // 8 words × 4 bytes
@@ -336,12 +388,63 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
             status: EnclaveState::Ready,
             result: 0,
         };
+
+        // State-continuity restore hook: if a checkpoint for this enclave
+        // survived a reset, restore it over the fresh context so the following
+        // `enter` RESUMES from the yield point (its status comes back Suspended,
+        // which `umbra_enclave_enter_imp` already treats as resume) instead of
+        // cold-starting at the entry point. A cold anchor short-circuits with no
+        // flash read; a mismatched/replayed anchor returns false -> fresh start.
+        // state_root is Copy, so snapshot it to avoid borrowing kernel twice.
+        let state_root = kernel.state_root;
+        if crate::secure_kernel::state_checkpoint::restore_enclave(
+            assigned_id,
+            enclave_idx,
+            &mut kernel.enclave_contexts[enclave_idx],
+            &state_root,
+        ) {
+            crate::raw_print::print_str("[SC] create: resumed enclave from checkpoint\r\n");
+        }
     }
 
     unsafe {
         NEXT_ENCLAVE_ID += 1;
     }
     assigned_id
+}
+
+/// Reprogram MPU regions 4 (enclave stack) and 5 (enclave code) for `enclave_idx` — the ONLY
+/// per-enclave regions (6-9 are fixed shared/NPU windows, identical for every enclave). The
+/// Phase 4.2 SysTick overlay scheduler context-switches to another enclave WITHOUT returning
+/// through `umbra_enclave_enter_imp`, so its per-enclave stack region (`enclave_psp_top(idx)`)
+/// and code extent (`start_address + code_size`) must be reloaded here or the exception-return
+/// unstacking from the incoming enclave's PSP faults MemManage (MUNSTKERR, CFSR bit 3). Mirrors
+/// the regions-4/5 block inside `umbra_enclave_enter_imp`.
+#[cfg(feature = "interenclave_overlay")]
+pub(crate) unsafe fn overlay_reconfigure_mpu(
+    kernel: &crate::secure_kernel::Kernel,
+    enclave_idx: usize,
+) {
+    let mpu_rbar = MPU_RBAR;
+    let mpu_rlar = MPU_RLAR;
+    let mpu_rnr = MPU_RNR;
+
+    let psp_base = enclave_psp_top(enclave_idx) - ENCLAVE_PSP_STACK_SIZE;
+    let psp_limit = enclave_psp_top(enclave_idx) - 1;
+    core::ptr::write_volatile(mpu_rnr, 4);
+    core::ptr::write_volatile(mpu_rbar, (psp_base & 0xFFFF_FFE0) | (0b01 << 1) | 0x01);
+    core::ptr::write_volatile(mpu_rlar, (psp_limit & 0xFFFF_FFE0) | 0x01);
+
+    if let Some(le) = &kernel.ess.loaded_enclaves[enclave_idx] {
+        let code_base = le.start_address;
+        let code_limit = code_base + le.descriptor.code_size - 1;
+        core::ptr::write_volatile(mpu_rnr, 5);
+        core::ptr::write_volatile(mpu_rbar, (code_base & 0xFFFF_FFE0) | (0b01 << 1));
+        core::ptr::write_volatile(mpu_rlar, (code_limit & 0xFFFF_FFE0) | 0x01);
+    }
+
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
 }
 
 #[no_mangle]
@@ -395,6 +498,16 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
 
     kernel.current_enclave_id = Some(enclave_id);
 
+    // Overlay: if this enclave is not the one currently in the shared 16 KB EFBC window, switch
+    // — evict the resident enclave's image → its SRAM backing and restore THIS enclave's image ←
+    // its backing (whole-window DMA). The first enter right after create is a no-op (create
+    // marked it resident). Region 5 + the context frame below then resume this enclave on its
+    // just-restored code. Driven per-enter by the host loop (and, later, SysTick preemption).
+    #[cfg(feature = "interenclave_overlay")]
+    unsafe {
+        crate::prefetch::overlay::make_resident(enclave_idx, ESS_BASE, false);
+    }
+
     // Configure MPU regions 4 (stack) and 5 (code) for unprivileged access.
     // The enclave runs with CONTROL.PRIV=0 so the default memory map
     // (PRIVDEFENA=1) does not apply — explicit MPU regions are mandatory.
@@ -421,8 +534,31 @@ pub extern "C" fn umbra_enclave_enter_imp(enclave_id: u32) -> u32 {
             let code_base = le.start_address;
             let code_limit = code_base + le.descriptor.code_size - 1;
             core::ptr::write_volatile(mpu_rnr, 5);
-            core::ptr::write_volatile(mpu_rbar, (code_base & 0xFFFF_FFE0) | (0b11 << 1));
+            // Region 5: enclave code+data, AP=0b01 (RW any privilege), XN=0 (executable) —
+            // mirrors L552 enclave_enter.rs. Under `-fpic -mpic-data-is-text-relative` the
+            // enclave's .data/.bss are text-relative, i.e. inside this image; a RO region
+            // (the old 0b11) faults any global write (DACCVIOL) — real enclaves with globals
+            // (ammunition) need RW here. HARDENING TODO: split .text (RO+exec) from .data/.bss
+            // (RW+XN) via a linker boundary symbol so code stays non-writable (no self-modify).
+            core::ptr::write_volatile(mpu_rbar, (code_base & 0xFFFF_FFE0) | (0b01 << 1));
             core::ptr::write_volatile(mpu_rlar, (code_limit & 0xFFFF_FFE0) | 0x01);
+            // Phase 2b probe: hide the entry block by shrinking region 5 — the enclave's
+            // first fetch faults MemManage, and the handler restores + resumes. Proves the
+            // MPU trap+restore (the sync data trap the RISAF cannot give).
+            #[cfg(feature = "mpu_evict_probe")]
+            crate::prefetch::mpu_evict::evict_front(code_base, code_limit, 256);
+            // Inter-enclave eviction Step 1: evict A's EFBC → ESS, scramble, restore →
+            // proves the round-trip preserves the enclave (the feasible eviction on N657).
+            #[cfg(feature = "interenclave_evict")]
+            if crate::prefetch::inter_evict::round_trip(code_base, le.descriptor.code_size) {
+                crate::raw_print::print_str("[INTER-EVICT] EFBC evict->ESS->restore round-trip done\n");
+            }
+            // Async ESS-miss demonstrator: evict the enclave's back half to a backing +
+            // MPU-hide it, then async-restore it in the BACKGROUND while the enclave runs its
+            // front half. The prefetch reveals the tail (HIT) or the enclave faults into it
+            // first and the fallback restores synchronously (FAULT) — either way it completes.
+            #[cfg(feature = "async_ess_miss")]
+            crate::prefetch::async_ess::arm(code_base, code_limit, le.descriptor.code_size);
         }
         // Region 6: INPUT_SHARED (host writes 224×224×3 image, enclave
         // reads). RW unprivileged, no execute. Backed by the INPUT_SHARED

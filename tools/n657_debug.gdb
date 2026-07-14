@@ -1,7 +1,7 @@
 # N657 source-level debug — loads BOTH symbol tables so functions resolve in
 # every world the CPU can be in:
 #   Secure FSBL/boot  @ 0x3418_xxxx   (this ELF, `file` below)
-#   NS host           @ 0x2400_0100   (bare_metal.elf, add-symbol-file)
+#   NS host           @ 0x2400_0100   ($HOST_APP.elf, add-symbol-file injected by xtask)
 #   enclave code      @ 0x2401_0000+  (part of the NS host image)
 #
 # Usage (interactive — do NOT pass -batch):
@@ -11,9 +11,9 @@
 #      ^ -nx skips ~/.gdbinit (its Python breaks the Arm GDB build → harmless
 #        "Scripting in the Python language is not supported" error otherwise).
 #
-# If HOST_APP != bare_metal (object_detection / freertos), change the
-# add-symbol-file path + the 0x24000100 .text VMA (check with
-#   arm-none-eabi-objdump -h host/stm32n657/<app>/bin/<app>.elf | grep .text).
+# The NS host ELF is chosen automatically from HOST_APP by `cargo xtask flash n657` (it appends
+# the add-symbol-file -ex), so two_enclaves / object_detection / freertos just work. Only a
+# MANUAL `gdb -x` launch needs the -ex appended by hand (see the note further down).
 
 set pagination off
 set confirm off
@@ -26,8 +26,13 @@ set print pretty on
 # is a stale leftover (pre platform_impl.rs->platform_impl/ refactor) whose
 # DWARF points at a source layout that no longer exists ("No such file").
 file target/thumbv8m.main-none-eabi/release/umbra-n657-boot
-# NS host symbols — .text VMA is the link/run address (objdump -h says 0x24000100).
-add-symbol-file host/stm32n657/bare_metal/bin/bare_metal.elf 0x24000100
+# NS host symbols are injected by `cargo xtask flash n657` as a TRAILING
+#   -ex "add-symbol-file host/stm32n657/$HOST_APP/bin/$HOST_APP.elf 0x24000100"
+# (chosen from HOST_APP; .text VMA 0x24000100 for every N657 host). It runs AFTER this `file`
+# so the boot symbols are not discarded. For a MANUAL launch (without xtask) append that -ex
+# yourself, e.g. for two_enclaves:
+#   arm-none-eabi-gdb -nx -x tools/n657_debug.gdb \
+#     -ex "add-symbol-file host/stm32n657/two_enclaves/bin/two_enclaves.elf 0x24000100"
 
 # Don't dive into stdlib/core internals on `step` (e.g. core::ptr::write_volatile
 # -> ub_checks.rs). Use `n`/`next` to step over calls; `s`/`step` only enters

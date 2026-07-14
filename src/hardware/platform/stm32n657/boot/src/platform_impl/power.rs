@@ -162,6 +162,37 @@ pub fn init_kernel() {
                 }
             }
 
+            // HW SHA-256 known-answer test: SHA-256("abc") must equal the FIPS-180-4
+            // vector. Proves the HASH-peripheral digest is CORRECT (not merely
+            // deterministic — the state-continuity round-trip alone can't tell the
+            // difference). Fail-closed: a wrong digest silently corrupts the chained
+            // measurement and the state roots that depend on it.
+            {
+                let mut kat = [0u8; 32];
+                drivers::hash::Hash::new().sha256(b"abc", &mut kat);
+                const SHA256_ABC: [u8; 32] = [
+                    0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d,
+                    0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10,
+                    0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+                ];
+                if kat == SHA256_ABC {
+                    crate::raw_print::print_str("[UMBRASecureBoot] SHA-256 HW KAT: PASS\n");
+                } else {
+                    crate::raw_print::print_str("[UMBRASecureBoot] SHA-256 HW KAT: FAIL — halt\n");
+                    loop {
+                        core::hint::spin_loop();
+                    }
+                }
+                // Non-zero => the HASH DCIS interrupt fired during the KAT (thread
+                // context). The checkpoint (SVC handler) hits are inspectable via GDB
+                // on `drivers::crypto_wait::HASH_IRQ_HITS`.
+                crate::raw_print::print_str("[UMBRASecureBoot] HASH IRQ hits: ");
+                crate::raw_print::print_hex(
+                    drivers::crypto_wait::HASH_IRQ_HITS.load(core::sync::atomic::Ordering::SeqCst),
+                );
+                crate::raw_print::print_str("\n");
+            }
+
             // issue #45: wrap the derived enc_key under DHUK and share it to
             // CRYP over the SAES silicon bus, so the AES key reaches CRYP off
             // the CPU register path. Runs here (after init_keys) because that is
@@ -205,5 +236,18 @@ pub fn init_kernel() {
         core::ptr::write_volatile(0x5600_4800 as *mut u32, 0xAAAA_u32);
 
         crate::raw_print::print_str("[UMBRASecureBoot] Kernel Initialized\n");
+
+        // Async prefetch engine self-test: kick a BACKGROUND copy and confirm the
+        // DMA→TC-IRQ→PendSV chain fired on its own (hits ≥ 1) and the bytes match — the
+        // install (cache maintenance) ran in PendSV, not inline. Dev diagnostic.
+        let (pf_hits, pf_ok) = crate::prefetch::self_test();
+        crate::raw_print::print_str("[UMBRASecureBoot] prefetch async: hits=");
+        crate::raw_print::print_hex(pf_hits);
+        crate::raw_print::print_str(if pf_ok { " bytes=OK\n" } else { " bytes=DIFF\n" });
+
+        // Phase 2a: probe the RISAF data-read trap (safe-eviction primitive). Halts on the
+        // fault — reveals which fault fires so the eviction-miss recovery can hook it.
+        #[cfg(feature = "eviction_probe")]
+        crate::prefetch::risaf_trap_probe();
     }
 }

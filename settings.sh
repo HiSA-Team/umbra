@@ -191,6 +191,12 @@ elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export UMBRA_VERSION_BIND=${UMBRA_VERSION_BIND:-1}
     export UMBRA_AUTHOR_ID=${UMBRA_AUTHOR_ID:-1}
     export UMBRA_ENCLAVE_VERSION=${UMBRA_ENCLAVE_VERSION:-2}
+    # The N657 kernel folds the chained measurement in plain NUMERIC block order
+    # (api_impl.rs `umbra_enclave_create_imp` — no BFS), unlike L552/L562 which
+    # BFS-walk. protect_enclave.py must sign in the same order or any enclave with
+    # a block un-reached by BFS (e.g. ammunition) hits `chained-measurement FAIL`.
+    # N657-only; L552/L562/RISC-V keep the default BFS fold.
+    export UMBRA_NUMERIC_FOLD=${UMBRA_NUMERIC_FOLD:-1}
     if [ "$UMBRA_VERSION_BIND" = "1" ]; then
         export BOOT_FEATURES="--features enclave_version_bind"
     else
@@ -255,6 +261,100 @@ if [ "${UMBRA_XSPI_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
         export BOOT_FEATURES="${BOOT_FEATURES},xspi_write_probe"
     fi
     echo -e "${SUCCESS}[xspi-probe] on-chip XSPI2 write-path probe ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: runtime-integration demo — the REAL enclave checkpoint/restore module
+# driven with the REAL device state_root across a reset. Enable with
+# `UMBRA_STATE_DEMO=1 cargo xtask flash n657`. Prints [RD] over UART. N657-only; never ship.
+if [ "${UMBRA_STATE_DEMO:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features state_runtime_demo"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},state_runtime_demo"
+    fi
+    echo -e "${SUCCESS}[state-demo] enclave state runtime-integration demo ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: pause the enclave at its first cold block checkpoint so the resume across a
+# reset is observable by hand. Enable with `UMBRA_CKPT_RESET_DEMO=1 cargo xtask flash
+# n657`. Prints [SC] cold checkpoint ... press RST. Never ship.
+if [ "${UMBRA_CKPT_RESET_DEMO:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features checkpoint_reset_demo"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},checkpoint_reset_demo"
+    fi
+    echo -e "${SUCCESS}[ckpt-reset-demo] pause at first block checkpoint for RST ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: probe the RISAF data-read trap (safe-eviction primitive). Enable with
+# `UMBRA_EVICTION_PROBE=1 cargo xtask flash n657`. Protects a 4KB scratch + reads it →
+# the fault dump reveals BusFault vs SecureFault. HALTS on the fault. N657-only; never ship.
+if [ "${UMBRA_EVICTION_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features eviction_probe"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},eviction_probe"
+    fi
+    echo -e "${SUCCESS}[eviction-probe] RISAF data-trap probe ENABLED (halts on fault; do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: MPU hide+restore eviction probe. Enable with
+# `UMBRA_MPU_EVICT_PROBE=1 cargo xtask flash n657`. Hides the enclave entry block via MPU;
+# the first fetch faults MemManage → handler restores + resumes. Prints [MPU-EVICT] restore.
+# Enclave should still finish R0=0x72CA33A8. N657-only; never ship.
+if [ "${UMBRA_MPU_EVICT_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features mpu_evict_probe"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},mpu_evict_probe"
+    fi
+    echo -e "${SUCCESS}[mpu-evict-probe] MPU hide+restore eviction probe ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: inter-enclave eviction round-trip. Enable with
+# `UMBRA_INTERENCLAVE_EVICT=1 cargo xtask flash n657`. Evicts the enclave EFBC->ESS via async
+# DMA, scrambles it, restores it; the enclave must still finish R0=0x72CA33A8. Prints
+# [INTER-EVICT]. N657-only; never ship.
+if [ "${UMBRA_INTERENCLAVE_EVICT:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features interenclave_evict"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},interenclave_evict"
+    fi
+    echo -e "${SUCCESS}[interenclave-evict] EFBC<->ESS eviction round-trip ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: async ESS-miss demonstrator. Enable with
+# `UMBRA_ASYNC_ESS_MISS=1 cargo xtask flash n657`. Evicts the enclave's back half to a backing
+# + MPU-hides it, then async-restores it in the BACKGROUND while the enclave runs its front
+# half — the async engine driving a real block recovery under a running enclave, with a
+# synchronous MemManage fallback if the enclave outruns it. Prints [ASYNC-ESS] (hits/faults);
+# the enclave must still finish R0=0x72CA33A8. N657-only; never ship.
+if [ "${UMBRA_ASYNC_ESS_MISS:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features async_ess_miss"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},async_ess_miss"
+    fi
+    echo -e "${SUCCESS}[async-ess-miss] async prefetch under running enclave ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# Inter-enclave OVERLAY: the N657 kernel time-multiplexes the 16 KB EFBC across live enclaves
+# AUTOMATICALLY — `interenclave_overlay` is in the boot crate's default features, so no build
+# flag is needed. It is a no-op for single-enclave hosts and an automatic evict/restore swap
+# when a second enclave is created into the full window. The two_enclaves host always drives it
+# (its Makefile defines -DUMBRA_OVERLAY unconditionally).
+
+# Force the overlay SysTick switch fully synchronous (bisection aid for the async chain).
+# Enable with `UMBRA_OVERLAY_SYNC_SWITCH=1` alongside UMBRA_INTERENCLAVE_OVERLAY=1.
+if [ "${UMBRA_OVERLAY_SYNC_SWITCH:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features overlay_sync_switch"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},overlay_sync_switch"
+    fi
+    echo -e "${SUCCESS}[overlay-sync-switch] overlay switch forced SYNCHRONOUS (bisection)${VANILLA}"
 fi
 
 export UMBRA_CACHE_ZERO_MODE=${UMBRA_CACHE_ZERO_MODE:-0}
@@ -532,7 +632,8 @@ echo -e ""
 echo -e "${BOLD}Configuring Host information${VANILLA}"
 
 # Host application selection
-# Options: bare_metal (default), freertos, object_detection (N657 only)
+# Options: bare_metal (default), freertos, object_detection (N657 only),
+#          two_enclaves (N657 only)
 # Usage: export HOST_APP=object_detection && source ./settings.sh
 #
 # The host tree is organized by target platform (see issue #40):
@@ -552,9 +653,9 @@ if [ "$MCU_VARIANT" = "riscv32" ]; then
     esac
 elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     case "$HOST_APP" in
-        bare_metal|freertos|object_detection) ;;
+        bare_metal|freertos|object_detection|two_enclaves) ;;
         *)
-            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for N657: $HOST_APP (expected bare_metal, freertos, or object_detection)${VANILLA}"
+            echo -e "${FAILURE}[host_selection] Unknown HOST_APP for N657: $HOST_APP (expected bare_metal, freertos, object_detection, or two_enclaves)${VANILLA}"
             return 1
             ;;
     esac

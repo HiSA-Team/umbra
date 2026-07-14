@@ -1,22 +1,16 @@
-//! Enclave state-continuity: checkpoint/restore of a running enclave's resumable
-//! state (runtime integration 2/4). Serializes `EnclaveContext` (the saved regs +
-//! PSP/LR/CONTROL) and the enclave's PSP stack, AES-CTR encrypts with `enc_key`,
-//! writes the ciphertext to the flash state region, and commits the double-buffered
-//! TAMP anchor with a root keyed by the STABLE `state_root` (HMAC over the sector
-//! digests). Restore reverses it: verify the anchor root over the persisted flash,
-//! decrypt, and deserialize back into the context + stack.
-//!
-//! All the HW landmines proven during bring-up apply and are handled by the layers
-//! below: write ALL 16 sectors (un-erased NOR reads non-deterministically), D-cache
-//! invalidate per `read_digest`, restore the 1-1-1 mem-map config after each write,
-//! and key the root with a STABLE secret (state_root, not the ephemeral enc_key).
+//! Enclave state-continuity: checkpoint/restore of a running enclave. Serializes the
+//! `EnclaveContext` + PSP stack, AES-CTR encrypts, writes the flash state region, and
+//! commits the double-buffered TAMP anchor with a root keyed by the stable `state_root`.
+//! Restore verifies the root over the persisted flash, decrypts, and deserializes back.
 
 use drivers::aes::AesEngine; // brings ctr_xform into scope
 use drivers::state_anchor::StateAnchor;
 use drivers::state_flash::{self, STATE_REGION_BASE};
 use kernel::common::enclave::EnclaveContext;
 use kernel::common::ess::{enclave_psp_top, ENCLAVE_PSP_STACK_SIZE};
-use kernel::key_storage_server::state_checkpoint::{checkpoint, restore, RestoreDecision, SectorStore};
+use kernel::key_storage_server::state_checkpoint::{
+    checkpoint, restore, AnchorStore, RestoreDecision, SectorStore,
+};
 use kernel::key_storage_server::state_continuity::STATE_SECTOR_SIZE;
 use kernel::key_storage_server::state_root::ROOT_PREIMAGE_LEN;
 
@@ -34,14 +28,16 @@ const SNAPSHOT_SECTORS: usize = (SNAPSHOT_BYTES + STATE_SECTOR_SIZE - 1) / STATE
 
 // Plaintext/ciphertext scratch for the snapshot, sized to whole sectors. Static
 // (.bss) — the FSBL stack is shallow, and a const-init static would blow .rodata.
-static mut SNAP: [u8; SNAPSHOT_SECTORS * STATE_SECTOR_SIZE] =
-    [0u8; SNAPSHOT_SECTORS * STATE_SECTOR_SIZE];
+// Word-aligned (via the wrapper) so the DMA-fed CTR (`ctr_xform`) can address it — HPDMA
+// word transfers need a word-aligned base, and a bare `static [u8; N]` is align-1.
+#[repr(C, align(4))]
+struct SnapBuf([u8; SNAPSHOT_SECTORS * STATE_SECTOR_SIZE]);
+static mut SNAP: SnapBuf = SnapBuf([0u8; SNAPSHOT_SECTORS * STATE_SECTOR_SIZE]);
 // One reused sector page for staging to flash.
 static mut PAGE: [u8; STATE_SECTOR_SIZE] = [0u8; STATE_SECTOR_SIZE];
 
-/// CTR IV for an enclave's snapshot. ponytail: fixed per enclave (id in bytes 0..4) —
-/// keystream reuse across checkpoints of the same enclave is a v1 limitation; harden
-/// with a generation-derived nonce once the flow is proven.
+/// CTR IV for an enclave's snapshot — fixed per enclave (id in bytes 0..4). v1
+/// limitation: keystream reuse across checkpoints; a generation-derived nonce would fix it.
 fn snapshot_iv(enclave_id: u32) -> [u8; 16] {
     let mut iv = [0u8; 16];
     iv[..4].copy_from_slice(&enclave_id.to_le_bytes());
@@ -66,7 +62,7 @@ impl SectorStore for EnclaveFlashStore {
             let page = &mut *core::ptr::addr_of_mut!(PAGE);
             let start = idx * STATE_SECTOR_SIZE;
             if start < SNAPSHOT_SECTORS * STATE_SECTOR_SIZE {
-                let snap = &*core::ptr::addr_of!(SNAP);
+                let snap = &(*core::ptr::addr_of!(SNAP)).0;
                 page.copy_from_slice(&snap[start..start + STATE_SECTOR_SIZE]);
             } else {
                 page.fill(0);
@@ -83,7 +79,10 @@ impl SectorStore for EnclaveFlashStore {
             unsafe { core::slice::from_raw_parts(addr as *const u8, STATE_SECTOR_SIZE) };
         let mut hash = drivers::hash::Hash::new();
         let mut out = [0u8; 32];
-        hash.sha256(bytes, &mut out);
+        // HW HASH fed by HPDMA1: the root covers 16 × 4 KB sectors, so DMA-feeding
+        // offloads ~1 K CPU word-writes per sector (HW-verified byte-identical to the CPU
+        // path — see the flash cross-check in dhuk_provision). Firmware-only; boot is arm.
+        hash.sha256_dma(bytes, &mut out);
         out
     }
 }
@@ -109,7 +108,7 @@ fn hw_hmac(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 /// SAFETY: reads `ENCLAVE_PSP_STACK_SIZE` bytes from the enclave's PSP stack region,
 /// which the caller guarantees is mapped and belongs to this enclave.
 unsafe fn serialize_and_encrypt(enclave_id: u32, enclave_idx: usize, ctx: &EnclaveContext) {
-    let snap = &mut *core::ptr::addr_of_mut!(SNAP);
+    let snap = &mut (*core::ptr::addr_of_mut!(SNAP)).0;
     // context raw bytes
     let ctx_bytes = core::slice::from_raw_parts(ctx as *const _ as *const u8, CTX_BYTES);
     snap[..CTX_BYTES].copy_from_slice(ctx_bytes);
@@ -158,7 +157,7 @@ pub fn restore_enclave(
     // SAFETY: Secure single-threaded context; reads the committed flash into SNAP,
     // decrypts, and writes the enclave's own context + PSP stack.
     unsafe {
-        let snap = &mut *core::ptr::addr_of_mut!(SNAP);
+        let snap = &mut (*core::ptr::addr_of_mut!(SNAP)).0;
         // read the committed ciphertext from flash into SNAP
         let a = match StateAnchor::new().load() {
             Some(a) => a,

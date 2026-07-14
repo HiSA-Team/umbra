@@ -10,9 +10,10 @@
 //! - **CJ2 chained-measurement** — N657 uses SW SHA-256 from
 //! `drivers::hash` (see that module's doc for the RIFSC history).
 //! Bypassing or reordering the chain breaks the root of trust.
-//! - **D-cache coherency** — `load_block_n657` issues `DCCMVAC` per
-//! 32-byte line + `ICIALLU` + `DSB` + `ISB` after copying. Skipping
-//! any step produces MMFSR.IACCVIOL at the enclave's first PC.
+//! - **D-cache coherency** — `load_block_n657` DMAs the block, then INVALIDATES the
+//! slot's D-cache lines + `ICIALLU` + `DSB` + `ISB`. Invalidate (not clean): the DMA
+//! wrote RAM directly, so a clean would push stale lines over it. Skipping produces
+//! MMFSR.IACCVIOL at the enclave's first PC.
 //! - **`lookup_faulting_block` top boundary** — currently uses
 //! `efb_count * CODE_BLOCK_SIZE` (BFS-visited subset). The L552 fix
 //! to use `descriptor.code_size` (true ESS allocation) has not yet
@@ -23,7 +24,7 @@
 //! - **Panic-policy delegation** — every failure path delegates to
 //! `panic_policy::handle_fault()` per ADR 2026-panic-policy.
 
-use arm::mmio::{DCCMVAC, ICIALLU, SCB_ICSR, SYST_CSR, SYST_CVR, SYST_RVR};
+use arm::mmio::{ICIALLU, SCB_ICSR, SYST_CSR, SYST_CVR, SYST_RVR};
 use kernel::common::enclave::EnclaveContext;
 use kernel::common::ess::EnclaveSwapSpace;
 use kernel::key_storage_server::crypto::CryptoEngine;
@@ -320,36 +321,33 @@ impl Kernel {
             .and_then(|x| ess_base.checked_add(x))
             .ok_or(0xFFFFFFF7u32)? as *mut u8;
 
-        let mut i: u32 = 0;
-        while i < CODE_BLOCK_SIZE {
-            let b = core::ptr::read_volatile(code_src.add(i as usize));
-            core::ptr::write_volatile(ess_dst.add(i as usize), b);
-            i += 1;
+        // Load the block via HPDMA1 (mem-to-mem, flash→ESS) instead of a CPU byte loop.
+        // The source is the memory-mapped XSPI2 window (MCE-decrypted on read); the dest
+        // is the ESS slot in AXISRAM, whose RISAF admits only CID 1 — `set_channel_secure`
+        // presents it. Synchronous for now; this is the exact transfer the async prefetch
+        // pipeline (Phase 2) reuses under a TC-IRQ + PendSV install. A dedicated channel
+        // (2) keeps it clear of the crypto DMA channels (0/1).
+        const PREFETCH_CH: u8 = 2;
+        let dma = drivers::hpdma::Hpdma1::new();
+        drivers::hpdma::enable_clock();
+        dma.set_channel_secure(PREFETCH_CH);
+        dma.reset_channel(PREFETCH_CH);
+        dma.configure_mem_to_mem(PREFETCH_CH, code_src as u32, ess_dst as u32, CODE_BLOCK_SIZE);
+        dma.enable_channel(PREFETCH_CH);
+        let sr = dma.wait_complete(PREFETCH_CH, 4_000_000);
+        dma.clear_flags(PREFETCH_CH);
+        if (sr & drivers::hpdma::CH_TCF) == 0 {
+            return Err(0xFFFFFFF6); // DMA did not complete cleanly (error/timeout)
         }
 
-        // Cache coherency: with D-cache enabled, the writes above sit in
-        // D-cache. The enclave's instruction fetcher reads via I-cache
-        // directly from RAM (separate path) and would see stale bytes,
-        // faulting with MMFSR.IACCVIOL at the enclave's first PC.
-        // Fix: clean each just-written 32-byte cache line to PoC via DCCMVAC,
-        // then invalidate I-cache (ICIALLU) so the next fetch reloads from RAM.
-        // 256 B block = 8 cache lines, so 8 register writes — cheap.
-        // SCB offsets: DCCMVAC = 0x268, ICIALLU = 0x250 (cm55 ARM reference).
-        // C6 (cont'd): same offset as ess_dst above, but recomputed for
-        // the cache-coherency loop. Re-using ess_dst as u32 would work
-        // but keeps the cache loop's variable names + algebra
-        // identical to the original — preserved for readability.
-        let dst_base = ess_dst as u32;
-        let line_size: u32 = 32;
-        let aligned_start = dst_base & !(line_size - 1);
-        let end = dst_base.checked_add(CODE_BLOCK_SIZE).ok_or(0xFFFFFFF7u32)?;
+        // Cache coherency for a DMA-written CODE block. The DMA wrote the bytes straight
+        // to RAM, bypassing the CPU D-cache. INVALIDATE (not clean) the slot's D-cache
+        // lines: a clean would write any stale line back over the DMA's fresh bytes. Then
+        // invalidate the I-cache (ICIALLU) so the enclave's next fetch reloads from RAM,
+        // else it faults MMFSR.IACCVIOL at the first PC. A code slot is never CPU-written,
+        // so no dirty line is lost by the invalidate.
         cortex_m::asm::dsb();
-        let mut a = aligned_start;
-        while a < end {
-            core::ptr::write_volatile(DCCMVAC, a);
-            a += line_size;
-        }
-        cortex_m::asm::dsb();
+        drivers::hpdma::dcache_invalidate_range(ess_dst as usize, CODE_BLOCK_SIZE as usize);
         core::ptr::write_volatile(ICIALLU, 0);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();

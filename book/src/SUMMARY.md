@@ -44,6 +44,7 @@
 - [ADR 008 — RISC-V SPMP Arbitration](decisions/008-riscv-spmp-arbitration.md)
 - [ADR 009 — State Continuity Power-Session Boundary](decisions/009-state-continuity-power-session-boundary.md)
 - [ADR 010 — State-Continuity Commit (root-in-anchor)](decisions/010-state-continuity-commit-reconciliation.md)
+- [ADR 011 — Enclave Eviction Feasibility](decisions/011-enclave-eviction-feasibility.md)
 
 # Supported Hardware
 

@@ -29,6 +29,8 @@ host/stm32l552/freertos/bin/*
 host/stm32l552/freertos/obj/*
 host/stm32n657/bare_metal/bin/*
 host/stm32n657/bare_metal/obj/*
+host/stm32n657/two_enclaves/bin/*
+host/stm32n657/two_enclaves/obj/*
 host/stm32n657/freertos/bin/*
 host/stm32n657/freertos/obj/*
 host/stm32n657/object_detection/bin/*

@@ -71,6 +71,61 @@ pub fn provision_and_share_enc_key(enc_key: &[u8; 16]) {
 
     #[cfg(feature = "xspi_write_probe")]
     xspi_write_probe();
+
+    // Runtime-integration demo: drive the REAL enclave state_checkpoint module
+    // (checkpoint_enclave/restore_enclave) with the REAL MASTER_KEY-derived
+    // state_root, round-tripped across a reset. One notch above the driver probes.
+    #[cfg(feature = "state_runtime_demo")]
+    state_runtime_demo();
+}
+
+/// Runtime-integration proof: checkpoint an enclave context under the REAL device
+/// `state_root`, reset, then restore it and confirm the bytes survived. Exercises the
+/// same `checkpoint_enclave`/`restore_enclave` path the YIELD hook and (later) the
+/// ENTER hook use — but driven from a clean boot hook, so it needs no yielding enclave
+/// and no api_impl edit. Feature-gated — NEVER in a production image.
+#[cfg(feature = "state_runtime_demo")]
+fn state_runtime_demo() {
+    use crate::raw_print::{print_hex, print_str};
+    use crate::secure_kernel::state_checkpoint::{checkpoint_enclave, restore_enclave};
+    use drivers::state_anchor::StateAnchor;
+    use kernel::common::enclave::EnclaveContext;
+    use kernel::key_storage_server::state_checkpoint::AnchorStore; // brings load() into scope
+
+    let _ = crate::platform_impl::dma::init_external_flash();
+
+    // Recompute the device state_root exactly as init_keys does (HMAC(MASTER_KEY,
+    // STATE_ROOT_LABEL)) — self-contained, mirrors how DHUK derives with a fresh Hash.
+    let mut state_root = [0u8; 32];
+    let mut hash = Hash::new();
+    hash.hmac_sha256(
+        &crate::master_key::MASTER_KEY,
+        crate::key_derivation::STATE_ROOT_LABEL,
+        &mut state_root,
+    );
+
+    const DEMO_ID: u32 = 0xE5CA_0001;
+    const DEMO_IDX: usize = 0;
+    const MARKER: u32 = 0xC0FF_EE04;
+
+    // Phase = anchor presence: cold anchor -> boot 1 (checkpoint); present -> boot 2.
+    if StateAnchor::new().load().is_none() {
+        // SAFETY: EnclaveContext is repr(C) plain data; zeroed is a valid bit pattern
+        // for a snapshot. Stamp MARKER into byte 0 without depending on field names.
+        let mut ctx: EnclaveContext = unsafe { core::mem::zeroed() };
+        unsafe { core::ptr::write_volatile(&mut ctx as *mut _ as *mut u32, MARKER) };
+        let ok = checkpoint_enclave(DEMO_ID, DEMO_IDX, &ctx, &state_root);
+        print_str(if ok { "[RD] boot1 checkpoint OK m=" } else { "[RD] boot1 checkpoint FAIL m=" });
+        print_hex(MARKER);
+        print_str(" — press RST\n");
+    } else {
+        let mut ctx: EnclaveContext = unsafe { core::mem::zeroed() };
+        let ok = restore_enclave(DEMO_ID, DEMO_IDX, &mut ctx, &state_root);
+        let got = unsafe { core::ptr::read_volatile(&ctx as *const _ as *const u32) };
+        print_str(if ok { "[RD] boot2 Resume m=" } else { "[RD] boot2 Reject m=" });
+        print_hex(got);
+        print_str(if got == MARKER { " MATCH\n" } else { " MISMATCH\n" });
+    }
 }
 
 /// Flash-continuity probe: the full checkpoint → reset → restore loop over PERSISTED
@@ -85,6 +140,23 @@ fn xspi_write_probe() {
     // XSPI2 is not mapped yet at this point in boot — bring it up (idempotent).
     let _ = crate::platform_impl::dma::init_external_flash();
     print_str("[FC] mm ready\n");
+
+    // Independent proof the DMA reads the memory-mapped XSPI2 window correctly — the
+    // real read_digest source, a different firewall path than the AXISRAM the KAT
+    // exercised. Hash sector (0,0) via the CPU and via the DMA and compare: a silent
+    // RISAF/CID drop on the flash read would make the two digests differ. (A probe that
+    // only checkpoints-then-restores via DMA is self-consistent and can't catch this.)
+    if let Ok(a) = drivers::state_flash::state_sector_addr(0, 0) {
+        drivers::state_flash::invalidate_dcache_region(a, 4096);
+        // SAFETY: mapped XSPI2 window, read-only, one 4 KB sector.
+        let b = unsafe { core::slice::from_raw_parts(a as *const u8, 4096) };
+        let (mut c, mut d) = ([0u8; 32], [0u8; 32]);
+        drivers::hash::Hash::new().sha256(b, &mut c);
+        let sr = drivers::hash::Hash::new().sha256_dma(b, &mut d);
+        print_str("[FC] flash DMA vs CPU sr=");
+        print_hex(sr);
+        print_str(if c == d { " PASS\n" } else { " FAIL\n" });
+    }
     // Stable probe key across boots: enc_key is ephemeral (DHUK-wrapped, changes per
     // boot), so it can't key a root that must be re-verified after a reset. The real
     // integration keys this with the device MASTER_KEY.

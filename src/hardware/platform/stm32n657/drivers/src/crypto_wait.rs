@@ -17,7 +17,7 @@
 //! Register wiring (CMSIS `stm32n657xx.h`): `SAES_IER` @ 0x5402_1300 `CCFIE`
 //! bit 0; `SAES_IRQn` = 36 → NVIC ISER1 bit 4.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Set by the SAES completion ISR; cleared by [`arm`].
 pub static CRYPTO_DONE: AtomicBool = AtomicBool::new(false);
@@ -94,6 +94,101 @@ pub fn block_until_done(budget: u32) -> Result<(), CryptoWaitError> {
         left -= 1;
     }
     Ok(())
+}
+
+// ── HASH completion IRQ (SHA-256, HASH_IRQn = 39) ───────────────────────────
+// The plain-SHA-256 hot path (checkpoint `read_digest`) runs inside the SVC#2
+// exception handler, so the HASH IRQ must be able to PREEMPT SVC. Give HASH the
+// most-urgent priority (0x00) and lower SVC + SysTick to 0x40: they stay equal so
+// SysTick still can't preempt a running checkpoint, while HASH (0x00 < 0x40) can.
+// Enclave preemption by SysTick (SysTick < thread) is unaffected.
+
+/// Set by the HASH DCIS ISR; reset by [`hash_arm`].
+pub static HASH_DONE: AtomicBool = AtomicBool::new(false);
+/// Diagnostic: number of times the HASH ISR fired (proves the IRQ path works).
+pub static HASH_IRQ_HITS: AtomicU32 = AtomicU32::new(0);
+
+const HASH_IMR: u32 = 0x5402_0420; // DCIE = bit 1
+const HASH_SR_ADDR: u32 = 0x5402_0424; // DCIS = bit 1
+const HASH_IMR_DCIE: u32 = 1 << 1;
+const HASH_SR_DCIS: u32 = 1 << 1;
+const HASH_IRQ_BIT: u32 = 1 << (39 - 32); // HASH_IRQn = 39 -> ISER1 bit 7
+const NVIC_IPR39: u32 = 0xE000_E400 + 39; // per-IRQ priority byte for IRQ 39
+const SHPR2: u32 = 0xE000_ED1C; // SVCall priority in bits [31:24]
+const SHPR3: u32 = 0xE000_ED20; // SysTick priority in bits [31:24]
+const PRIO_LOWER: u32 = 0x40; // SVC + SysTick (level 4 of 16 with 4 prio bits)
+const HASH_WAIT_BUDGET: u32 = 2_000_000;
+
+static HASH_SETUP_DONE: AtomicBool = AtomicBool::new(false);
+
+/// One-time (idempotent): lower SVC + SysTick to 0x40 so the HASH IRQ (0x00) can
+/// preempt the SVC handler while SysTick still can't, give HASH the most-urgent
+/// priority, and enable its NVIC line.
+fn hash_irq_setup() {
+    if HASH_SETUP_DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // SAFETY: RMW the top priority byte of SHPR2/SHPR3 (SVCall/SysTick), set the
+    // HASH per-IRQ priority byte, clear stale pending, and enable the NVIC line.
+    unsafe {
+        let s2 = core::ptr::read_volatile(SHPR2 as *const u32);
+        core::ptr::write_volatile(SHPR2 as *mut u32, (s2 & 0x00FF_FFFF) | (PRIO_LOWER << 24));
+        let s3 = core::ptr::read_volatile(SHPR3 as *const u32);
+        core::ptr::write_volatile(SHPR3 as *mut u32, (s3 & 0x00FF_FFFF) | (PRIO_LOWER << 24));
+        core::ptr::write_volatile(NVIC_IPR39 as *mut u8, 0x00); // HASH most-urgent
+        core::ptr::write_volatile(NVIC_ICPR1 as *mut u32, HASH_IRQ_BIT); // clear stale pending
+        core::ptr::write_volatile(NVIC_ISER1 as *mut u32, HASH_IRQ_BIT); // enable IRQ 39
+    }
+}
+
+/// Per-hash: run the one-time setup, reset the done flag, and unmask the HASH DCIS
+/// interrupt. Call after INIT + feed, immediately before triggering DCAL.
+#[allow(dead_code)]
+pub fn hash_arm() {
+    hash_irq_setup();
+    HASH_DONE.store(false, Ordering::SeqCst);
+    // SAFETY: unmask DCIE — device register.
+    unsafe {
+        let imr = core::ptr::read_volatile(HASH_IMR as *const u32);
+        core::ptr::write_volatile(HASH_IMR as *mut u32, imr | HASH_IMR_DCIE);
+    }
+}
+
+/// Called by `handlers.rs::HASH_IRQHandler`. Masks DCIE so the level-triggered IRQ
+/// can't re-fire before the next [`hash_arm`] (DCIS stays set — harmless, HR holds
+/// the digest until INIT), records the hit, and posts [`HASH_DONE`].
+#[allow(dead_code)]
+pub fn on_hash_irq() {
+    // SAFETY: mask DCIE — device register.
+    unsafe {
+        let imr = core::ptr::read_volatile(HASH_IMR as *const u32);
+        core::ptr::write_volatile(HASH_IMR as *mut u32, imr & !HASH_IMR_DCIE);
+    }
+    HASH_IRQ_HITS.fetch_add(1, Ordering::SeqCst);
+    HASH_DONE.store(true, Ordering::SeqCst);
+}
+
+/// Wait for the HASH digest. The ISR posts [`HASH_DONE`] (it now preempts even the
+/// SVC handler); DCIS is a fail-safe fallback so this can never hang — the digest
+/// always completes in bounded time. Masks DCIE on exit in case the fallback ran.
+#[allow(dead_code)]
+pub fn block_until_hash_done() {
+    let mut left = HASH_WAIT_BUDGET;
+    while !HASH_DONE.load(Ordering::Acquire) {
+        // SAFETY: read the HASH status register — device register.
+        if unsafe { core::ptr::read_volatile(HASH_SR_ADDR as *const u32) } & HASH_SR_DCIS != 0 {
+            break;
+        }
+        if left == 0 {
+            break;
+        }
+        left -= 1;
+    }
+    // SAFETY: ensure DCIE is masked even if the ISR did not run (fallback path).
+    unsafe {
+        let imr = core::ptr::read_volatile(HASH_IMR as *const u32);
+        core::ptr::write_volatile(HASH_IMR as *mut u32, imr & !HASH_IMR_DCIE);
+    }
 }
 
 #[cfg(test)]

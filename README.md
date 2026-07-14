@@ -23,7 +23,7 @@ Currently supported targets:
 |---|---|---|---|
 | NUCLEO-L552ZE-Q | STM32L552 | Cortex-M33 | Software AES, DMA block loading |
 | STM32L562E-DK | STM32L562 | Cortex-M33 | Hardware AES, OCTOSPI + OTFDEC |
-| NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, HW HMAC-SHA256, HW AES (CRYP1), NPU-in-enclave demo |
+| NUCLEO-N657X0-Q | STM32N657 | Cortex-M55 | FSBL boot from XSPI2, HW SHA-256 + AES-CTR (DMA-fed via HPDMA1), NPU-in-enclave demo |
 | QEMU `virt` (RV32) | RISC-V RV32 (M/S/U) | rv32imac | EFB block demand-paging, SW AES-128-CTR + SHA-256, PMP/SPMP isolation, ePMP `.text` self-lock — hardware-free (QEMU) |
 
 > **Trust model note.** The STM32 targets derive their guarantees from a silicon

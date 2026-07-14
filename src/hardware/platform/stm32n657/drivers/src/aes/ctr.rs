@@ -32,49 +32,71 @@ impl<M: MmioAccess> AesEngine for AesHardware<M> {
         self.cryp.process_block(input, output);
     }
 
-    /// Native HW CTR override.
-    /// Reconfigures CRYP from ECB (left over from `init`) to CTR mode with
-    /// `iv` as the initial counter, then streams `data` through the same
-    /// FIFO protocol used by `process_block`. CRYP handles counter
-    /// increment and XOR internally — the output of `process_block` is
-    /// already the ciphertext/plaintext, not raw keystream.
-    /// Trade-off vs default impl: saves one ECB encrypt+XOR loop per block
-    /// in software, but adds a one-time CRYP reconfiguration cost. Worth
-    /// it for any payload ≥ 2 blocks. For 1 block the difference is
-    /// negligible.
+    /// Native HW CTR via DMA — the revived Phase B.X path. The reverted "DMA debug
+    /// unresolved" wall was the RISAF CID-1 filter, not the crypto: the AES path is
+    /// BIDIRECTIONAL (mem→CRYP_DIN + CRYP_DOUT→mem), BOTH channels cross AXISRAM, and the
+    /// RISAF admits only CID 1 — without presenting it the RISAF silently dropped the
+    /// DOUT→mem writes, leaving the output == input (the exact B.X symptom). Streams
+    /// `data` in place over two HPDMA1 channels, both presenting CID 1. Whole 16-byte
+    /// blocks only; a sub-block tail is left untouched.
+    ///
+    /// Non-arm targets fall back to the AesEngine trait's software default — `AesHardware`
+    /// is device-only, host tests use `AesEmulated`. HPDMA word transfers need word-aligned
+    /// buffers; the device callers (the 256 B enclave block and the word-aligned checkpoint
+    /// SNAP) satisfy this.
+    #[cfg(target_arch = "arm")]
     fn ctr_xform(&mut self, iv: &[u8; 16], data: &mut [u8]) {
-        let chunks = data.len() / 16;
-        if chunks == 0 {
+        use crate::hpdma::{self, Hpdma1};
+        const CRYP_DIN_ADDR: u32 = 0x5402_0808;
+        const CRYP_DOUT_ADDR: u32 = 0x5402_080C;
+        const REQ_CRYP_IN: u8 = 9; // cryp_in_dma (RM §18 request table)
+        const REQ_CRYP_OUT: u8 = 10; // cryp_out_dma
+        const CH_IN: u8 = 0;
+        const CH_OUT: u8 = 1;
+
+        let byte_count = ((data.len() / 16) * 16) as u32; // whole blocks only
+        if byte_count == 0 {
             return;
         }
 
-        // Reconfigure CRYP to CTR mode with the SAES-shared key (no KEYRx
-        // writes). If V4 finds the shared key does not survive the ECB→CTR
-        // switch, the orchestrator re-shares before the decrypt; see
-        // configure_ctr_shared docs.
-        self.cryp.configure_ctr_shared(iv);
+        hpdma::enable_clock(); // self-sufficient — no boot-order dependency
+        self.cryp.configure_ctr_shared_for_dma(iv);
+        self.cryp.enable_dma();
 
-        let mut block = [0u8; 16];
-        let mut out_block = [0u8; 16];
-        let mut i: usize = 0;
-        while i < chunks {
-            // Stage one 16-byte ciphertext block in scratch
-            let mut j: usize = 0;
-            while j < 16 {
-                block[j] = data[i * 16 + j];
-                j += 1;
-            }
+        let dma = Hpdma1::new();
+        // Present CID 1 on BOTH channels — the fix B.X lacked.
+        dma.set_channel_secure(CH_IN);
+        dma.set_channel_secure(CH_OUT);
+        dma.reset_channel(CH_IN);
+        dma.reset_channel(CH_OUT);
+        dma.configure_mem_to_periph(
+            CH_IN,
+            data.as_ptr() as u32,
+            CRYP_DIN_ADDR,
+            byte_count,
+            REQ_CRYP_IN,
+        );
+        dma.configure_periph_to_mem(
+            CH_OUT,
+            CRYP_DOUT_ADDR,
+            data.as_mut_ptr() as u32,
+            byte_count,
+            REQ_CRYP_OUT,
+        );
 
-            // CRYP in CTR mode XORs internally — `out_block` is the
-            // post-XOR result, not raw keystream.
-            self.cryp.process_block(&block, &mut out_block);
+        // In-place: push the plaintext out of D-cache so the DMA reads it from memory.
+        hpdma::dcache_clean_range(data.as_ptr() as usize, byte_count as usize);
 
-            let mut j: usize = 0;
-            while j < 16 {
-                data[i * 16 + j] = out_block[j];
-                j += 1;
-            }
-            i += 1;
-        }
+        // Arm the drain (OUT) before the feed (IN) so it's ready for the first block.
+        dma.enable_channel(CH_OUT);
+        dma.enable_channel(CH_IN);
+        let _ = dma.wait_complete(CH_IN, 4_000_000);
+        let _ = dma.wait_complete(CH_OUT, 4_000_000);
+        dma.clear_flags(CH_IN);
+        dma.clear_flags(CH_OUT);
+        self.cryp.disable_dma();
+
+        // Pull the DMA-written ciphertext into the CPU's view.
+        hpdma::dcache_invalidate_range(data.as_mut_ptr() as usize, byte_count as usize);
     }
 }

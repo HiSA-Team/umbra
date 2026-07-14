@@ -21,7 +21,7 @@ umbra-hal = { path = "../../../../../crates/umbra-hal" }
 umbra-error = { path = "../../../../../crates/umbra-error" }
 
 [features]
-default = ["chained_measurement", "n657_aes_hw", "boot_tests"]
+default = ["chained_measurement", "n657_aes_hw", "boot_tests", "interenclave_overlay"]
 boot_tests = []
 chained_measurement = []
 # `ess_miss_recovery` is referenced via `#[cfg(feature = "ess_miss_recovery")]`
@@ -54,6 +54,61 @@ state_continuity_probe = []
 # then erase/program as the path is built up) and print over UART. Default OFF.
 # Never in a production image.
 xspi_write_probe = []
+
+# DEV-ONLY: runtime-integration demo — drive the REAL enclave state_checkpoint
+# module (checkpoint_enclave/restore_enclave) with the REAL device state_root,
+# round-tripped across a reset, from a clean boot hook. Prints [RD]. Default OFF.
+# Never in a production image.
+state_runtime_demo = []
+
+# DEV-ONLY: pause the enclave at the FIRST block-transition checkpoint of a cold
+# run (gen==1) so the resume across a reset is observable by hand. Prints [SC] cold
+# checkpoint ... press RST. Default OFF. Never in a production image.
+checkpoint_reset_demo = []
+
+# DEV-ONLY: probe the RISAF data-read trap (the mechanism that makes safe block eviction
+# possible on N657, unlike L552). Protects a 4 KB scratch and reads it — the fault dump
+# reveals which fault fires. HALTS on the fault. Default OFF. Never in a production image.
+eviction_probe = []
+
+# DEV-ONLY: MPU hide+restore eviction probe. Hides the enclave entry block via MPU region 5
+# so the first fetch faults MemManage; the handler restores + resumes. Proves the MPU
+# trap+restore (the synchronous data trap the RISAF cannot give). Default OFF. Never ship.
+mpu_evict_probe = []
+
+# DEV-ONLY: inter-enclave eviction round-trip. Evicts the enclave's EFBC → an ESS SRAM
+# backing (async DMA), scrambles the EFBC, restores it → the enclave must still finish
+# R0=0x72CA33A8. Proves the feasible eviction mechanism on N657. Default OFF. Never ship.
+interenclave_evict = []
+
+# DEV-ONLY: async ESS-miss demonstrator. Evicts the enclave's back half to a backing +
+# MPU-hides it, then async-restores it in the BACKGROUND while the enclave runs its front
+# half — the async DMA→IRQ→PendSV engine driving a real block recovery under a running
+# enclave (HIT), with a synchronous MemManage fallback if the enclave outruns it (FAULT).
+# The production enclave never misses (all blocks loaded+measured at create), so this can
+# only be a demonstrator. Enclave must still finish R0=0x72CA33A8. Default OFF. Never ship.
+# Mutually exclusive at runtime with the overlay chain (which is default via
+# `interenclave_overlay`); demonstrator builds should not rely on both being armed on the
+# same enclave.
+async_ess_miss = []
+
+# Inter-enclave OVERLAY: time-multiplex the tight 16 KB EFBC across TWO live enclaves that
+# can't coexist (e.g. ammunition 60 blocks + ndes 20 blocks > 64). create/enter evict the
+# resident enclave's window → an SRAM backing and restore the entered one ← its backing
+# (prefetch.rs::overlay, generalizing the HW-verified inter_evict round-trip). The two
+# enclaves stay ALIVE simultaneously and are switched by the host loop / SysTick preemption.
+# Enables the 32 KB of per-enclave backings. DEFAULT-ON (in `default` above): the kernel
+# time-multiplexes automatically — a no-op for single-enclave hosts (nothing to switch), an
+# automatic swap when a second enclave is created into the full window. The SysTick switch
+# uses the speculative non-blocking chunk chain by default (overlay_chain.rs);
+# `overlay_sync_switch` forces the old fully-synchronous behavior. No build flag needed.
+interenclave_overlay = []
+
+# Bisection aid for the overlay ASYNC switch: force every SysTick window switch to
+# complete synchronously (drain immediately after the sync prefix) instead of running
+# the background chunk chain. Functionally equivalent to the pre-async behavior;
+# CHAIN_HITS stays 0. Only meaningful together with `interenclave_overlay`.
+overlay_sync_switch = []
 
 # Profiles live at the workspace root since the boot crate absorbed
 # them. See /Cargo.toml [profile.dev] and [profile.release].

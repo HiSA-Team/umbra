@@ -95,6 +95,18 @@ impl<M: MmioAccess> StateAnchor<M> {
         self.mmio.write(base + PARITY_OFF, a.parity as u32);
         self.mmio.write(base + ECHO_OFF, a.generation); // echo LAST = commit
     }
+
+    /// Invalidate the anchor: zero both copies' generation (and echo) so `load`
+    /// returns `None` (cold). generation 0 is the cold marker (see `RawCopy::valid`).
+    /// Used when an enclave TERMINATES — a completed run must not resume from its
+    /// last block-transition checkpoint on a later reset; the next create starts
+    /// a fresh run instead. Requires `init_backup_domain` first (DBP + APB clock).
+    pub fn invalidate(&self) {
+        self.mmio.write(COPY_A_BASE + GEN_OFF, 0);
+        self.mmio.write(COPY_A_BASE + ECHO_OFF, 0);
+        self.mmio.write(COPY_B_BASE + GEN_OFF, 0);
+        self.mmio.write(COPY_B_BASE + ECHO_OFF, 0);
+    }
 }
 
 impl<M: MmioAccess> AnchorStore for StateAnchor<M> {

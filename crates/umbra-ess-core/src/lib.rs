@@ -38,8 +38,12 @@ pub const ENCLAVE_PSP_TOP: u32 = 0x30038000;
 // ── N657 platform ESS layout ─────────────────────────────────────────
 #[cfg(feature = "platform-n657")]
 pub const ESS_BASE: u32 = 0x340E0000;
+// 16 KB (was 0x10000/64 KB): a deliberately tight EFBC window = MAX_EFBS * 256 exactly,
+// so two ~16 KB enclaves (powerwindow, ammunition) cannot coexist and a single enclave's
+// blocks are not all resident at once — forcing on-demand async block loading + inter-enclave
+// overlay (evict/restore). See docs plan 2026-07-07-inter-enclave-overlay-n657.
 #[cfg(feature = "platform-n657")]
-pub const ESS_SIZE: u32 = 0x10000;
+pub const ESS_SIZE: u32 = 0x4000;
 #[cfg(feature = "platform-n657")]
 pub const EFBC_BASE: u32 = 0x340E0000;
 #[cfg(feature = "platform-n657")]
@@ -379,5 +383,21 @@ mod tests {
         }
         // Block 0 is excluded (entry); lowest counter among 1..4 is block 1.
         assert_eq!(enc.find_eviction_victim(0), Some(1));
+    }
+
+    /// The N657 EFBC is deliberately shrunk to a tight 16 KB window (= MAX_EFBS
+    /// 256-byte blocks exactly) so two ~16 KB enclaves cannot coexist and a
+    /// single enclave's blocks are not all resident at once — forcing on-demand
+    /// async block loading + inter-enclave overlay. Run with `--features platform-n657`.
+    #[cfg(feature = "platform-n657")]
+    #[test]
+    fn n657_efbc_shrunk_to_16kb_window() {
+        assert_eq!(ESS_SIZE, 0x4000, "N657 EFBC must be a tight 16 KB window");
+        assert_eq!(ESS_BASE, 0x340E0000);
+        assert_eq!(MAX_EFBS as u32 * 256, ESS_SIZE, "window == 64 blocks * 256 B");
+        assert!(
+            ESS_BASE + ESS_SIZE <= ENCLAVE_PSP_BASE,
+            "shrunk EFBC must stay clear of the PSP region"
+        );
     }
 }
