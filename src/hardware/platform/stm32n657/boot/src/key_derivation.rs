@@ -7,6 +7,7 @@ use umbra_error::{UmbraError, UmbraResult};
 
 pub const ENC_KEY_LABEL: &[u8] = b"umbra-enc-v1";
 pub const HMAC_KEY_LABEL: &[u8] = b"umbra-hmac-v1";
+pub const STATE_ROOT_LABEL: &[u8] = b"umbra-state-v1";
 
 /// Derive the enclave encryption subkey from `MASTER_KEY`. Propagates
 /// `UmbraError::KeyDerivation` on HASH failure — previously the error was
@@ -25,6 +26,18 @@ pub fn derive_hmac_key(crypto: &mut dyn CryptoEngine) -> UmbraResult<[u8; 32]> {
     let mut out = [0u8; 32];
     crypto
         .hmac(&MASTER_KEY, HMAC_KEY_LABEL, &mut out)
+        .map_err(|_| UmbraError::KeyDerivation)?;
+    Ok(out)
+}
+
+/// Derive the enclave state-continuity ROOT key from `MASTER_KEY`. This is the
+/// STABLE device secret that keys the checkpoint anchor root — HW-verified
+/// 2026-07-03 that keying with the ephemeral (DHUK-wrapped) enc_key makes the root
+/// un-re-verifiable across resets. Same error-propagation contract as the others.
+pub fn derive_state_root(crypto: &mut dyn CryptoEngine) -> UmbraResult<[u8; 32]> {
+    let mut out = [0u8; 32];
+    crypto
+        .hmac(&MASTER_KEY, STATE_ROOT_LABEL, &mut out)
         .map_err(|_| UmbraError::KeyDerivation)?;
     Ok(out)
 }

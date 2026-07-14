@@ -63,4 +63,74 @@ pub fn provision_and_share_enc_key(enc_key: &[u8; 16]) {
         crate::raw_print::print_str("[UMBRASecureBoot] DHUK share FAIL (no KEYVALID)\n");
         panic!("DHUK key share failed");
     }
+
+    // On-chip state-continuity proof-slice (dev-only feature). Runs here because the
+    // backup domain, the HASH clock and a stable device key are all up by now.
+    #[cfg(feature = "state_continuity_probe")]
+    state_continuity_probe(enc_key);
+
+    #[cfg(feature = "xspi_write_probe")]
+    xspi_write_probe();
+}
+
+/// Flash-continuity probe: the full checkpoint → reset → restore loop over PERSISTED
+/// state — real double-buffered TAMP anchor AND real flash sectors. Boot 1 (cold
+/// anchor) checkpoints two sectors to flash via the real `write_state_sector` and
+/// commits the anchor; after a reset boot 2 recomputes the root over the persisted
+/// flash + anchor and restores → Resume. Maps XSPI2 itself first (runs before
+/// init_external_flash). Feature-gated — NEVER in a production image.
+#[cfg(feature = "xspi_write_probe")]
+fn xspi_write_probe() {
+    use crate::raw_print::{print_hex, print_str};
+    // XSPI2 is not mapped yet at this point in boot — bring it up (idempotent).
+    let _ = crate::platform_impl::dma::init_external_flash();
+    print_str("[FC] mm ready\n");
+    // Stable probe key across boots: enc_key is ephemeral (DHUK-wrapped, changes per
+    // boot), so it can't key a root that must be re-verified after a reset. The real
+    // integration keys this with the device MASTER_KEY.
+    const PROBE_KEY: [u8; 16] = [0x42u8; 16];
+    let r = drivers::state_store::run_flash_continuity_probe(&PROBE_KEY, 0);
+    if r.resumed {
+        print_str("[FC] restore gen=");
+        print_hex(r.gen);
+        print_str(" Resume PASS sr=");
+        print_hex(r.stored_root);
+        print_str(" rr=");
+        print_hex(r.recomp_root);
+        print_str("\n");
+    } else {
+        print_str("[FC] checkpointed gen=");
+        print_hex(r.gen);
+        print_str(" (sr=");
+        print_hex(r.stored_root);
+        print_str(" rr=");
+        print_hex(r.recomp_root);
+        print_str(" rr2=");
+        print_hex(r.recomp_root2);
+        print_str(" s0=");
+        print_hex(r.sec0_raw);
+        print_str(") — press RST\n");
+    }
+}
+
+/// On-chip proof-slice: run the state-continuity control loop on REAL TAMP + HASH
+/// (RAM-backed sectors, no XSPI2 write) and report over UART. Feature-gated —
+/// NEVER in a production image. Terse strings: the Secure boot text region is full,
+/// so every `.rodata` byte counts (see the build note / ADR 010).
+#[cfg(feature = "state_continuity_probe")]
+fn state_continuity_probe(key: &[u8]) {
+    use crate::raw_print::{print_hex, print_str};
+    let r = drivers::state_store::run_state_continuity_probe(key, 0);
+    match r.anchor_survived_gen {
+        Some(g) => {
+            print_str("[SP] survived reset g=");
+            print_hex(g);
+            print_str("\n");
+        }
+        None => print_str("[SP] cold anchor\n"),
+    }
+    print_str("[SP] g=");
+    print_hex(r.committed_gen);
+    print_str(if r.resumed_ok { " resume=OK" } else { " resume=FAIL" });
+    print_str(if r.tamper_rejected { " tamper=REJECT\n" } else { " tamper=FAIL\n" });
 }

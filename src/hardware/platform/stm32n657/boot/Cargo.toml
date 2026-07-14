@@ -40,5 +40,20 @@ n657_aes_hw = []
 # (UMBRA_DEV_DEBUG=1 in settings.sh); OFF in plain `cargo xtask build`.
 dev_debug = []
 
+# Enclave anti-rollback: derive version-by-search + per-author BKPSRAM floor.
+# Gated (default OFF) to mirror the offline tool's UMBRA_VERSION_BIND gate; OFF
+# keeps the build byte-identical to the legacy chained-measurement finalize.
+enclave_version_bind = []
+
+# DEV-ONLY: run the state-continuity proof-slice probe at boot (real TAMP + HASH,
+# RAM-backed sectors, no XSPI2 write) and print the result over UART. Default OFF;
+# enable via BOOT_FEATURES. Never in a production image.
+state_continuity_probe = []
+
+# DEV-ONLY: run the XSPI2 write-path bring-up probe at boot (mode/WREN/restore,
+# then erase/program as the path is built up) and print over UART. Default OFF.
+# Never in a production image.
+xspi_write_probe = []
+
 # Profiles live at the workspace root since the boot crate absorbed
 # them. See /Cargo.toml [profile.dev] and [profile.release].

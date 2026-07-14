@@ -455,6 +455,43 @@ pub extern "C" fn umbra_systick_handler(ctx_ptr: *mut u8) -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn umbra_yield_handler(_ctx_ptr: *mut u8) -> u32 {
-    0
+pub extern "C" fn umbra_yield_handler(ctx_ptr: *mut u8) -> u32 {
+    use kernel::common::enclave::{EnclaveContext, EnclaveState};
+
+    if ctx_ptr.is_null() {
+        return 0;
+    }
+    let ctx = unsafe { &mut *(ctx_ptr as *mut EnclaveContext) };
+    ctx.status = EnclaveState::Suspended;
+
+    let kernel = unsafe {
+        match crate::secure_kernel::Kernel::get() {
+            Some(k) => k,
+            None => return 0,
+        }
+    };
+    unsafe {
+        kernel.disable_systick();
+    }
+
+    let enclave_id = kernel.current_enclave_id.unwrap_or(0);
+    // Enclave index = the context pointer's offset within the contexts array.
+    let base = kernel.enclave_contexts.as_ptr() as usize;
+    let idx = (ctx_ptr as usize).wrapping_sub(base) / core::mem::size_of::<EnclaveContext>();
+
+    // Cooperative checkpoint: serialize + encrypt the enclave state and commit it to
+    // flash + the TAMP anchor, keyed by the stable state_root.
+    let ok = crate::secure_kernel::state_checkpoint::checkpoint_enclave(
+        enclave_id,
+        idx,
+        ctx,
+        &kernel.state_root,
+    );
+    crate::raw_print::print_str(if ok {
+        "[SC] yield: checkpointed\n"
+    } else {
+        "[SC] yield: checkpoint FAIL\n"
+    });
+
+    ((enclave_id & 0xFFFF) << 16) | ((EnclaveState::Suspended as u32 & 0xFF) << 8)
 }

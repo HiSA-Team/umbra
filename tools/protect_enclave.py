@@ -327,6 +327,19 @@ def flat_protect(elf_file, key_file):
           f"over {len(cipher)} ciphertext bytes")
 
 
+ENCVER_LABEL = b"umbra-encver-v1"
+
+
+def version_tag(bm: bytes, author_id: int, version: int) -> bytes:
+    """Bind (author_id, version) to the block measurement BM by a trailing HMAC.
+    MUST match the kernel's version-derivation. The result replaces the stamped
+    measurement ONLY when UMBRA_VERSION_BIND=1; the version is never written in
+    clear, so it cannot be tampered without breaking this tag."""
+    return hmac.new(
+        bm, ENCVER_LABEL + struct.pack("<II", author_id, version), hashlib.sha256
+    ).digest()
+
+
 def main():
     # Strip optional flags out of argv so the positional parsing below is
     # unchanged. Flags: --hmac-over-plaintext (L562 path), --flat (RISC-V
@@ -642,20 +655,9 @@ def main():
     # divergent meta interpretation.
     MAX_REACHABLE = 4
 
-    # N657 only, gated by UMBRA_EPOCH_BIND=1 (set in settings.sh): seed the
-    # chain with the build epoch so the enclave binds to EXACTLY this FSBL
-    # version. Byte-identical to the N657 kernel's begin_measurement:
-    # HMAC(master_key, EPOCH_LABEL + version_le32) — label 14 B, version 4-byte
-    # LE u32. This tool is SHARED, so the change MUST be opt-in: L552 / RISC-V
-    # keep the plain master_key seed their FSBLs still expect.
-    if os.environ.get("UMBRA_EPOCH_BIND") == "1":
-        EPOCH_LABEL = b"umbra-epoch-v1"
-        fsbl_version = int(os.environ.get("UMBRA_FSBL_VERSION", "1"))
-        chain_state = hmac.new(
-            master_key, EPOCH_LABEL + struct.pack("<I", fsbl_version), hashlib.sha256
-        ).digest()
-    else:
-        chain_state = master_key
+    # Seed the running chain key with the master key (matches the kernel's
+    # `Kernel::begin_measurement` which copies `master_key::MASTER_KEY`).
+    chain_state = master_key
 
     # Subkey used for the per-block HMAC prefix under ess_miss_recovery. Must
     # stay byte-for-byte in sync with `key_derivation::HMAC_KEY_LABEL` in the
@@ -879,6 +881,15 @@ def main():
         # runtime, but we still populate it with a stable digest for tooling.
         if chained_mode:
             measurement = chain_state
+            # Enclave anti-rollback (gated, default OFF). When UMBRA_VERSION_BIND=1,
+            # bind (author_id, version) into the measurement by a trailing fold so the
+            # kernel can DERIVE the version (never stored in clear). Default OFF keeps
+            # L552/L562/RISC-V blobs byte-identical (their kernels compare the plain
+            # chain value).
+            if os.environ.get("UMBRA_VERSION_BIND") == "1":
+                _author_id = int(os.environ.get("UMBRA_AUTHOR_ID", "0"))
+                _enclave_version = int(os.environ.get("UMBRA_ENCLAVE_VERSION", "1"))
+                measurement = version_tag(measurement, _author_id, _enclave_version)
         else:
             measurement = hmac.new(hmac_key, final_blob, hashlib.sha256).digest()
         print(f"[Protect] Enclave Measurement ({mode_label}): {measurement.hex()}")

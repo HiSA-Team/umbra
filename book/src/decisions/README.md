@@ -22,6 +22,8 @@ of the audit trail.
 | [005](005-nsc-boundary.md) | Accepted | `*_imp` / `*_callable` veneer pair as the only NS→S entry surface |
 | [006](006-master-key-chain.md) | Accepted | Build-time master key with `xtask flash` auto-revert |
 | [007](007-panic-policy.md) | Accepted (implemented) | Panic policy: log + `SYSRESETREQ`, with `debug-halt` opt-in halt |
+| [009](009-state-continuity-power-session-boundary.md) | Accepted | State continuity holds only within a power session |
+| [010](010-state-continuity-commit-reconciliation.md) | Accepted | Interrupted-commit reconciliation rule |
 
 ## Status values
 

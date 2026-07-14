@@ -23,6 +23,8 @@
 use kernel::memory_protection_server::memory_guard::MemorySecurityGuardTrait;
 
 mod api_impl;
+#[cfg(feature = "enclave_version_bind")]
+mod antirollback;
 mod crypto_impl;
 mod dhuk_provision;
 mod hdpl;

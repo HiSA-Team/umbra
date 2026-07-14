@@ -182,17 +182,21 @@ elif [ "$MCU_VARIANT" = "stm32l562" ]; then
     echo -e "${SUCCESS}[mcu_selection] Selected STM32L562 (HW AES Enabled)${VANILLA}"
 elif [ "$MCU_VARIANT" = "stm32n657" ]; then
     export MCU=stm32n657
-    export BOOT_FEATURES=""
     export BOOT_CRATE_NAME=umbra-n657-boot
-    # Single build-epoch source for N657. UMBRA_FSBL_VERSION feeds the FSBL
-    # signing (-iv), the FSBL build (build.rs -> FSBL_VERSION), and the enclave
-    # measurement seed; they MUST agree or the matched build fails measurement.
-    # UMBRA_EPOCH_BIND opts the SHARED protect_enclave.py into the epoch seed —
-    # only N657's begin_measurement matches it; L552 keeps the plain master_key
-    # seed, so this MUST stay N657-gated.
-    export UMBRA_FSBL_VERSION=${UMBRA_FSBL_VERSION:-1}
-    export UMBRA_EPOCH_BIND=1
-    echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q)${VANILLA}"
+    # Enclave anti-rollback (N657-gated — the SHARED protect_enclave.py trailing
+    # fold must NOT reach L552/L562/RISC-V, whose kernels do the legacy finalize
+    # and would mismatch). Enabled by default here; override per build, e.g.
+    # `UMBRA_ENCLAVE_VERSION=1 ./rebuild_all.sh` for the rollback negative test,
+    # or `UMBRA_VERSION_BIND=0 ./rebuild_all.sh` for the legacy path.
+    export UMBRA_VERSION_BIND=${UMBRA_VERSION_BIND:-1}
+    export UMBRA_AUTHOR_ID=${UMBRA_AUTHOR_ID:-1}
+    export UMBRA_ENCLAVE_VERSION=${UMBRA_ENCLAVE_VERSION:-2}
+    if [ "$UMBRA_VERSION_BIND" = "1" ]; then
+        export BOOT_FEATURES="--features enclave_version_bind"
+    else
+        export BOOT_FEATURES=""
+    fi
+    echo -e "${SUCCESS}[mcu_selection] Selected STM32N657 (Cortex-M55, NUCLEO-N657X0-Q) [version_bind=${UMBRA_VERSION_BIND} author=${UMBRA_AUTHOR_ID} v=${UMBRA_ENCLAVE_VERSION}]${VANILLA}"
 elif [ "$MCU_VARIANT" = "riscv32" ]; then
     export MCU=riscv32
     export BOOT_FEATURES=""
@@ -226,6 +230,31 @@ if [ "$UMBRA_DEV_DEBUG" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
         export BOOT_FEATURES="${BOOT_FEATURES},dev_debug"
     fi
     echo -e "${SUCCESS}[dev_debug] FSBL debug access port ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: on-chip state-continuity proof-slice probe. Enable with
+# `UMBRA_STATE_PROBE=1 cargo xtask flash n657` (or before ./rebuild_all.sh). Runs the
+# checkpoint/restore loop on real TAMP + HASH at boot and prints [state-probe] over
+# UART. N657-only; never ship.
+if [ "${UMBRA_STATE_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features state_continuity_probe"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},state_continuity_probe"
+    fi
+    echo -e "${SUCCESS}[state-probe] on-chip state-continuity probe ENABLED (do NOT ship)${VANILLA}"
+fi
+
+# DEV-ONLY: on-chip XSPI2 write-path bring-up probe. Enable with
+# `UMBRA_XSPI_PROBE=1 UMBRA_VERSION_BIND=0 cargo xtask flash n657`. Prints [XP] over
+# UART. N657-only; never ship.
+if [ "${UMBRA_XSPI_PROBE:-0}" = "1" ] && [ "$MCU_VARIANT" = "stm32n657" ]; then
+    if [ -z "$BOOT_FEATURES" ]; then
+        export BOOT_FEATURES="--features xspi_write_probe"
+    else
+        export BOOT_FEATURES="${BOOT_FEATURES},xspi_write_probe"
+    fi
+    echo -e "${SUCCESS}[xspi-probe] on-chip XSPI2 write-path probe ENABLED (do NOT ship)${VANILLA}"
 fi
 
 export UMBRA_CACHE_ZERO_MODE=${UMBRA_CACHE_ZERO_MODE:-0}
