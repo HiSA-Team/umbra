@@ -40,6 +40,11 @@ use crate::boot_measurements::{
 #[path = "state_checkpoint.rs"]
 pub mod state_checkpoint;
 
+/// Remote attestation + secure enclave update NSC implementations. Declared here
+/// (not in main.rs) per the trust-root rule, same as `state_checkpoint`.
+#[path = "attest_imp.rs"]
+pub mod attest_imp;
+
 #[cfg(feature = "enclave_version_bind")]
 include!(concat!(env!("OUT_DIR"), "/author_id.rs"));
 
@@ -73,6 +78,18 @@ pub struct Kernel {
     pub hmac_key: [u8; 32],
     /// Stable device secret that keys the state-continuity checkpoint anchor root.
     pub state_root: [u8; 32],
+    /// MASTER_KEY-derived key that signs attestation quotes.
+    pub attest_key: [u8; 32],
+    /// Last nonce handed out by `umbra_attest_quote`; the update path binds to it.
+    pub last_nonce: [u8; 16],
+    /// True after a quote is issued, cleared after any update attempt (single-use).
+    pub nonce_armed: bool,
+    /// Outcome of the last restore-on-create (0 None 1 Resume 2 ColdGenesis 3 Reject).
+    pub last_restore: u8,
+    /// Authenticated version of the enclave most recently created (0 if none / bind off).
+    pub last_version: u32,
+    /// RCC_RSR snapshot captured once at boot (reset cause; POR ⇒ cold window).
+    pub reset_cause: u32,
     pub enclave_contexts: [EnclaveContext; 4],
     pub current_enclave_id: Option<u32>,
 }
@@ -121,6 +138,12 @@ impl Kernel {
             enc_key: [0u8; 32],
             hmac_key: [0u8; 32],
             state_root: [0u8; 32],
+            attest_key: [0u8; 32],
+            last_nonce: [0u8; 16],
+            nonce_armed: false,
+            last_restore: 0,
+            last_version: 0,
+            reset_cause: 0,
             enclave_contexts: [EnclaveContext::empty(); 4],
             current_enclave_id: None,
         }
@@ -136,7 +159,19 @@ impl Kernel {
             self.enc_key = crate::key_derivation::derive_enc_key(crypto)?;
             self.hmac_key = crate::key_derivation::derive_hmac_key(crypto)?;
             self.state_root = crate::key_derivation::derive_state_root(crypto)?;
+            self.attest_key = crate::key_derivation::derive_attest_key(crypto)?;
         }
+        // Snapshot the reset cause once, then CLEAR the flags (RMVF = bit 16,
+        // write-1-to-clear) so the NEXT boot's reset_cause reflects only the resets
+        // since this boot. Without the clear, PORRSTF stays latched from the initial
+        // power-on and every attestation quote would report the fail-open POR window
+        // forever — even after a warm reset — so the verifier could never tell a
+        // warm-reset-defended state from a genuine cold one (ADR 012). The
+        // anti-rollback floor uses floor==0 (not RCC_RSR) as its cold signal, and this
+        // is the only runtime RCC_RSR read, so clearing here is safe.
+        // RCC_RSR = RCC_BASE_S + 0x34; POR/BOR/PIN in bits 21-23, RMVF bit 16.
+        self.reset_cause = core::ptr::read_volatile(0x5602_8034 as *const u32);
+        core::ptr::write_volatile(0x5602_8034 as *mut u32, 1 << 16);
         Ok(())
     }
 

@@ -16,6 +16,26 @@ pub const SLOT_COUNT: usize = 2; // A/B double-buffer
 /// WIP-poll budget (~150k loops per ms at -O0; a 4 KB subsector erase is <~100 ms).
 const POLL_MAX: u32 = 3_000_000;
 
+/// Enclave-update A/B slots (secure remote update). Two 64 KB windows below the
+/// state-continuity region, each holding one enclave blob. `umbra_enclave_create(0)`
+/// authenticates both and runs the highest version; `umbra_enclave_update` writes the
+/// inactive one. Works alongside `interenclave_overlay` (the DMA-free version probe
+/// reads flash directly, so it needs neither the ESS allocator nor the overlay window).
+/// The update path's anti-rollback (`version > active`) is meaningful only with
+/// `enclave_version_bind` ON — see ADR 013.
+pub const ENCLAVE_SLOT_A: u32 = 0x73D0_0000;
+pub const ENCLAVE_SLOT_B: u32 = 0x73D8_0000;
+pub const ENCLAVE_SLOT_SIZE: u32 = 0x1_0000; // 64 KB
+
+/// Flash base of enclave slot `slot` (0 = A, 1 = B).
+pub fn enclave_slot_base(slot: usize) -> Result<u32, StateFlashError> {
+    match slot {
+        0 => Ok(ENCLAVE_SLOT_A),
+        1 => Ok(ENCLAVE_SLOT_B),
+        _ => Err(StateFlashError::SlotOutOfRange),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum StateFlashError {
     IndexOutOfRange,
@@ -106,6 +126,46 @@ fn write_enable_verified(x: &Xspi2) -> Result<(), StateFlashError> {
     Ok(())
 }
 
+/// Erase + program `bytes` into enclave slot `slot`, starting at its base. `bytes`
+/// length must be non-zero, a multiple of 4096, and ≤ ENCLAVE_SLOT_SIZE. Uses the
+/// same 1-1-1 SPI indirect path as `write_state_sector`; restores memory-mapped
+/// reads on every exit so enclave loads from 0x7000_0000 keep working. Un-erased NOR
+/// reads non-deterministically, so callers MUST pad the blob to a whole-sector,
+/// zero-filled buffer (the digest/measurement over the slot must be stable).
+pub fn write_enclave_slot(slot: usize, bytes: &[u8]) -> Result<(), StateFlashError> {
+    let base = enclave_slot_base(slot)?;
+    if bytes.is_empty() || bytes.len() % 4096 != 0 || bytes.len() as u32 > ENCLAVE_SLOT_SIZE {
+        return Err(StateFlashError::IndexOutOfRange);
+    }
+    // The XSPI2 write path (indirect mode, WREN, erase/program, D-cache barriers) is
+    // arm-only. On host we compile it out — the address math + input guards above are
+    // the only host-testable surface. Mirrors `hash_sector` in state_store.rs.
+    #[cfg(not(target_arch = "arm"))]
+    {
+        let _ = base;
+        Ok(())
+    }
+    #[cfg(target_arch = "arm")]
+    {
+        let x = Xspi2::new();
+        let _saved = x.enter_indirect_mode();
+        let mut r = Ok(());
+        let mut off = 0usize;
+        while off < bytes.len() {
+            let mut page = [0u8; 4096];
+            page.copy_from_slice(&bytes[off..off + 4096]);
+            if let Err(e) = write_sector_inner(&x, base + off as u32, &page) {
+                r = Err(e);
+                break;
+            }
+            off += 4096;
+        }
+        x.restore_memory_mapped_1_1_1();
+        invalidate_dcache_region(base, bytes.len() as u32);
+        r
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +196,25 @@ mod tests {
     fn out_of_range_is_rejected() {
         assert!(matches!(state_sector_addr(MAX_STATE_SECTORS, 0), Err(StateFlashError::IndexOutOfRange)));
         assert!(matches!(state_sector_addr(0, SLOT_COUNT), Err(StateFlashError::SlotOutOfRange)));
+    }
+
+    #[test]
+    fn enclave_slots_are_distinct_and_erase_aligned() {
+        assert_eq!(enclave_slot_base(0).unwrap(), ENCLAVE_SLOT_A);
+        assert_eq!(enclave_slot_base(1).unwrap(), ENCLAVE_SLOT_B);
+        assert_eq!(ENCLAVE_SLOT_A % 0x1000, 0);
+        assert_eq!(ENCLAVE_SLOT_B % 0x1000, 0);
+        assert!(ENCLAVE_SLOT_A + ENCLAVE_SLOT_SIZE <= ENCLAVE_SLOT_B, "slots overlap");
+        assert!(ENCLAVE_SLOT_B + ENCLAVE_SLOT_SIZE <= STATE_REGION_BASE, "slot collides state region");
+        assert!(matches!(enclave_slot_base(2), Err(StateFlashError::SlotOutOfRange)));
+    }
+
+    #[test]
+    fn write_enclave_slot_rejects_bad_lengths() {
+        // NOTE: these inputs are rejected by the length guard BEFORE any Xspi2 access,
+        // so they are safe to run on host (they return Err without touching hardware).
+        assert!(matches!(write_enclave_slot(0, &[]), Err(StateFlashError::IndexOutOfRange)));
+        assert!(matches!(write_enclave_slot(0, &[0u8; 100]), Err(StateFlashError::IndexOutOfRange)));
+        assert!(matches!(write_enclave_slot(2, &[0u8; 4096]), Err(StateFlashError::SlotOutOfRange)));
     }
 }

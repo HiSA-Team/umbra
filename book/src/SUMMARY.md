@@ -29,6 +29,7 @@
 - [Boot Flow](architecture/boot-flow.md)
 - [FSBL Boot (STM32N6)](architecture/fsbl-boot.md)
 - [Enclave Swap Space](architecture/ess-model.md)
+- [Remote Attestation & Secure Update](architecture/remote-attestation.md)
 
 # Design Decisions
 
@@ -45,6 +46,8 @@
 - [ADR 009 — State Continuity Power-Session Boundary](decisions/009-state-continuity-power-session-boundary.md)
 - [ADR 010 — State-Continuity Commit (root-in-anchor)](decisions/010-state-continuity-commit-reconciliation.md)
 - [ADR 011 — Enclave Eviction Feasibility](decisions/011-enclave-eviction-feasibility.md)
+- [ADR 012 — Remote Attestation](decisions/012-remote-attestation.md)
+- [ADR 013 — Secure Enclave Update (A/B slots)](decisions/013-ab-enclave-update.md)
 
 # Supported Hardware
 

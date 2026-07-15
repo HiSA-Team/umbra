@@ -1,4 +1,6 @@
+pub mod attestation;
 pub mod crypto;
+pub mod enclave_update;
 pub mod key_generator;
 pub mod key_store;
 pub mod state_checkpoint;

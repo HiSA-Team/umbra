@@ -8,6 +8,7 @@ use umbra_error::{UmbraError, UmbraResult};
 pub const ENC_KEY_LABEL: &[u8] = b"umbra-enc-v1";
 pub const HMAC_KEY_LABEL: &[u8] = b"umbra-hmac-v1";
 pub const STATE_ROOT_LABEL: &[u8] = b"umbra-state-v1";
+pub const ATTEST_KEY_LABEL: &[u8] = b"umbra-attest-v1";
 
 /// Derive the enclave encryption subkey from `MASTER_KEY`. Propagates
 /// `UmbraError::KeyDerivation` on HASH failure — previously the error was
@@ -38,6 +39,18 @@ pub fn derive_state_root(crypto: &mut dyn CryptoEngine) -> UmbraResult<[u8; 32]>
     let mut out = [0u8; 32];
     crypto
         .hmac(&MASTER_KEY, STATE_ROOT_LABEL, &mut out)
+        .map_err(|_| UmbraError::KeyDerivation)?;
+    Ok(out)
+}
+
+/// Derive the attestation-quote HMAC key from `MASTER_KEY`. The verifier CLI
+/// re-derives the same key (it holds `MASTER_KEY`) to check quote tags, so the
+/// label must stay in sync with `tools/attest_update.py`. Same error-propagation
+/// contract as the others.
+pub fn derive_attest_key(crypto: &mut dyn CryptoEngine) -> UmbraResult<[u8; 32]> {
+    let mut out = [0u8; 32];
+    crypto
+        .hmac(&MASTER_KEY, ATTEST_KEY_LABEL, &mut out)
         .map_err(|_| UmbraError::KeyDerivation)?;
     Ok(out)
 }

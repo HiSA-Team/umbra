@@ -26,7 +26,8 @@ use kernel::common::ess::{
 use kernel::common::ess::ESS_BASE;
 
 use crate::secure_kernel::{
-    Kernel, BLOCK_META_OFFSET, BLOCK_META_SIZE, CODE_BLOCK_SIZE, TOTAL_BLOCK_SIZE,
+    Kernel, BLOCK_HEADER_SIZE, BLOCK_META_OFFSET, BLOCK_META_SIZE, CODE_BLOCK_SIZE,
+    TOTAL_BLOCK_SIZE,
 };
 use umbra_error::UmbraError;
 
@@ -117,9 +118,146 @@ fn update_chain(
     Ok(())
 }
 
+/// Side-effect-free authentication of the enclave blob at `base_addr`: runs the SAME
+/// chained measurement `umbra_enclave_create_imp` runs, then derives the version, but
+/// registers NOTHING and does NOT bump the anti-rollback floor. Returns `Some(version)`
+/// if the blob authenticates, `None` on any failure (bad header, over-size, measurement
+/// mismatch, rollback below floor). Used by the `base_addr == 0` create-by-best-slot
+/// sentinel to pick the higher authenticated of the A/B update slots, and by
+/// `umbra_enclave_update_imp` to re-verify a freshly-written slot from flash.
+///
+/// With `enclave_version_bind` OFF every valid blob authenticates to version 0, so the
+/// update path's `version > active` check can never advance (all slots tie at 0); the
+/// secure-update feature is only meaningful with `enclave_version_bind` ON (ADR 013).
+///
+/// `kernel.chain_state` is reused as the fold accumulator: the real create re-seeds it
+/// via `begin_measurement`, so clobbering it here is fine (this always runs before the
+/// real create body re-measures the chosen slot).
+///
+/// **DMA-free / allocator-free / overlay-independent.** Blocks are folded by
+/// CPU-reading the memory-mapped flash slot DIRECTLY, not by DMA-loading into ESS. The
+/// A/B update slots sit outside MCE2, so the mapped bytes are the exact plaintext
+/// `load_block_n657` would have DMAed into ESS — the measurement is byte-identical to the
+/// real create's. This keeps the probe independent of the ESS allocator AND the shared
+/// overlay window, so create-by-best-slot and the secure-update path COEXIST with
+/// `interenclave_overlay` (the default feature) with no gating.
+pub(crate) fn authenticated_version_at(base_addr: u32) -> Option<u32> {
+    let kernel = unsafe { Kernel::get()? };
+
+    if base_addr < 0x7000_0000 || base_addr >= 0x8000_0000 || base_addr & 0xF != 0 {
+        return None;
+    }
+
+    let header = unsafe { UmbraEnclaveHeader::from_address(base_addr)? };
+    let num_blocks = header.code_size / TOTAL_BLOCK_SIZE;
+    if num_blocks == 0 || (num_blocks as usize) > MAX_EFBS {
+        return None;
+    }
+
+    // Fold every block straight from flash (no ESS, no DMA, no overlay dependency).
+    kernel.begin_measurement();
+    let mut hash = drivers::hash::Hash::new();
+    let mut blk: u32 = 0;
+    while blk < num_blocks {
+        fold_block_from_flash(&mut kernel.chain_state, blk, base_addr, &mut hash)?;
+        blk += 1;
+    }
+
+    // Derive the version WITHOUT bumping the floor or registering anything.
+    #[cfg(not(feature = "enclave_version_bind"))]
+    let result = if kernel.finalize_measurement(&header.hmac).is_ok() {
+        // All valid blobs are "version 0"; select_active_slot then picks A on a tie.
+        Some(0)
+    } else {
+        None
+    };
+    #[cfg(feature = "enclave_version_bind")]
+    let result = {
+        // `MonotonicCounter` brings `.floor()` into scope (trait method on BackupFloorCounter).
+        use kernel::key_storage_server::version_search::{search_version, MonotonicCounter};
+        let bm = kernel.chain_state;
+        let author_id = crate::secure_kernel::AUTHOR_ID;
+        let ctr = crate::antirollback::BackupFloorCounter::new();
+        let floor = ctr.floor(author_id);
+        // DO NOT bump: this is a read-only probe.
+        search_version(&header.hmac, floor, |v| {
+            crate::secure_kernel::version_tag(&mut hash, &bm, author_id, v)
+        })
+    };
+
+    result
+}
+
+/// Fold one block into the running measurement chain by reading it DIRECTLY from the
+/// memory-mapped flash slot (CPU, no DMA). Builds the same `[block_id(4) | code(256) |
+/// meta(32)]` preimage `update_chain` folds, but reads BOTH halves from flash: the code
+/// at `base + UMBRA_HEADER_SIZE + blk*TOTAL_BLOCK_SIZE + BLOCK_HEADER_SIZE` (where
+/// `load_block_n657` would have copied it from) and the meta at `... + BLOCK_META_OFFSET`.
+/// Returns `None` on address overflow. Used only by the side-effect-free probe.
+/// KEEP IN SYNC with `update_chain` (the ESS-backed real-create fold).
+fn fold_block_from_flash(
+    chain_state: &mut [u8; 32],
+    blk: u32,
+    enclave_flash_base: u32,
+    hash: &mut drivers::hash::Hash,
+) -> Option<()> {
+    let mut verify_buf = [0u8; 4 + CODE_BLOCK_SIZE as usize + BLOCK_META_SIZE as usize];
+    verify_buf[..4].copy_from_slice(&blk.to_le_bytes());
+
+    let blk_off = blk.checked_mul(TOTAL_BLOCK_SIZE)?;
+    let block_base = enclave_flash_base
+        .checked_add(UMBRA_HEADER_SIZE)?
+        .checked_add(blk_off)?;
+    let code_src = block_base.checked_add(BLOCK_HEADER_SIZE)? as *const u8;
+    let meta_src = block_base.checked_add(BLOCK_META_OFFSET)? as *const u8;
+
+    // SAFETY: both addresses are inside the memory-mapped XSPI2 window for a bounded
+    // block index (num_blocks ≤ MAX_EFBS at the call site); reads are read-only.
+    unsafe {
+        let mut i = 0usize;
+        while i < CODE_BLOCK_SIZE as usize {
+            verify_buf[4 + i] = core::ptr::read_volatile(code_src.add(i));
+            i += 1;
+        }
+        let mut j = 0usize;
+        while j < BLOCK_META_SIZE as usize {
+            verify_buf[4 + CODE_BLOCK_SIZE as usize + j] = core::ptr::read_volatile(meta_src.add(j));
+            j += 1;
+        }
+    }
+
+    let mut out = [0u8; 32];
+    hash.hmac_sha256(chain_state, &verify_buf, &mut out);
+    *chain_state = out;
+    Some(())
+}
+
 #[no_mangle]
 #[link_section = ".umbra_api_implementation"]
 pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
+    // base_addr == 0 = "auto-select best enclave slot": authenticate both A/B update
+    // slots and create from the highest version. The probe (`authenticated_version_at`)
+    // is DMA-free and reads flash directly, so this works in BOTH the default
+    // (interenclave_overlay) and non-overlay builds. The chosen concrete base then flows
+    // into the create body unchanged, which RE-measures + registers + bumps the floor for
+    // real (under overlay it evicts + loads at ESS_BASE like any other base). Yes this
+    // measures the chosen slot twice (a few ms); acceptable for a rare create-time
+    // selection. This runs BEFORE we take the &'static mut kernel borrow below, so
+    // authenticated_version_at's own Kernel::get() does not alias it.
+    let base_addr = if base_addr == 0 {
+        use drivers::state_flash::{ENCLAVE_SLOT_A, ENCLAVE_SLOT_B};
+        use kernel::key_storage_server::enclave_update::select_active_slot;
+        let va = authenticated_version_at(ENCLAVE_SLOT_A);
+        let vb = authenticated_version_at(ENCLAVE_SLOT_B);
+        match select_active_slot(va, vb) {
+            Some(0) => ENCLAVE_SLOT_A,
+            Some(1) => ENCLAVE_SLOT_B,
+            _ => return nsc_status(UmbraError::EnclaveNotFound { id: 0 }),
+        }
+    } else {
+        base_addr
+    };
+
     let kernel = unsafe {
         match Kernel::get() {
             Some(k) => k,
@@ -238,6 +376,9 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     // [block_id | code | meta] into the running HMAC chain.
     // `protect_enclave.py` builds the same chain offline in numeric
     // order and stamps the final value into header.hmac.
+    // KEEP IN SYNC with `authenticated_version_at` (the side-effect-free probe
+    // that runs the identical load+fold+derive for create-by-best-slot): a change
+    // to the block layout, `update_chain`, or the version-derive must land in both.
     kernel.begin_measurement();
     let mut hash = drivers::hash::Hash::new();
 
@@ -294,6 +435,7 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
             }
             Some(v) => {
                 ctr.bump(author_id, v);
+                kernel.last_version = v;
                 if floor == 0 {
                     crate::raw_print::print_str("[UMBRASecureBoot] rollback floor cold (0) — VBAT-trust assumed\r\n");
                 }
@@ -397,12 +539,16 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
         // flash read; a mismatched/replayed anchor returns false -> fresh start.
         // state_root is Copy, so snapshot it to avoid borrowing kernel twice.
         let state_root = kernel.state_root;
-        if crate::secure_kernel::state_checkpoint::restore_enclave(
+        let decision = crate::secure_kernel::state_checkpoint::restore_enclave_decision(
             assigned_id,
             enclave_idx,
             &mut kernel.enclave_contexts[enclave_idx],
             &state_root,
-        ) {
+        );
+        // The &mut enclave_contexts[idx] borrow has ended, so recording the
+        // decision on the kernel is safe. 1=Resume 2=ColdGenesis 3=Reject.
+        kernel.last_restore = decision;
+        if decision == 1 {
             crate::raw_print::print_str("[SC] create: resumed enclave from checkpoint\r\n");
         }
     }

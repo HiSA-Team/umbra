@@ -68,12 +68,17 @@ _host_entry_point = 0x24000100;
    the hardcoded NSC SAU base (0x341AB400) and _umb_estack stay valid — only the boot/kernel
    boundary moved. The 89K step fits the hot-chunk prefetch + non-destructive miss recovery
    (overlay_chain.rs, under interenclave_overlay); kernel-text uses ~3.7K of its budget.
+   The 105K step fits the remote-attestation + secure-update glue (attest_imp.rs quote +
+   update handlers, api_impl.rs DMA-free version probe): .rodata overflowed 89K by ~8.3K.
+   Only the boot/kernel boundary moved (kernel 83K->67K, still >>3.7K used); NSC /
+   kernel-data / nsc-data ORIGINs UNCHANGED, so the hardcoded NSC SAU base (0x341AB400)
+   and _umb_estack stay valid.
 */
 
 MEMORY
 {
-    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 89K
-    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x34196800,                   LENGTH = 83K
+    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 105K
+    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x3419A800,                   LENGTH = 67K
     _NSC_TEXT_MEMORY_             (RXAL) : ORIGIN = 0x341AB400,                   LENGTH = 4K
     _SECURE_KERNEL_DATA_MEMORY_  (RWX)  : ORIGIN = 0x341AC400,                   LENGTH = 128K
     _NSC_DATA_MEMORY_            (RWX)  : ORIGIN = 0x341CC400,                   LENGTH = 8K

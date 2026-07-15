@@ -193,6 +193,43 @@ fn flash(platform: &str) -> Result<()> {
     if platform != "n657" {
         cmd.arg(platform);
     }
+
+    // Remote attestation A/B slots (ADR 013): when UMBRA_ATTEST_SLOTS=1, provision
+    // SLOT_A with THIS build's enclave. Extract the just-built host ELF's enclave
+    // sections to a blob and hand it to the flash script. Because build + extract +
+    // flash all happen in this one invocation, the FSBL and the SLOT_A blob carry the
+    // SAME freshly-rotated master_key, so the slot authenticates. A user-set
+    // ENCLAVE_SLOT_BLOB overrides (e.g. to provision a different-version enclave).
+    if platform == "n657" && std::env::var("UMBRA_ATTEST_SLOTS").as_deref() == Ok("1") {
+        if std::env::var_os("ENCLAVE_SLOT_BLOB").is_none() {
+            let host_app = std::env::var("HOST_APP").unwrap_or_else(|_| "bare_metal".to_string());
+            let host_elf = root.join(format!("host/stm32n657/{host_app}/bin/{host_app}.elf"));
+            let blob = root.join("target/attest_slot_a.bin");
+            let oc = Command::new("arm-none-eabi-objcopy")
+                .args([
+                    "-O",
+                    "binary",
+                    "--only-section=._enclave_header",
+                    "--only-section=._enclave_code",
+                ])
+                .arg(&host_elf)
+                .arg(&blob)
+                .status()
+                .context("arm-none-eabi-objcopy (extract SLOT_A blob) failed to spawn")?;
+            if !oc.success() {
+                anyhow::bail!("failed to extract SLOT_A blob from {}", host_elf.display());
+            }
+            eprintln!(
+                "[xtask flash] SLOT_A provisioned from {} -> {}",
+                host_elf.display(),
+                blob.display()
+            );
+            cmd.env("ENCLAVE_SLOT_BLOB", &blob);
+        } else {
+            eprintln!("[xtask flash] UMBRA_ATTEST_SLOTS=1, using caller's ENCLAVE_SLOT_BLOB");
+        }
+    }
+
     let status = cmd
         .status()
         .with_context(|| format!("Failed to spawn {}", script_label))?;
@@ -201,18 +238,32 @@ fn flash(platform: &str) -> Result<()> {
     }
     // Post-flash: revert master_key residue. Recurring pattern documented
     // post-mortem; enforces NEVER_DO rule 10 mechanically.
-    let mk_files = [
-        "src/hardware/platform/stm32l552/boot/src/master_key.rs",
-        "src/hardware/platform/stm32n657/boot/src/master_key.rs",
-        "src/hardware/platform/riscv32/boot/src/master_key.rs",
-        "tools/master_key.bin",
-    ];
-    let _ = Command::new("git")
-        .current_dir(&root)
-        .args(["checkout", "HEAD", "--"])
-        .args(mk_files)
-        .status();
-    eprintln!("[xtask flash] master_key residue auto-reverted (NEVER_DO rule 10).");
+    //
+    // Escape hatch for remote attestation: the quote/update tags are keyed by the
+    // device MASTER_KEY, so the verifier CLI (tools/attest_update.py) must read the
+    // SAME key the firmware was just built with. Reverting tools/master_key.bin
+    // leaves the CLI with a stale key → tag FAIL. Set UMBRA_KEEP_MASTER_KEY=1 to skip
+    // the revert for an attestation session (remember to `git checkout` the key files
+    // yourself before committing — never commit a rotated master_key).
+    if std::env::var("UMBRA_KEEP_MASTER_KEY").is_ok() {
+        eprintln!(
+            "[xtask flash] UMBRA_KEEP_MASTER_KEY set — master_key NOT reverted \
+             (CLI can now verify quotes). Revert manually before committing."
+        );
+    } else {
+        let mk_files = [
+            "src/hardware/platform/stm32l552/boot/src/master_key.rs",
+            "src/hardware/platform/stm32n657/boot/src/master_key.rs",
+            "src/hardware/platform/riscv32/boot/src/master_key.rs",
+            "tools/master_key.bin",
+        ];
+        let _ = Command::new("git")
+            .current_dir(&root)
+            .args(["checkout", "HEAD", "--"])
+            .args(mk_files)
+            .status();
+        eprintln!("[xtask flash] master_key residue auto-reverted (NEVER_DO rule 10).");
+    }
 
     // n657: after flashing, let the user move the BOOT1 jumper, then launch the
     // attach-mode openocd + gdb session that resets the micro and breaks at

@@ -15,6 +15,7 @@ const USART1_BASE_ADDR: u32 = 0x5200_1000;
 const CR1_OFFSET: u32 = 0x00;
 const BRR_OFFSET: u32 = 0x0C;
 const ISR_OFFSET: u32 = 0x1C;
+const RDR_OFFSET: u32 = 0x24;
 const TDR_OFFSET: u32 = 0x28;
 const PRESC_OFFSET: u32 = 0x2C;
 
@@ -41,7 +42,7 @@ impl Uart<RealMmio> {
         uart.mmio.write(CR1_OFFSET, 0);
         uart.mmio.write(PRESC_OFFSET, 0);
         uart.mmio.write(BRR_OFFSET, brr);
-        uart.mmio.write(CR1_OFFSET, (1 << 0) | (1 << 3));
+        uart.mmio.write(CR1_OFFSET, (1 << 0) | (1 << 2) | (1 << 3)); // UE | RE | TE
 
         uart
     }
@@ -120,6 +121,32 @@ impl<M: MmioAccess> Uart<M> {
         while self.mmio.read(ISR_OFFSET) & (1 << 7) == 0 {}
         self.mmio.write(TDR_OFFSET, byte as u32);
     }
+
+    /// Non-blocking read: returns the received byte if ISR.RXNE (bit 5) is set,
+    /// else None.
+    /// NOTE: this driver helper does NOT handle overrun. On the N657 USART IP a
+    /// latched ORE (ISR bit 3) STOPS further RXNE from setting (HW-confirmed
+    /// 2026-07-14), so a real polling receiver MUST clear ORECF — see the Secure
+    /// `uart_rx_byte` in boot/src/attest_imp.rs, which is the actual N657 RX path.
+    /// This host-tested helper is kept for the driver API surface only.
+    pub fn try_read_byte(&self) -> Option<u8> {
+        if self.mmio.read(ISR_OFFSET) & (1 << 5) != 0 {
+            Some((self.mmio.read(RDR_OFFSET) & 0xFF) as u8)
+        } else {
+            None
+        }
+    }
+
+    /// Blocking read: spin until a byte arrives. Used only by test scaffolding /
+    /// bounded callers; the relay uses `try_read_byte`.
+    #[allow(dead_code)]
+    pub fn read_byte(&self) -> u8 {
+        loop {
+            if let Some(b) = self.try_read_byte() {
+                return b;
+            }
+        }
+    }
 }
 
 // umbra_hal::Uart adapter.
@@ -178,7 +205,7 @@ mod tests {
     /// Pins the N657-specific BRR value: at 150 MHz USART1 kernel clock and
     /// 115200 baud, BRR must be 1302 (see project_n657_fsbl_uart_working).
     /// Captures the configure-time register-write recipe exactly:
-    /// CR1=0, PRESC=0, BRR=1302, CR1=UE|TE.
+    /// CR1=0, PRESC=0, BRR=1302, CR1=UE|RE|TE.
     #[test]
     fn new_usart1_and_configure_115200_writes_brr_1302() {
         // We cannot drive Uart::new_usart1_and_configure() through the mem
@@ -196,7 +223,7 @@ mod tests {
         uart.mmio.write(CR1_OFFSET, 0);
         uart.mmio.write(PRESC_OFFSET, 0);
         uart.mmio.write(BRR_OFFSET, brr);
-        uart.mmio.write(CR1_OFFSET, (1 << 0) | (1 << 3));
+        uart.mmio.write(CR1_OFFSET, (1 << 0) | (1 << 2) | (1 << 3));
 
         let log = mem.write_log();
         assert_eq!(log.len(), 4);
@@ -204,7 +231,7 @@ mod tests {
             (CR1_OFFSET, 0u32),
             (PRESC_OFFSET, 0u32),
             (BRR_OFFSET, 1302u32),
-            (CR1_OFFSET, (1u32 << 0) | (1u32 << 3)),
+            (CR1_OFFSET, (1u32 << 0) | (1u32 << 2) | (1u32 << 3)),
         ];
         for (i, (off, val)) in expected.iter().enumerate() {
             match log[i] {
@@ -215,5 +242,23 @@ mod tests {
                 _ => panic!("step {i}: expected Write, got {:?}", log[i]),
             }
         }
+    }
+
+    /// RX: `try_read_byte` polls ISR.RXNE (bit 5) and reads RDR when set.
+    #[test]
+    fn try_read_byte_reads_rdr_when_rxne_set() {
+        let mem = MmioMem::new(USART1_BASE_ADDR);
+        mem.preload_register(ISR_OFFSET, 1 << 5); // RXNE set
+        mem.preload_register(RDR_OFFSET, 0x5A);
+        let uart = Uart::<_>::new_with_mmio(mem.handle());
+        assert_eq!(uart.try_read_byte(), Some(0x5A));
+    }
+
+    #[test]
+    fn try_read_byte_none_when_rxne_clear() {
+        let mem = MmioMem::new(USART1_BASE_ADDR);
+        mem.preload_register(ISR_OFFSET, 0); // RXNE clear
+        let uart = Uart::<_>::new_with_mmio(mem.handle());
+        assert_eq!(uart.try_read_byte(), None);
     }
 }

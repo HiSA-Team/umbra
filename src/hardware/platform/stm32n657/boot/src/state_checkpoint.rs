@@ -142,17 +142,39 @@ pub fn checkpoint_enclave(
 /// Restore the enclave state from flash. On `Resume`, decrypt and deserialize the
 /// snapshot back into `ctx` and the enclave's PSP stack, and return true. On
 /// `Reject`/`ColdGenesis`, leave `ctx` untouched and return false.
+///
+/// Thin wrapper over `restore_enclave_decision`: any non-Resume decision (2/3) is a
+/// fresh start, which the boolean contract reports as `false`.
+///
+/// Used by the state-continuity boot demos (feature-gated); the production
+/// restore-on-create path uses `restore_enclave_decision` directly, so this is dead
+/// in the default build.
+#[allow(dead_code)]
 pub fn restore_enclave(
     enclave_id: u32,
     enclave_idx: usize,
     ctx: &mut EnclaveContext,
     state_root: &[u8; 32],
 ) -> bool {
+    restore_enclave_decision(enclave_id, enclave_idx, ctx, state_root) == 1
+}
+
+/// Like `restore_enclave` but reports the decision: 1=Resume (and ctx/stack were
+/// restored), 2=ColdGenesis (no anchor — fresh start), 3=Reject (root mismatch/replay —
+/// fresh start). Lets the attestation quote surface a runtime-state rollback attempt.
+/// On any non-Resume decision (or an inner read/decrypt failure) `ctx` is left untouched.
+pub fn restore_enclave_decision(
+    enclave_id: u32,
+    enclave_idx: usize,
+    ctx: &mut EnclaveContext,
+    state_root: &[u8; 32],
+) -> u8 {
     let store = EnclaveFlashStore;
     let anchor = StateAnchor::new();
     match restore(&store, &anchor, state_root, enclave_id, STATE_FMT, hw_hmac) {
         RestoreDecision::Resume => {}
-        RestoreDecision::Reject | RestoreDecision::ColdGenesis => return false,
+        RestoreDecision::ColdGenesis => return 2,
+        RestoreDecision::Reject => return 3,
     }
     // SAFETY: Secure single-threaded context; reads the committed flash into SNAP,
     // decrypts, and writes the enclave's own context + PSP stack.
@@ -161,14 +183,16 @@ pub fn restore_enclave(
         // read the committed ciphertext from flash into SNAP
         let a = match StateAnchor::new().load() {
             Some(a) => a,
-            None => return false,
+            // Anchor said Resume but vanished on re-load: treat as a fresh start
+            // (Reject) rather than resuming from stale/partial SNAP.
+            None => return 3,
         };
         let mut s = 0;
         while s < SNAPSHOT_SECTORS {
             let slot = ((a.parity >> s) & 1) as usize;
             let addr = match state_flash::state_sector_addr(s, slot) {
                 Ok(x) => x,
-                Err(_) => return false,
+                Err(_) => return 3,
             };
             state_flash::invalidate_dcache_region(addr, STATE_SECTOR_SIZE as u32);
             let src = core::slice::from_raw_parts(addr as *const u8, STATE_SECTOR_SIZE);
@@ -186,5 +210,5 @@ pub fn restore_enclave(
         let stack = core::slice::from_raw_parts_mut(stack_base as *mut u8, ENCLAVE_PSP_STACK_SIZE as usize);
         stack.copy_from_slice(&snap[CTX_BYTES..SNAPSHOT_BYTES]);
     }
-    true
+    1
 }

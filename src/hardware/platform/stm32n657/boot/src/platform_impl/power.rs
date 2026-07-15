@@ -41,7 +41,10 @@ pub fn init_uart() {
         core::ptr::write_volatile(u1 as *mut u32, 0); // CR1=0
         core::ptr::write_volatile((u1 + 0x2C) as *mut u32, 0); // PRESC=0
         core::ptr::write_volatile((u1 + 0x0C) as *mut u32, 556); // BRR (HSI/115200)
-        core::ptr::write_volatile(u1 as *mut u32, (1 << 0) | (1 << 3)); // UE+TE
+        // UE + RE + TE: the receiver (RE, bit 2) is enabled so the Secure UART bridge
+        // veneers (umbra_uart_read) can serve the NS attestation relay — USART1 stays
+        // Secure (RIFSC), so NS cannot poll RX directly and goes through the bridge.
+        core::ptr::write_volatile(u1 as *mut u32, (1 << 0) | (1 << 2) | (1 << 3));
         let mut w: u32 = 0;
         while w < 10_000 {
             core::hint::spin_loop();

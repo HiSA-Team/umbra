@@ -22,6 +22,13 @@ INCS   = -Iinc -I$(COMMON_INC_DIR)
 CFLAGS = -O0 -mcpu=cortex-m33 -mthumb -g -c \
          -ffreestanding -nostdlib -fno-builtin $(INCS)
 
+# Secure-update demo: build the host to call umbra_enclave_create(0) (auto-select
+# the best A/B update slot) instead of the embedded enclave. Enable with
+# `make UMBRA_CREATE_BEST_SLOT=1` (or export it). Requires provisioned slots.
+ifeq ($(UMBRA_CREATE_BEST_SLOT),1)
+CFLAGS += -DUMBRA_CREATE_BEST_SLOT
+endif
+
 # E.4c MCE2 region — default 4 MB at 0x70500000 (Path B-full).
 # To bump:
 #   make ENCLAVE_REGION_SIZE=0x1000000 ENCLAVE_DST_START=0x71100000   # 16 MB

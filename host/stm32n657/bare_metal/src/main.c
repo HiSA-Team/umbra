@@ -30,6 +30,7 @@
 
 #include "fibonacci.h"
 #include "umbra_hex.h"
+#include "attest_relay.h"
 
 extern void          umbra_debug_print(const char *s);
 extern unsigned int  umbra_enclave_create(unsigned int base_addr);
@@ -83,7 +84,15 @@ int main(void) {
     uint32_t flash_addr   = HOST_FLASH_BASE + flash_offset;
 
     char hex_buf[11];
+#ifdef UMBRA_CREATE_BEST_SLOT
+    /* Secure-update demo: base_addr==0 = auto-select the highest authenticated
+     * version across the A/B update slots (ADR 013). Requires the slots to be
+     * provisioned (flash_n657.sh UMBRA_ATTEST_SLOTS=1). */
+    (void)flash_addr;
+    unsigned int id = umbra_enclave_create(0);
+#else
     unsigned int id = umbra_enclave_create(flash_addr);
+#endif
     if (id >= 0xFFFFFFF0) {
         umbra_debug_print("[USER] Enclave creation REJECTED, ret=");
         umbra_debug_print(umbra_u32_to_hex(id, hex_buf));
@@ -121,8 +130,8 @@ int main(void) {
 
     umbra_debug_print("[USER] All enclaves done\n");
 
-    while (1) {
-        __asm volatile("wfi");
-    }
+    /* Serve remote attestation quotes + secure enclave updates over UART.
+     * Never returns. */
+    attest_relay_loop();
     return 0;
 }

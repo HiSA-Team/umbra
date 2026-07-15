@@ -106,6 +106,16 @@ SECTIONS
     PROVIDE(umbra_enclave_enter  = 0x341AB421);
     PROVIDE(umbra_enclave_exit   = 0x341AB431);
     PROVIDE(umbra_enclave_status = 0x341AB441);
+    /* Slots 5 (bench_dump) and 6 (null_call) exist in the Secure veneer table but
+     * are unused by this host. Remote attestation + secure update: slots 7/8
+     * (nsc_veneers.s forces both with `.align 4`). */
+    PROVIDE(umbra_attest_quote   = 0x341AB471);
+    PROVIDE(umbra_enclave_update = 0x341AB481);
+    /* Secure UART bridge for the NS attestation relay (USART1 is Secure-only). */
+    PROVIDE(umbra_uart_read      = 0x341AB491);
+    PROVIDE(umbra_uart_write     = 0x341AB4A1);
+    /* System reset — relay activates a new slot after a successful update. */
+    PROVIDE(umbra_system_reset   = 0x341AB4B1);
 }
 
 /* MCE2 linker symbols consumed by:
