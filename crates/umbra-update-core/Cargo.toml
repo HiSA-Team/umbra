@@ -1,0 +1,22 @@
+# umbra-update-core — the verifiable secure-enclave-update logic, carved out of
+# the kernel (issue #58). #![no_std], zero unsafe: the pure-logic leaf that the
+# Charon→Aeneas→Coq pipeline extracts a machine-checked model from. Mirrors
+# umbra-ess-core / umbra-rot-core. The kernel re-exports it (later, gated phase)
+# so firmware and proof share one source.
+#
+# The HMAC primitive is a trait seam (PkgHmac), NOT a closure — Aeneas cannot
+# extract `impl FnOnce(&[u8], &[&[u8]])` (closure + slice-of-borrows); the trait
+# hands a single flat preimage, exactly as the on-target HW HMAC path does.
+[package]
+name = "umbra-update-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# `charon` cfg is set only by charon-driver during extraction (--cfg charon) to
+# strip the non-extractable Debug/PartialEq derives; declare it so normal builds
+# don't warn about an unexpected cfg.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(charon)'] }
+
+[dependencies]

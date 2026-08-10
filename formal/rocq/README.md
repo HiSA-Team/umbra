@@ -24,6 +24,10 @@ On macOS the Homebrew tools (`gmake`, `opam`, `rustup`) live under
 
 ## Install
 
+Charon and Aeneas are **vendored as git submodules** under
+[`formal/toolchain/`](../toolchain/), pinned to the known-good commits above
+(previously they lived in an ephemeral `/tmp` checkout that kept vanishing).
+
 ```bash
 # 1. OCaml 5.3 in a dedicated opam switch (Aeneas wants OCaml 5; 5.3.0 known-good)
 opam switch create aeneas 5.3.0
@@ -31,29 +35,28 @@ eval "$(opam env --switch=aeneas)"
 opam install -y ppx_deriving visitors easy_logging zarith yojson core_unix \
   odoc ocamlgraph menhir ocamlformat.0.27.0 unionFind progress domainslib
 
-# 2. Clone Aeneas (it vendors Charon at the pinned commit)
-git clone https://github.com/AeneasVerif/aeneas /tmp/aeneas
-cd /tmp/aeneas
+# 2. Fetch the pinned Charon + Aeneas sources
+git submodule update --init formal/toolchain/aeneas formal/toolchain/charon
 
-# 3. Build Charon at the pinned commit — USE gmake, not the macOS `make`
-gmake setup-charon          # clones + builds ./charon at the charon-pin commit
+# 3. Build both (needs gmake, not macOS BSD make; uses the 'aeneas' opam switch).
+#    Charon pulls its own Rust nightly-2026-06-01 via rustup on first build.
+formal/toolchain/build.sh    # -> aeneas/bin/aeneas + charon/bin/charon
 
-# 4. Build Aeneas
-gmake                       # produces ./bin/aeneas (+ ./charon/bin/charon)
-
-# 5. Coq, if not already present (any opam switch with coq 8.18 works)
+# 4. Coq, if not already present (any opam switch with coq 8.18 works)
 opam install -y coq.8.18.0
 
-# 6. Put the binaries on PATH
-export PATH="/tmp/aeneas/bin:/tmp/aeneas/charon/bin:$PATH"
+# 5. Put the binaries on PATH
+export PATH="$PWD/formal/toolchain/aeneas/bin:$PWD/formal/toolchain/charon/bin:$PATH"
 charon --help | head -1
 aeneas -version
 coqc --help | head -1
 ```
 
 > `make` on macOS is the antiquated BSD version and Charon's Makefile rejects it
-> (`*** You seem to be using the OSX antiquated Make version`). Always use
-> `gmake` (`brew install make`).
+> (`*** You seem to be using the OSX antiquated Make version`). `build.sh`
+> defaults to `gmake` (`brew install make`); override with `MAKE=...`.
+> The submodules are marked `ignore = dirty`, so build artifacts under them do
+> not show up as changes in the parent repo's `git status`.
 
 ## Running the pipeline
 
@@ -70,7 +73,7 @@ aeneas -backend coq model.llbc -dest proofs-coq -split-files
 Aeneas does not copy its Coq support library, and a few manual steps are needed
 (documented in [`REPORT.md`](REPORT.md) §1):
 
-1. Copy the primitives: `cp /tmp/aeneas/backends/coq/Primitives.v proofs-coq/`.
+1. Copy the primitives: `cp formal/toolchain/aeneas/backends/coq/Primitives.v proofs-coq/`.
 2. Use a **non-empty** logical path — `coqc -R . Lib file.v`. (An empty `-R . ""`
    clashes with the `Module Primitives` wrapper inside `Primitives.v`.)
 3. The Coq backend ships **no** `control_flow`/`loop` combinator and **no**
@@ -99,5 +102,32 @@ directory's `_CoqProject`; the architecture is documented in
 formal/rocq/
 ├── README.md            # this file
 ├── REPORT.md            # feasibility findings + refactor proposal (issue #58)
-└── (Phase 3) proofs-coq/ + the umbra-ess-model crate's generated .v
+├── AENEAS_COQ_MKARRAY_BUG.md   # the backend axiom that proves False, and the fix
+├── ess-core/            # ESS cache state machine
+├── rot-core/            # RoT chained measurement (see the caveat below)
+├── mem-core/            # memory-block region math
+├── update-core/         # secure enclave update — the 12-file chain, P1..P4
+├── chain-core/          # the update blob's chained measurement — closes B1
+└── crypto/              # SSProve: EUF-CMA for the package tag
 ```
+
+### Build order
+
+`chain-core` and `crypto` both load `Primitives.v`, `AeneasLoopShim.v` and the
+`Update_*` files out of `update-core/proofs-coq`, so **update-core builds first**:
+
+```bash
+cd formal/rocq/update-core/proofs-coq && coq_makefile -f _CoqProject -o Makefile && make
+cd ../../chain-core && ./build.sh      # 9 files + assumption audit
+cd ../crypto        && ./build.sh      # needs SSProve; --det-only for bare Coq
+```
+
+### A caveat about `rot-core`
+
+`rot-core`'s T1–T4 are **not** over extracted code. Those files never `Require`
+`Primitives` or `Rot_Funs`; they are hand-written Coq over `list N` with the real
+assumptions moved into `Section` `Variable`/`Hypothesis`. Their "0 axioms" is true
+and close to meaningless. Worse, `Rot_Chain.v`'s `hmac_injective` is
+**unsatisfiable** by any fixed-output MAC (pigeonhole), so what it proves is
+vacuous. `chain-core` is the redone version of that argument: over the verbatim
+extracted body, and as a reduction rather than under a false hypothesis.

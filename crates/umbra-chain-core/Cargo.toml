@@ -1,0 +1,26 @@
+# umbra-chain-core — the verifiable chained-measurement (blob-body) logic.
+#
+# The package tag proved in `umbra-update-core` authenticates a 60-byte core:
+# nonce, author_id, version, blob_len and the 32-byte UMBR `header.hmac`. It does
+# NOT cover the blob's body — that is itself a machine-checked fact
+# (`formal/rocq/crypto/Umbra_Canonical.blob_body_is_not_covered_by_pkg_tag`).
+# Body integrity rests on a SECOND, chained HMAC whose root is that authenticated
+# `header.hmac`. This crate is that chain, as pure logic: the same preimage layout,
+# block order and accept gate the firmware runs, with the flash reads replaced by
+# indexing into a caller-owned byte slice.
+#
+# #![no_std], zero unsafe. The HMAC primitive is a trait seam (`ChainHmac`), not a
+# closure and not `&mut dyn` — Aeneas can translate neither. Extraction:
+# ../../formal/rocq/chain-core/extract.sh
+[package]
+name = "umbra-chain-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# `charon` cfg is set only by charon-driver during extraction (--cfg charon);
+# declare it so normal builds don't warn about an unexpected cfg.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(charon)'] }
+
+[dependencies]

@@ -1,8 +1,28 @@
-//! Secure enclave-update package: parse + authenticate a nonce-bound update, and
-//! choose the active enclave slot by authenticated version. Pure logic; the HMAC
-//! primitive is injected. The package tag authenticates the BINDING (nonce ‖ ids ‖
-//! header.hmac), not the whole blob — the blob's integrity is re-established by the
-//! measurement chain when the enclave is created from flash. See the design spec.
+//! Secure enclave update — **re-export shim over the proved leaf crate**.
+//!
+//! The parsing/authentication logic no longer lives here. It lives in
+//! `crates/umbra-update-core` (`#![no_std]`, `#![forbid(unsafe_code)]`), which
+//! is the crate the Charon→Aeneas→Coq pipeline extracts and the crate the
+//! machine-checked theorems are proved about:
+//!
+//! - **P3 — bounds-safety**: `parse_and_verify_total` in
+//!   `formal/rocq/update-core/proofs-coq/Update_Safety.v` — on ANY input bytes the
+//!   extracted `parse_and_verify` never takes the Aeneas `Fail` channel (panic /
+//!   out-of-bounds / arithmetic overflow).
+//! - **P4 — anti-rollback**: `select_both_picks_strictly_greater` +
+//!   `stale_update_not_selected` in `Update_Props.v` — slot B is activated **iff**
+//!   its version strictly exceeds slot A's.
+//!
+//! This module exists only so the firmware call sites (`attest_imp.rs`,
+//! `api_impl.rs` on the N657) keep their historical
+//! `kernel::key_storage_server::enclave_update::…` paths **and** their historical
+//! signatures: the kernel injects the HMAC primitive as a closure
+//! `impl Fn(&[u8], &[&[u8]]) -> [u8; 32]`, which Aeneas cannot extract
+//! (closure + slice-of-borrows). The crate takes a `PkgHmac` trait over a single
+//! flat `[u8; PKG_PREIMAGE_LEN]` preimage instead — exactly the buffer the
+//! on-target HW HMAC path (`hw_hmac_single`) builds when it flattens its parts.
+//! `ClosureHmac` below is the (byte-identical) adapter between the two, pinned by
+//! the `shim_matches_crate_and_legacy_paths` differential test.
 //!
 //! Package layout (little-endian):
 //! ```text
@@ -15,121 +35,79 @@
 //!  32+blob_len  32  pkg_tag
 //! ```
 
-pub const UPDATE_MAGIC: u32 = 0x3150_5555; // "UUP1"
-pub const PKG_TAG_LABEL: &[u8] = b"umbra-update-v1"; // 15 bytes
-/// Total pkg_tag preimage length: LABEL(15), nonce(16), author(4), version(4),
-/// blob_len(4), header.hmac(32). The on-target HW HMAC path flattens the parts
-/// into a fixed buffer of exactly this size (cf. `state_root::ROOT_PREIMAGE_LEN`);
-/// keep it in lock-step with `compute_pkg_tag`, guarded by the
-/// `preimage_len_fits_all_parts` test.
-pub const PKG_PREIMAGE_LEN: usize = 75;
-const HDR_HMAC_OFF: usize = 16; // UMBR header.hmac offset within the blob
-const HDR_HMAC_LEN: usize = 32;
-const FIXED_PREFIX: usize = 32; // magic..blob start
-const MIN_BLOB: usize = 48; // at least a UMBR header
+pub use umbra_update_core::{
+    select_active_slot, PkgHmac, UpdateError, VerifiedUpdate, HDR_LEN, PKG_PREIMAGE_LEN,
+    PKG_TAG_LABEL, UPDATE_MAGIC,
+};
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum UpdateError {
-    Malformed,
-    BadMagic,
-    NonceMismatch,
-    TagInvalid,
+/// Presents a kernel-style HMAC closure as the crate's `PkgHmac` trait.
+///
+/// STRUCTURALLY INFALLIBLE — there is no fallback arm. An earlier revision stored
+/// the closure in a `Cell<Option<F>>` (because `PkgHmac::hmac_pkg` takes `&self`
+/// and the closure was `FnOnce`) and returned an all-zero tag if the cell was
+/// already empty, on the reasoning that "a zero tag never matches a real HMAC".
+/// That reasoning is WRONG and the arm was FAIL-OPEN: the returned tag is compared
+/// by `ct_eq32(&expect, got)` where `got` is 32 bytes taken verbatim from the
+/// ATTACKER-SUPPLIED package, so an attacker who puts 32 zero bytes in the tag
+/// field is ACCEPTED. It was unreachable at the time (the crate calls the seam at
+/// most once) but invisible to the proofs — P3's seam premise is TOTALITY only,
+/// which a zero-returning arm satisfies. The fix is to remove the possibility:
+/// the adapter now holds the closure by value under an `Fn` bound, so `hmac_pkg`
+/// simply calls it and no synthetic tag can ever be produced. Every call site in
+/// the tree passes a plain `fn` item (`hw_hmac_single`, the test mocks), all of
+/// which implement `Fn`, so no caller changes.
+struct ClosureHmac<F: Fn(&[u8], &[&[u8]]) -> [u8; 32]> {
+    f: F,
 }
 
-/// A verified update, ready to be written to the inactive slot. `blob` is a
-/// byte range into the caller-owned package buffer.
-pub struct VerifiedUpdate<'a> {
-    pub author_id: u32,
-    pub version: u32,
-    pub blob: &'a [u8],
+impl<F: Fn(&[u8], &[&[u8]]) -> [u8; 32]> PkgHmac for ClosureHmac<F> {
+    fn hmac_pkg(&self, key: &[u8], preimage: &[u8; PKG_PREIMAGE_LEN]) -> [u8; 32] {
+        // ONE part, already flat: identical bytes to the historical
+        // `[LABEL, nonce, &a, &v, &l, header]` call, since the HW path
+        // concatenates its parts with no separators (15+16+4+4+4+48 = 91).
+        (self.f)(key, &[&preimage[..]])
+    }
 }
 
-/// pkg_tag preimage = LABEL ‖ nonce ‖ author_le ‖ version_le ‖ blob_len_le ‖ header.hmac.
+/// pkg_tag preimage = LABEL ‖ nonce ‖ author_le ‖ version_le ‖ blob_len_le ‖ header.
+/// `header` is the blob's FULL 48-byte UMBR header (`blob[0,48)`) — v2 widened
+/// the coverage from header.hmac alone, closing the unauthenticated-header-bytes
+/// residue (trust_level, efbc_size, ess_blocks, reloc_count).
+///
+/// Signature-compatible wrapper; the assembly itself is
+/// `umbra_update_core::compute_pkg_tag` (see `compute_pkg_tag_total`, `Qed`).
 pub fn compute_pkg_tag(
     nonce: &[u8; 16],
     author_id: u32,
     version: u32,
     blob_len: u32,
-    header_hmac: &[u8; 32],
-    hmac: impl FnOnce(&[u8], &[&[u8]]) -> [u8; 32],
+    header: &[u8; HDR_LEN],
+    hmac: impl Fn(&[u8], &[&[u8]]) -> [u8; 32],
     key: &[u8],
 ) -> [u8; 32] {
-    let a = author_id.to_le_bytes();
-    let v = version.to_le_bytes();
-    let l = blob_len.to_le_bytes();
-    hmac(key, &[PKG_TAG_LABEL, nonce, &a, &v, &l, header_hmac])
+    umbra_update_core::compute_pkg_tag(
+        nonce,
+        author_id,
+        version,
+        blob_len,
+        header,
+        &ClosureHmac { f: hmac },
+        key,
+    )
 }
 
 /// Parse and authenticate a package against the currently armed `expected_nonce`.
+///
+/// Signature-compatible wrapper; the parsing/verification is
+/// `umbra_update_core::parse_and_verify` — the function P3 proves total on
+/// hostile input.
 pub fn parse_and_verify<'a>(
     pkg: &'a [u8],
     expected_nonce: &[u8; 16],
-    hmac: impl FnOnce(&[u8], &[&[u8]]) -> [u8; 32],
+    hmac: impl Fn(&[u8], &[&[u8]]) -> [u8; 32],
     key: &[u8],
 ) -> Result<VerifiedUpdate<'a>, UpdateError> {
-    if pkg.len() < FIXED_PREFIX + MIN_BLOB + 32 {
-        return Err(UpdateError::Malformed);
-    }
-    let magic = u32::from_le_bytes([pkg[0], pkg[1], pkg[2], pkg[3]]);
-    if magic != UPDATE_MAGIC {
-        return Err(UpdateError::BadMagic);
-    }
-    let mut nonce = [0u8; 16];
-    nonce.copy_from_slice(&pkg[4..20]);
-    let author_id = u32::from_le_bytes([pkg[20], pkg[21], pkg[22], pkg[23]]);
-    let version = u32::from_le_bytes([pkg[24], pkg[25], pkg[26], pkg[27]]);
-    let blob_len = u32::from_le_bytes([pkg[28], pkg[29], pkg[30], pkg[31]]) as usize;
-
-    // Bounds: blob + trailing 32-byte tag must fit exactly. Derive tag_off from
-    // the trusted pkg.len() rather than the attacker-controlled blob_len, so no
-    // arithmetic on adversarial input can wrap on 32-bit targets.
-    // pkg.len() >= FIXED_PREFIX + MIN_BLOB + 32 was checked above, so neither
-    // subtraction can underflow.
-    let tag_off = pkg.len() - 32;
-    if blob_len < MIN_BLOB || tag_off - FIXED_PREFIX != blob_len {
-        return Err(UpdateError::Malformed);
-    }
-    let blob = &pkg[FIXED_PREFIX..tag_off];
-
-    // Nonce binding (constant-time).
-    if !ct_eq16(&nonce, expected_nonce) {
-        return Err(UpdateError::NonceMismatch);
-    }
-
-    let mut header_hmac = [0u8; 32];
-    header_hmac.copy_from_slice(&blob[HDR_HMAC_OFF..HDR_HMAC_OFF + HDR_HMAC_LEN]);
-    let expect = compute_pkg_tag(&nonce, author_id, version, blob_len as u32, &header_hmac, hmac, key);
-    let got = &pkg[tag_off..tag_off + 32];
-    if !ct_eq32(&expect, got) {
-        return Err(UpdateError::TagInvalid);
-    }
-
-    Ok(VerifiedUpdate { author_id, version, blob })
-}
-
-/// Pick the active slot (0 = A, 1 = B) by highest authenticated version.
-/// `None` = that slot has no valid enclave. Tie → A. Both None → None.
-pub fn select_active_slot(ver_a: Option<u32>, ver_b: Option<u32>) -> Option<usize> {
-    match (ver_a, ver_b) {
-        (None, None) => None,
-        (Some(_), None) => Some(0),
-        (None, Some(_)) => Some(1),
-        (Some(a), Some(b)) => Some(if b > a { 1 } else { 0 }),
-    }
-}
-
-fn ct_eq16(a: &[u8; 16], b: &[u8; 16]) -> bool {
-    let mut d = 0u8;
-    let mut i = 0;
-    while i < 16 { d |= a[i] ^ b[i]; i += 1; }
-    d == 0
-}
-fn ct_eq32(a: &[u8; 32], b: &[u8]) -> bool {
-    if b.len() != 32 { return false; }
-    let mut d = 0u8;
-    let mut i = 0;
-    while i < 32 { d |= a[i] ^ b[i]; i += 1; }
-    d == 0
+    umbra_update_core::parse_and_verify(pkg, expected_nonce, &ClosureHmac { f: hmac }, key)
 }
 
 #[cfg(test)]

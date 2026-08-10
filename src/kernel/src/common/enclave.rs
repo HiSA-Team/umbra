@@ -78,6 +78,26 @@ impl UmbraEnclaveHeader {
         }
     }
 
+    /// Reads `trust_level` (`blob[4]`), which has **two different trust stories
+    /// depending on how the blob reached flash** — read this before writing the
+    /// first `if header.is_trusted()` in the tree (there is none today).
+    ///
+    /// - **Signed update path**: trustworthy. Since pkg-tag v2 the package tag
+    ///   covers the whole 48-byte UMBR header `blob[0,48)`, this byte included
+    ///   (`umbra_update_core::compute_pkg_tag`, `PKG_TAG_LABEL =
+    ///   "umbra-update-v2"`), so a post-signing flip dies at the tag gate with
+    ///   `TagInvalid` before any flash write.
+    /// - **Anything written out of band**: NOT trustworthy. A blob placed in
+    ///   flash outside that path is constrained only by the chained measurement,
+    ///   and the chain covers `blob[48, 48+288·n)` only — never the header
+    ///   metadata. `umbra_chain_core`'s gate accepts any value of this byte
+    ///   (`Chain_Residual.verdict_ignores_the_unauthenticated_header_bytes`,
+    ///   `Qed`; executable shadow:
+    ///   `umbra-chain-core/src/lib_tests.rs::bytes_outside_the_folded_region_are_not_covered`).
+    ///
+    /// So gating a privilege on this is safe only where the blob's provenance is
+    /// the signed update path. Gating one on it unconditionally is a privilege
+    /// escalation for any deployment that provisions enclaves by any other means.
     pub fn is_trusted(&self) -> bool {
         self.trust_level == EnclaveTrustLevel::Trusted as u8
     }

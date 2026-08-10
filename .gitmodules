@@ -13,3 +13,14 @@
 [submodule "tools/qemu-spmp/qemu"]
 	path = tools/qemu-spmp/qemu
 	url = https://gitlab.com/qemu-project/qemu.git
+[submodule "formal/toolchain/aeneas"]
+	path = formal/toolchain/aeneas
+	url = https://github.com/AeneasVerif/aeneas.git
+	# pinned to tag nightly-2026.06.16 (commit 8dd8bfb); build artifacts are
+	# untracked so ignore a dirty working tree in the parent's status.
+	ignore = dirty
+[submodule "formal/toolchain/charon"]
+	path = formal/toolchain/charon
+	url = https://github.com/AeneasVerif/charon.git
+	# pinned to 6f058254 = the commit aeneas 8dd8bfb records in its charon-pin.
+	ignore = dirty

@@ -153,10 +153,12 @@ pub extern "C" fn umbra_system_reset_imp() -> u32 {
     }
 }
 
-/// HW HMAC-SHA256 over the flattened parts. The attestation quote passes exactly one
-/// contiguous part; the update tag (later task) passes several small parts. Flatten
-/// into a bounded scratch (the update preimage is < 128 bytes; the quote preimage is
-/// QUOTE_PREIMAGE_LEN = 83). Sized to 128 to cover both with margin.
+/// HW HMAC-SHA256 over the flattened parts. Both defined tags now pass exactly one
+/// contiguous part (quote = 83 bytes; update = 91 bytes, built flat by the crate's
+/// `compute_pkg_tag`), so the `parts.len() == 1` fast path is what runs. The
+/// multi-part flatten below is a bounded-scratch fallback (sized 128 to cover both
+/// with margin) with a keyed, fail-closed overflow guard; it is dead for the two
+/// defined tags but kept so no future multi-part caller can silently overflow.
 pub(crate) fn hw_hmac_single(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hash = drivers::hash::Hash::new();
     let mut out = [0u8; 32];
@@ -168,9 +170,18 @@ pub(crate) fn hw_hmac_single(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
         for p in parts {
             if n + p.len() > buf.len() {
                 // Preimage longer than the fixed scratch — must not happen for the
-                // defined tags (quote 83, update 75). Fail closed with a zero tag
-                // rather than panic; a zero tag will never match a real HMAC.
-                return [0u8; 32];
+                // defined tags (quote 83, update 91). Returning a CONSTANT here
+                // (the old code returned all zeros, "a zero tag will never match a
+                // real HMAC") would be fail-OPEN, not fail-closed: this value is
+                // compared by `ct_eq32(&expect, got)` against 32 bytes taken
+                // verbatim from the ATTACKER-SUPPLIED package, so an attacker who
+                // writes that same constant into the tag field is accepted.
+                // Return a KEYED, domain-separated value instead: unpredictable
+                // without `key`, so no attacker-chosen tag can match it, and no
+                // panic/reset in the middle of an update handler.
+                let mut poison = [0u8; 32];
+                hash.hmac_sha256(key, b"umbra-hmac-overflow", &mut poison);
+                return poison;
             }
             buf[n..n + p.len()].copy_from_slice(p);
             n += p.len();
@@ -178,6 +189,27 @@ pub(crate) fn hw_hmac_single(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
         hash.hmac_sha256(key, &buf[..n], &mut out);
     }
     out
+}
+
+// --- DWT cycle counter (bench telemetry only). CPU @ 800 MHz; CYCCNT is 32-bit so
+// it wraps at ~5.4 s — every measured phase is far shorter, deltas use wrapping_sub.
+const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
+
+/// Enable TRCENA + CYCCNTENA (idempotent) and return the current cycle count.
+fn cyccnt_start() -> u32 {
+    // SAFETY: fixed CoreDebug DEMCR + DWT MMIO.
+    unsafe {
+        let demcr = 0xE000_EDFC as *mut u32;
+        core::ptr::write_volatile(demcr, core::ptr::read_volatile(demcr) | (1 << 24));
+        let ctrl = 0xE000_1000 as *mut u32;
+        core::ptr::write_volatile(ctrl, core::ptr::read_volatile(ctrl) | 1);
+        core::ptr::read_volatile(DWT_CYCCNT)
+    }
+}
+
+fn cyccnt() -> u32 {
+    // SAFETY: fixed DWT MMIO, read-only.
+    unsafe { core::ptr::read_volatile(DWT_CYCCNT) }
 }
 
 /// Read the current HDPL code (low byte of BSEC_HDPLSR).
@@ -248,6 +280,7 @@ pub extern "C" fn umbra_attest_quote_imp(nonce_ptr: u32, out_ptr: u32) -> u32 {
         None => return 0xFFFF_FFFE,
     };
 
+    let t0 = cyccnt_start();
     let mut nonce = [0u8; 16];
     // SAFETY: nonce_ptr range-checked into NS RAM above.
     unsafe {
@@ -277,6 +310,7 @@ pub extern "C" fn umbra_attest_quote_imp(nonce_ptr: u32, out_ptr: u32) -> u32 {
     let mut out = [0u8; QUOTE_LEN];
     let key = kernel.attest_key;
     build_quote(&q, &key, hw_hmac_single, &mut out);
+    let t1 = cyccnt();
 
     // SAFETY: out_ptr range-checked into NS RAM above.
     unsafe {
@@ -284,6 +318,12 @@ pub extern "C" fn umbra_attest_quote_imp(nonce_ptr: u32, out_ptr: u32) -> u32 {
             core::ptr::write_volatile((out_ptr as *mut u8).add(i), out[i]);
         }
     }
+    // Bench telemetry: quote generation cost (gather + HW HMAC), 8-digit hex cycles.
+    // Printed after the out-buffer write so it never delays the measured section; the
+    // ~3 ms of UART print time DOES sit inside the host-observed round-trip.
+    crate::raw_print::print_str("[UMBRA-BENCH] quote cyc=");
+    crate::raw_print::print_hex(t1.wrapping_sub(t0));
+    crate::raw_print::print_str("\r\n");
     kernel.last_nonce = nonce;
     kernel.nonce_armed = true;
     0
@@ -318,6 +358,7 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
     if !ns_range_ok(pkg_ptr, pkg_len) || pkg_len < 112 || pkg_len as usize > 0x10000 {
         return ERR_ARG;
     }
+    let t0 = cyccnt_start();
 
     // Capture the armed nonce + key, then DISARM and drop the kernel borrow before any
     // `authenticated_version_at` call (that probe takes its own `&'static mut Kernel`;
@@ -349,6 +390,7 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
         }
         core::slice::from_raw_parts(dst, len)
     };
+    let t_copy = cyccnt();
 
     // Authenticate: nonce binding + pkg_tag (over the Secure copy).
     let (author_id, version, blob_len) = match parse_and_verify(pkg, &expected, hw_hmac_single, &key)
@@ -359,6 +401,7 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
         Err(_) => return ERR_ARG,
     };
     let _ = author_id; // (author binding is inside the tag; not needed further here)
+    let t_auth = cyccnt();
 
     // Decide the inactive slot = NOT the current active-by-version slot. These probes take
     // their own kernel borrow — safe because we dropped ours above.
@@ -375,6 +418,7 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
         Some(1) => vb,
         _ => None,
     };
+    let t_probe = cyccnt();
 
     // Move the blob to the front of the scratch and zero-pad to a whole 4 KB sector
     // (write_enclave_slot needs a %4096 buffer; un-erased NOR reads non-deterministically
@@ -401,6 +445,7 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
     if drivers::state_flash::write_enclave_slot(target_slot, padded).is_err() {
         return ERR_FLASH;
     }
+    let t_flash = cyccnt();
 
     // Re-verify FROM FLASH: authenticate the slot we just wrote, require version strictly
     // above the active slot. This reads the persisted bytes (not the NS blob) — closes the
@@ -411,6 +456,23 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
     };
     let written = crate::api_impl::authenticated_version_at(base);
     let _ = version; // declared version is advisory; the authenticated one is authoritative
+    let t_verify = cyccnt();
+
+    // Bench telemetry: per-phase cycle deltas (8-digit uppercase hex, 800 MHz CPU).
+    // Printed BEFORE the relay sends the response frame; the CLI resyncs on SOF so
+    // this ASCII line never confuses the framed protocol.
+    crate::raw_print::print_str("[UMBRA-BENCH] upd copy=");
+    crate::raw_print::print_hex(t_copy.wrapping_sub(t0));
+    crate::raw_print::print_str(" auth=");
+    crate::raw_print::print_hex(t_auth.wrapping_sub(t_copy));
+    crate::raw_print::print_str(" probe=");
+    crate::raw_print::print_hex(t_probe.wrapping_sub(t_auth));
+    crate::raw_print::print_str(" flash=");
+    crate::raw_print::print_hex(t_flash.wrapping_sub(t_probe));
+    crate::raw_print::print_str(" verify=");
+    crate::raw_print::print_hex(t_verify.wrapping_sub(t_flash));
+    crate::raw_print::print_str("\r\n");
+
     match (written, active_version) {
         (None, _) => {
             // Bad write / measurement mismatch: invalidate the slot's first sector so a

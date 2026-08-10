@@ -23,6 +23,17 @@ umbra-rot-core = { path = "../../crates/umbra-rot-core" }
 # Memory-layout logic carved into a verifiable leaf crate (issue #58); re-exported
 # by `common::memory_layout`.
 umbra-mem-core = { path = "../../crates/umbra-mem-core" }
+# Secure enclave-update parsing/authentication + A/B slot selection, carved into a
+# verifiable leaf crate (issue #58) and PROVED in Coq (P3 bounds-safety,
+# P4 anti-rollback). `key_storage_server::enclave_update` is a thin closure→trait
+# shim over it, so the firmware executes the proved code and every existing
+# `kernel::key_storage_server::enclave_update::…` call site is unchanged.
+umbra-update-core = { path = "../../crates/umbra-update-core" }
+# The blob-body half of that update: the chained measurement whose root is the
+# authenticated `header.hmac`. Carved into a verifiable leaf crate and PROVED in
+# Coq (coverage, the body-pinning target theorem, and the composition with P2).
+# `key_storage_server::blob_chain` re-exports it.
+umbra-chain-core = { path = "../../crates/umbra-chain-core" }
 
 # Property-based tests for invariants in `common::ess` and related
 # subsystems. Dev-dependency only, so the firmware (`thumbv8m`)

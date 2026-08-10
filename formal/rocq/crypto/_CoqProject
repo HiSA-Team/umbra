@@ -1,0 +1,80 @@
+-R . UmbraCrypto
+-R ../update-core/proofs-coq Lib
+-R ../chain-core/proofs-coq Lib
+
+# umbra-update-core — the CRYPTOGRAPHIC layer (issue #58).
+#
+# Kept in its own directory, with its own _CoqProject, for one reason: the
+# game-based part depends on SSProve, which drags in mathcomp + mathcomp-analysis
+# + extructures + deriving + equations. The 12-file update-core chain next door
+# must stay buildable with a bare Coq 8.18 and NOTHING else, so it can never be
+# allowed to acquire that dependency. Everything here `Require`s across the
+# directory boundary; nothing next door requires anything here.
+#
+# TIERS.
+#   Tier D (deterministic, bare Coq)  — Update_Forgery.v, Update_Encoding.v,
+#     Umbra_DeviceLink.v.
+#     No mathcomp. Buildable with `./build.sh --det-only`. These are the files
+#     that consume the `Qed`s next door and hand the crypto layer a purely
+#     syntactic interface.
+#   Tier G (game-based, needs SSProve) — Umbra_EUFCMA.v, Umbra_Reduction.v.
+#
+# See README.md for the install recipe, the assumption budget and the list of
+# what is NOT proved.
+
+# --- Tier D: deterministic. Bare Coq 8.18, no mathcomp. ------------------
+# The reduction core: acceptance yields a valid, fresh (message, tag) pair.
+Update_Forgery.v
+# The Aeneas <-> plain-Z type bridge, and the theorem that makes the reduction
+# implementable by a key-less party: on acceptance the encoding of the DEVICE'S
+# preimage/tag equals the encoding computed from the WIRE bytes alone.
+Update_Encoding.v
+# The CANONICAL preimage decoding: base-257 digits back to the 75 byte values,
+# so the abstract MAC can be DEFINED as the seam applied to that decoding
+# instead of chosen classically. Also states, as a theorem, which package bytes
+# the tag does and does not cover.
+Umbra_Canonical.v
+# The BYTE-VALID SUBIMAGE: re-indexes the message space at `256^60`, the exact
+# set of 60-byte authenticated cores, so every game message decodes to seventy-
+# five genuine bytes and the base-257 dead zone is unreachable.
+Umbra_ByteSpace.v
+# The AUDIT of the one premise that re-indexing leaves: `ArrayVectors` is
+# SATISFIABLE in the same list model that witnesses
+# `Update_Model.quarantine_has_a_model` — so it cannot have made the axiom set
+# inconsistent, nor displaced any of the twenty laws — and it is NECESSARY:
+# deny it at one message and the dead-zone counterexample rebuilds there.
+# Exactly the right premise, with no slack in either direction.
+Umbra_ArrayVectors.v
+# The joint: real acceptance implies the game's win condition. Takes the game's
+# MAC over an ARBITRARY key type so it stays out of the mathcomp tier.
+Umbra_DeviceLink.v
+# The wire: a package space that IS a choice_type (`list nat`), the device's
+# marshalling into `slice u8`, and the REAL acceptance predicate as a `bool`.
+# This is what lets the extracted parser appear inside an SSProve oracle.
+Umbra_Wire.v
+# The CONVERSE parser: acceptance implies the five key-free guards, and those
+# guards drive the extracted body all the way to the tag comparison. This is
+# what turns Umbra_RealGame's `Hfactorise` from a hypothesis into a theorem.
+Update_Converse.v
+# The same factorisation at the wire, plus the CONCRETE key-free `struct_ok`
+# the SSProve reduction evaluates.
+Umbra_WireConverse.v
+# THE UNION, deterministic half. Two packages the parser accepts whose 60-byte
+# AUTHENTICATED CORES agree have equal blob bodies, or the chained seam
+# collided. No tag hypothesis and no package-MAC collision disjunct, unlike
+# `Chain_Compose`. This is the first file here to require `chain-core` (third
+# `-R` above); chain-core must therefore be BUILT FIRST, and `build.sh` guards
+# on it. The edge runs one way: nothing in chain-core requires anything here.
+Umbra_UnionCore.v
+
+# --- Tier G: game-based. Needs SSProve (see README.md). ------------------
+Umbra_EUFCMA.v
+Umbra_Reduction.v
+# The reduction with the extracted parser IN the `submit` oracle. Unlike
+# Umbra_Reduction.v, this file does not compile if `parse_and_verify` is
+# removed, and its `Print Assumptions` lists the Aeneas axioms.
+Umbra_RealGame.v
+# THE UNION, game half: the case split on the game's own query set. Joins the
+# tag-reuse tier to the fresh-tag tier, and states -- as a negative -- the two
+# obstructions that stop the three disjuncts becoming one probability bound.
+Umbra_Union.v

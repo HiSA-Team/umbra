@@ -203,7 +203,12 @@ jobs:
         run: cargo clippy -p xtask -p umbra-pal-test -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch --all-targets --locked -- -D warnings
 
       - name: cargo test (host members)
-        run: cargo test -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch --locked
+        # Member list mirrored in xtask's HOST_TEST_MEMBERS and in the coverage
+        # step below; keep the three in sync. umbra-update-core and
+        # umbra-chain-core are the extraction-verified leaf crates — their host
+        # tests pin the firmware↔crate correspondence the Rocq proofs are
+        # stated over, so they belong in CI.
+        run: cargo test -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch -p umbra-update-core -p umbra-chain-core --locked
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -218,6 +223,7 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo llvm-cov \
             -p xtask -p umbra-pal-test -p kernel -p umbra-hal -p umbra-error -p umbra-api -p umbra-riscv-arch \
+            -p umbra-update-core -p umbra-chain-core \
             --lcov --output-path lcov.info \
             --ignore-filename-regex '(host/|lib/|tools/)'
 

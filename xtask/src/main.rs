@@ -352,11 +352,42 @@ fn flash(platform: &str) -> Result<()> {
     Ok(())
 }
 
+/// The host-testable workspace members, and the ONLY correct scope for this
+/// command.
+///
+/// `--workspace` does not work here and cannot be made to: cargo unifies
+/// features across the graph, so it activates `platform-l552`, `platform-n657`
+/// and `platform-riscv32` together on `umbra-ess-core`, whose cfg-gated
+/// `compile_error!` rejects that by design. The failure is the guard working,
+/// not a regression — but it takes the whole run down before a single test
+/// executes.
+///
+/// This list mirrors the CI host-test and coverage steps (`.github/workflows/
+/// build.yml`). Keep the three in sync: CI passing while this command fails is
+/// exactly the split that hides breakage from anyone who checks out the repo
+/// and runs the documented command.
+const HOST_TEST_MEMBERS: &[&str] = &[
+    "xtask",
+    "umbra-pal-test",
+    "kernel",
+    "umbra-hal",
+    "umbra-error",
+    "umbra-api",
+    "umbra-riscv-arch",
+    // The two extraction-verified leaf crates. Their host tests pin the
+    // firmware↔crate correspondence the Rocq proofs are stated over, so a
+    // silent break here would invalidate the proofs' relevance without
+    // touching a single proof.
+    "umbra-update-core",
+    "umbra-chain-core",
+];
+
 fn test(host: bool) -> Result<()> {
     if !host {
         anyhow::bail!("Embedded test runner not yet implemented — pass --host");
     }
     let root = repo_root();
+    let member_args = || HOST_TEST_MEMBERS.iter().flat_map(|m| ["-p", m]);
     // Prefer cargo-llvm-cov when present; fall back to plain `cargo test`.
     let llvm_cov_available = Command::new("cargo")
         .args(["llvm-cov", "--version"])
@@ -366,9 +397,9 @@ fn test(host: bool) -> Result<()> {
     let status = if llvm_cov_available {
         Command::new("cargo")
             .current_dir(&root)
+            .args(["llvm-cov"])
+            .args(member_args())
             .args([
-                "llvm-cov",
-                "--workspace",
                 "--lcov",
                 "--output-path",
                 "lcov.info",
@@ -378,12 +409,11 @@ fn test(host: bool) -> Result<()> {
             .status()
             .context("cargo-llvm-cov invocation failed")?
     } else {
-        eprintln!(
-            "[xtask test] cargo-llvm-cov not installed; running plain `cargo test --workspace`."
-        );
+        eprintln!("[xtask test] cargo-llvm-cov not installed; running plain `cargo test`.");
         Command::new("cargo")
             .current_dir(&root)
-            .args(["test", "--workspace"])
+            .args(["test"])
+            .args(member_args())
             .status()
             .context("cargo test invocation failed")?
     };

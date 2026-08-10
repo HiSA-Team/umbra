@@ -28,8 +28,13 @@ version, gated by the attestation nonce.
   write_enclave_slot` reuses the proven 1-1-1 SPI erase+program path.
 - **Package** (`kernel::key_storage_server::enclave_update`): magic, the nonce
   from the last attestation quote, author id, version, the `protect_enclave.py`
-  blob, and a `pkg_tag = HMAC(K_attest, "umbra-update-v1" ‖ nonce ‖ ids ‖ blob_len
-  ‖ header.hmac)`. The tag authenticates the *binding*, not the whole blob.
+  blob, and a `pkg_tag = HMAC(K_attest, "umbra-update-v2" ‖ nonce ‖ ids ‖ blob_len
+  ‖ header)`, where `header` is the blob's **entire 48-byte UMBR header**
+  (`blob[0,48)`). v1 covered only `header.hmac` (`blob[16,48)`), leaving
+  `trust_level`, `efbc_size`, `ess_blocks` and `reloc_count` unauthenticated —
+  the format hole documented as the chain-core "residue"; v2 closes it at the
+  tag. The tag authenticates the binding and the full header; the blob *body*
+  is covered by the on-flash re-measurement below.
 - **Flow** (`umbra_enclave_update` NSC veneer): require an armed nonce that matches
   the last quote and a valid `pkg_tag` (else `ERR_NONCE`/`ERR_AUTH`); the nonce is
   consumed on every attempt. Write the blob to the **inactive** slot, then

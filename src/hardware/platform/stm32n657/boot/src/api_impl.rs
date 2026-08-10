@@ -25,6 +25,11 @@ use kernel::common::ess::{
 #[cfg(feature = "interenclave_overlay")]
 use kernel::common::ess::ESS_BASE;
 
+// The proved chained-measurement leaf crate (`crates/umbra-chain-core`), through
+// the kernel's re-export shim. `fold_block_from_flash` below calls its
+// `block_preimage_of_block` rather than assembling the preimage inline.
+use kernel::key_storage_server::blob_chain;
+
 use crate::secure_kernel::{
     Kernel, BLOCK_HEADER_SIZE, BLOCK_META_OFFSET, BLOCK_META_SIZE, CODE_BLOCK_SIZE,
     TOTAL_BLOCK_SIZE,
@@ -56,12 +61,21 @@ fn nsc_status(e: UmbraError) -> u32 {
     }
 }
 
-/// Chained-measurement update for a single loaded block.
-/// Builds the per-block HMAC input as `[block_id (4) | code (256) |
-/// meta (32)]` — the same layout `protect_enclave.py` uses when it
-/// computes the running chain offline. The code half is read back from
-/// ESS (just installed by `load_block_n657`); the meta half comes from
-/// flash since we don't keep it in RAM. `chain_state = HMAC-SHA256(/// chain_state, verify_buf)`.
+/// Chained-measurement update for a single loaded block — **the real create
+/// path's fold**, as opposed to `fold_block_from_flash`'s side-effect-free probe.
+///
+/// The two halves come from two different memories here: the code half is read
+/// back from ESS (just installed by `load_block_n657`), the meta half straight
+/// from memory-mapped flash, because we do not keep it in RAM. Those reads are
+/// the MMIO half and stay here.
+///
+/// **The assembly does not.** Both halves are gathered into the on-flash block
+/// layout `[meta(32) | code(256)]` and handed to
+/// `umbra_chain_core::block_preimage_of_block`, the same proved function
+/// `fold_block_from_flash` calls — which is also what makes "KEEP IN SYNC"
+/// structural rather than a comment: there is one assembly and both folds call
+/// it. The resulting `[block_id(4) | code(256) | meta(32)]` is the layout
+/// `tools/protect_enclave.py` stamps offline.
 fn update_chain(
     chain_state: &mut [u8; 32],
     block_idx: u32,
@@ -69,13 +83,9 @@ fn update_chain(
     enclave_flash_base: u32,
     hash: &mut drivers::hash::Hash,
 ) -> umbra_error::UmbraResult<()> {
-    let mut verify_buf = [0u8; 4 + CODE_BLOCK_SIZE as usize + BLOCK_META_SIZE as usize];
-
-    let id_bytes = block_idx.to_le_bytes();
-    verify_buf[0] = id_bytes[0];
-    verify_buf[1] = id_bytes[1];
-    verify_buf[2] = id_bytes[2];
-    verify_buf[3] = id_bytes[3];
+    // The block in on-flash layout `[meta(32) | code(256)]`, gathered from the
+    // two memories it actually lives in.
+    let mut block = [0u8; blob_chain::BLOCK_LEN];
 
     unsafe {
         // Code half: read back from ESS where load_block_n657 just wrote it.
@@ -89,7 +99,7 @@ fn update_chain(
             .ok_or(UmbraError::OffsetOverflow)? as *const u8;
         let mut i: usize = 0;
         while i < CODE_BLOCK_SIZE as usize {
-            verify_buf[4 + i] = core::ptr::read_volatile(ess_src.add(i));
+            block[BLOCK_HEADER_SIZE as usize + i] = core::ptr::read_volatile(ess_src.add(i));
             i += 1;
         }
         // Meta half: read straight from flash (memory-mapped XSPI2).
@@ -106,11 +116,14 @@ fn update_chain(
             .ok_or(UmbraError::OffsetOverflow)? as *const u8;
         let mut j: usize = 0;
         while j < BLOCK_META_SIZE as usize {
-            verify_buf[4 + CODE_BLOCK_SIZE as usize + j] =
-                core::ptr::read_volatile(meta_src.add(j));
+            block[BLOCK_META_OFFSET as usize + j] = core::ptr::read_volatile(meta_src.add(j));
             j += 1;
         }
     }
+
+    // THE PROVED FUNCTION. Byte for byte the previous inline assembly:
+    // `[idx_le(4) | block[32..288] | block[0..32]]` = `[idx_le | ESS code | flash meta]`.
+    let verify_buf = blob_chain::block_preimage_of_block(block_idx, &block);
 
     let mut output = [0u8; 32];
     hash.hmac_sha256(chain_state, &verify_buf, &mut output);
@@ -188,12 +201,44 @@ pub(crate) fn authenticated_version_at(base_addr: u32) -> Option<u32> {
     result
 }
 
+/// Compile-time bridge between this platform's block geometry and the geometry
+/// `umbra-chain-core` (and every theorem in `formal/rocq/chain-core/`) is stated
+/// for: a 288-byte block laid out `[meta(32) | code(256)]`. Under the other
+/// `cfg` arms of `secure_kernel.rs` the stride is 320 and the meta sits at 32,
+/// and then the proved function would assemble the wrong preimage. This block
+/// makes that a BUILD failure instead of a silent chained-measurement break.
+const _: () = {
+    assert!(TOTAL_BLOCK_SIZE as usize == blob_chain::BLOCK_LEN);
+    assert!(CODE_BLOCK_SIZE as usize == blob_chain::CODE_LEN);
+    assert!(BLOCK_META_SIZE as usize == blob_chain::META_LEN);
+    // meta first, then code — the crate's `[meta(32) | code(256)]`.
+    assert!(BLOCK_META_OFFSET == 0);
+    assert!(BLOCK_HEADER_SIZE as usize == blob_chain::META_LEN);
+};
+
 /// Fold one block into the running measurement chain by reading it DIRECTLY from the
-/// memory-mapped flash slot (CPU, no DMA). Builds the same `[block_id(4) | code(256) |
-/// meta(32)]` preimage `update_chain` folds, but reads BOTH halves from flash: the code
-/// at `base + UMBRA_HEADER_SIZE + blk*TOTAL_BLOCK_SIZE + BLOCK_HEADER_SIZE` (where
-/// `load_block_n657` would have copied it from) and the meta at `... + BLOCK_META_OFFSET`.
-/// Returns `None` on address overflow. Used only by the side-effect-free probe.
+/// memory-mapped flash slot (CPU, no DMA).
+///
+/// The MMIO half stays here: the two `read_volatile` loops materialise the
+/// 288-byte on-flash block `[meta(32) | code(256)]` from
+/// `base + UMBRA_HEADER_SIZE + blk*TOTAL_BLOCK_SIZE`, the code at
+/// `+ BLOCK_HEADER_SIZE` (where `load_block_n657` would have copied it from) and
+/// the meta at `+ BLOCK_META_OFFSET`. Returns `None` on address overflow.
+///
+/// **The pure half is not here.** The `[block_id(4) | code(256) | meta(32)]`
+/// preimage is assembled by `umbra_chain_core::block_preimage_of_block`, the
+/// function `formal/rocq/chain-core/` proves about
+/// (`Chain_Value.preimage_of_block_windows`,
+/// `Chain_Value.preimage_of_block_pins_block`, and — through
+/// `preimage_factors_through_block` — the target theorem
+/// `Chain_Body.chain_accept_pins_the_blob_body`). The ASSEMBLY is the whole of
+/// what is proved here: the address arithmetic and the reads below are firmware,
+/// and so are the block count, the `while blk < num_blocks` loop and
+/// `finalize_measurement` at the call site — `blob_block_count`, `chain_root`
+/// and `verify_blob_chain` exist in the crate and have zero call sites on this
+/// platform.
+///
+/// Used only by the side-effect-free probe.
 /// KEEP IN SYNC with `update_chain` (the ESS-backed real-create fold).
 fn fold_block_from_flash(
     chain_state: &mut [u8; 32],
@@ -201,9 +246,6 @@ fn fold_block_from_flash(
     enclave_flash_base: u32,
     hash: &mut drivers::hash::Hash,
 ) -> Option<()> {
-    let mut verify_buf = [0u8; 4 + CODE_BLOCK_SIZE as usize + BLOCK_META_SIZE as usize];
-    verify_buf[..4].copy_from_slice(&blk.to_le_bytes());
-
     let blk_off = blk.checked_mul(TOTAL_BLOCK_SIZE)?;
     let block_base = enclave_flash_base
         .checked_add(UMBRA_HEADER_SIZE)?
@@ -211,20 +253,31 @@ fn fold_block_from_flash(
     let code_src = block_base.checked_add(BLOCK_HEADER_SIZE)? as *const u8;
     let meta_src = block_base.checked_add(BLOCK_META_OFFSET)? as *const u8;
 
+    // The block as it sits on flash: `[meta(32) | code(256)]`.
+    let mut block = [0u8; blob_chain::BLOCK_LEN];
+
     // SAFETY: both addresses are inside the memory-mapped XSPI2 window for a bounded
     // block index (num_blocks ≤ MAX_EFBS at the call site); reads are read-only.
+    // The two loops are in the SAME order as before this function delegated —
+    // code then meta — so the sequence of volatile reads against the XSPI2
+    // window is byte-for-byte and access-for-access what it was; only the
+    // destination offsets changed, from preimage order to on-flash order.
     unsafe {
         let mut i = 0usize;
         while i < CODE_BLOCK_SIZE as usize {
-            verify_buf[4 + i] = core::ptr::read_volatile(code_src.add(i));
+            block[BLOCK_HEADER_SIZE as usize + i] = core::ptr::read_volatile(code_src.add(i));
             i += 1;
         }
         let mut j = 0usize;
         while j < BLOCK_META_SIZE as usize {
-            verify_buf[4 + CODE_BLOCK_SIZE as usize + j] = core::ptr::read_volatile(meta_src.add(j));
+            block[BLOCK_META_OFFSET as usize + j] = core::ptr::read_volatile(meta_src.add(j));
             j += 1;
         }
     }
+
+    // THE PROVED FUNCTION. Byte for byte the previous inline assembly:
+    // `[blk_le(4) | block[32..288] | block[0..32]]` = `[blk_le(4) | code | meta]`.
+    let verify_buf = blob_chain::block_preimage_of_block(blk, &block);
 
     let mut out = [0u8; 32];
     hash.hmac_sha256(chain_state, &verify_buf, &mut out);

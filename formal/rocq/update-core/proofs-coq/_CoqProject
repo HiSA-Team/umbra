@@ -1,0 +1,30 @@
+-R . Lib
+
+# umbra-update-core — verifiable secure-enclave-update logic (issue #58).
+# Build order below. The generated Update_Funs.v is INCLUDED here (unlike ess,
+# whose full module hit a PartialEq Include-clash) because this crate cfg-gates
+# its Debug/PartialEq/Eq derives out of extraction — so the whole extracted
+# module typechecks. Regenerate with ../extract.sh (re-applies the manual
+# patches: loop-shim import + Coq-8.18 binder rewrite + opaque byte<->u32 codecs).
+
+Primitives.v
+AeneasLoopShim.v
+Update_Types.v
+Update_FunsExternal.v
+Update_Funs.v
+Update_Props.v
+Update_Safety.v
+# Value layer: "ct_eq16/32 returned true" ==> the compared bytes are equal.
+Update_Value.v
+# P1 — acceptance implies both authentication gates (nonce + tag) were passed,
+# over exactly the parsed package fields; plus the nonce gate at byte level.
+Update_Auth.v
+# The composed security statement: under an explicitly-parameterised HMAC
+# idealization, acceptance ==> the tag is the device's own MAC over exactly this
+# package's fields, the nonce field is the armed nonce, and (P4) the update slot
+# is activated iff its authenticated version strictly exceeds the active one.
+Update_Crypto.v
+# Companion consistency witness for Update_Safety's 14-axiom quarantine: a
+# concrete list model of the opaque slice/array/copy ops + the machine-checked
+# proof that the axioms hold of it. Nothing imports it; it must come last.
+Update_Model.v

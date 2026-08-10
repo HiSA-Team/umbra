@@ -10,6 +10,8 @@ members = [
     "crates/umbra-ess-core",
     "crates/umbra-rot-core",
     "crates/umbra-mem-core",
+    "crates/umbra-update-core",
+    "crates/umbra-chain-core",
     "src/kernel",
     "src/hardware/architecture/arm",
     "src/hardware/architecture/riscv",                    # umbra-riscv-arch

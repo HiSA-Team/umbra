@@ -385,10 +385,12 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "umbra-api",
+ "umbra-chain-core",
  "umbra-error",
  "umbra-ess-core",
  "umbra-mem-core",
  "umbra-rot-core",
+ "umbra-update-core",
 ]
 
 [[package]]
@@ -789,6 +791,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-chain-core"
+version = "0.0.0"
+
+[[package]]
 name = "umbra-error"
 version = "0.1.0"
 dependencies = [
@@ -892,6 +898,10 @@ dependencies = [
  "umbra-api",
  "umbra-error",
 ]
+
+[[package]]
+name = "umbra-update-core"
+version = "0.0.0"
 
 [[package]]
 name = "unarray"

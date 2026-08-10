@@ -1,4 +1,5 @@
 pub mod attestation;
+pub mod blob_chain;
 pub mod crypto;
 pub mod enclave_update;
 pub mod key_generator;

@@ -1,0 +1,41 @@
+-R . Lib
+-R ../../update-core/proofs-coq Lib
+
+# umbra-chain-core — the blob-body half of the verifiable secure enclave update
+# (issue #58). `Primitives.v` and `AeneasLoopShim.v` are NOT duplicated here:
+# they are loaded out of update-core/proofs-coq (second -R above), because
+# Chain_Compose.v Requires update-core's `Update_Crypto` and two files of the
+# same logical name in one load path would clash. Build update-core FIRST.
+#
+# Regenerate the extracted files with ../extract.sh (re-applies the manual
+# patches: loop-shim import + Coq-8.18 binder rewrite + opaque u32 codecs +
+# the total mk_array4 replacing the backend's inconsistent mk_array axiom).
+
+Chain_Types.v
+Chain_FunsExternal.v
+Chain_Funs.v
+# Value layer over the EXTRACTED body: what `block_preimage` puts where (the
+# per-byte window laws), when `ct_eq32_at` returning true forces byte equality,
+# and the congruence of `blob_block_count` in the header bytes it reads.
+Chain_Value.v
+# The fold as an inductive trace, the refinement of the extracted loop into one,
+# and the collision-extraction lemma (no injectivity assumption anywhere).
+Chain_Trace.v
+# THE TARGET THEOREM: two blobs accepted by the same chain gate against the same
+# authenticated header.hmac either agree byte-for-byte on the whole folded region
+# or exhibit an explicit HMAC collision.
+Chain_Body.v
+# Composition with umbra-update-core's P2: acceptance of two packages under one
+# armed nonce pins the header.hmac window, which is exactly the chain gate's
+# reference value.
+Chain_Compose.v
+# The honest negative: exactly which blob bytes the gate cannot see.
+Chain_Residual.v
+# Non-vacuity: the gate's `true` branch is not dead code — a matching
+# measurement IS accepted, so the target theorem's hypothesis is met by every
+# honestly-signed blob.
+Chain_Reachable.v
+# Companion consistency witness for the ONE axiom added to update-core's
+# quarantine (Q21, array_u8_ext): it holds of the same list model that satisfies
+# Q1..Q20. Nothing imports it; it must come last.
+Chain_Model.v
