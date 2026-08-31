@@ -69,15 +69,14 @@ seam. `Chain_Compose.verified_update_pins_the_blob_body` (Qed) joins it to P2 at
 exactly the window above.
 
 Read the residue before quoting any of that. The chain covers
-`blob[48, 48+288·n)` only; `blob[4,10)`, `blob[14,16)` and everything after the
-blocks — including the relocation table — remain outside both preimages, and
-`Chain_Residual.verdict_ignores_the_unauthenticated_header_bytes` (Qed) proves
-the gate's verdict does not depend on them. Both are latent rather than live on
-the N657: `is_trusted()` has zero call sites, `efbc_size`/`ess_blocks` have zero
-field reads, no N657 code reads the reloc table, and a blob carrying relocations
-is rejected outright because `protect_enclave.py` folds them offline. And the
-N657 boot crate still runs its own inline copy of the fold rather than calling
-the extracted crate; a differential host test stands between the two.
+`blob[48, 48+288·n)` only. Its own verdict ignores `blob[4,10)` and
+`blob[14,16)`, but pkg-tag v2 authenticates those header bytes; bytes after the
+folded blocks — including the relocation table — remain outside both
+authenticators. No N657 code consumes that table today, and the offline signer
+cannot emit one that the N657 accepts. The N657 folds now call the extracted
+crate's proved `block_preimage_of_block` assembly, while their address
+arithmetic, volatile reads, block-count loop and final gate remain firmware
+transcriptions guarded by structural and differential host tests.
 
 Every reader of "verified secure enclave update" will read *whole-blob* integrity
 into it. That reading is still wrong, and this paragraph is the reason the phrase
@@ -419,7 +418,7 @@ constrains `mb` only where `bytes91` reaches: at 91-byte lists that are the
 reads of an array, and those are exactly the arrays this development can talk
 about. Both consequences are in the open-items list below.
 
-## `dkey` is constrained — and what that does and does not buy
+## `dkey` injectivity is documented, but not carried by the bound
 
 `Umbra_RealGame` now carries
 
@@ -584,7 +583,7 @@ reason this is a separate directory with its own `_CoqProject`.
 |------|----------|
 | `Umbra_EUFCMA.v` | The EUF-CMA game for a MAC, in SSProve. |
 | `Umbra_Reduction.v` | The UPD forgery game, the reduction package `RED`, and the bound. Contains no Umbra content. |
-| `Umbra_RealGame.v` | The same bound over a game whose `submit` oracle **is** `parse_and_verify` — `(F)` is a `Lemma` here, not a hypothesis — plus `device_forgery_le_eufcma_at_the_real_seam`, the bound instantiated at the computed `MACb_canonical` and at the message bound `256^76`. Its `Print Assumptions` lists 50 axioms, 43 of them Aeneas. |
+| `Umbra_RealGame.v` | The same bound over a game whose `submit` oracle **is** `parse_and_verify` — `(F)` is a `Lemma` here, not a hypothesis — plus `device_forgery_le_eufcma_at_the_real_seam`, the abstract seam instantiation at `256^76`, and `device_forgery_le_eufcma_for_the_concrete_engine`, whose closed type carries `ArrayVectors` and also yields a concrete engine-evaluation witness for every message. The abstract bound's `Print Assumptions` lists 50 axioms, 43 of them Aeneas. |
 
 ---
 
@@ -883,7 +882,7 @@ conjunction under that premise *is* the win predicate.)
 | **C1** | inherited, `Update_Crypto.Hseam` | the seam is a deterministic function of `(key, preimage)` | none — the constant function satisfies it |
 | **C1e** | new, `Umbra_DeviceLink.Hfactor` | on **assembled** preimages the seam **factors through the byte encoding**: `AssemblesF pre f -> MACg k0 (msg_of_pre pre) = tag_of_arr (macf key pre)` | none cryptographically; see below |
 | **ByteSeam** | new, `Umbra_Canonical.ByteSeam` | the engine's output is a **function** of the key bytes and the 91 preimage bytes: `tag_of_arr (macf kb p) = mb (kbytes kb) (bytes91 p)` | none — the constant function satisfies it. It is the constructive form of C1e's justification; it is what lets the C1e realiser be *computed* instead of chosen classically |
-| **`dkey` injective** | new, `Umbra_RealGame.Hdkey_inj` | distinct game keys are provisioned to distinct key **byte strings** | none — but without it the RHS advantage is over a degenerate key distribution. Not used by the bound; see [above](#dkey-is-constrained--and-what-that-does-and-does-not-buy) |
+| **`dkey` injective** | documented as `Umbra_RealGame.Hdkey_inj` | distinct game keys would be provisioned to distinct key **byte strings** | not used by the bound; a collapsing map still makes the RHS range over a degenerate key distribution |
 | **C2a** | new, `Umbra_DeviceLink.FreshnessSeam` | everything the vendor signs lands in `S_loc` (`S_loc` is no smaller than `Q`'s encodings) — used by `accept_of_signed_fields_is_in_query_set`, which is what stops C2b being satisfiable by an empty `S_loc` | a real gap — the signer is neither verified nor extracted; see [below](#the-freshness-seam-c2-is-named-not-closed) |
 | **C2b** | new, `Umbra_DeviceLink.FreshnessSeam` | and nothing else does (`S_loc` is no larger) — this is the one the freshness theorem actually uses; its closed type does **not** mention C2a | same gap, same section |
 | **EUF-CMA** | not assumed — appears on the RHS of the bound | the device's HMAC is existentially unforgeable | the real assumption |
@@ -937,7 +936,7 @@ section](#the-abstract-mac-is-now-pinned-to-the-seam-constructively) and the
 — there is no Coq object *in `Umbra_DeviceLink.v`* identifying it with the
 game's `k`, and an earlier revision of this README claimed there was. At the
 Tier-G level the correspondence *is* named, as `dkey : Key n -> key_bytes`
-(`Umbra_RealGame.v`), and it is now constrained to be injective. Read C1e as:
+(`Umbra_RealGame.v`), but the bound leaves that map arbitrary. Read C1e as:
 *for the device's provisioned key material there is a game key whose abstract MAC
 agrees with the seam on assembled preimages* — and, since the pinning revision,
 that abstract MAC is the seam itself. That the provisioned key is uniformly
@@ -1186,12 +1185,12 @@ disclosed one. It does not close it.
   `Umbra_Wire.accepts` rests — is therefore fuel-bounded. The parser's loops are
   16- and 32-iteration byte comparisons, so the bound is never approached; it is
   nonetheless part of the model and was not previously disclosed.
-* **Packages are truncated at 4096 bytes.** `Umbra_Wire.MAX_PKG = 4096`, and
-  `wire` truncates. The modelled attack surface is byte strings of length
-  ≤ 4096; a real UMBR package can be larger, and such packages are outside every
-  statement here. The literal exists because `usize_max` is only known to be
-  ≥ `u32_max` (`Primitives.usize_max_bound`), so a concrete bound is the only way
-  to discharge the `slice` well-formedness obligation without assuming more.
+* **Packages are truncated at the device limit.** `Umbra_Wire.MAX_PKG = 65536`,
+  matching the N657 Secure scratch and its `pkg_len <= 0x10000` front gate.
+  `wire` truncates beyond that limit, where the real implementation rejects.
+  The literal exists because `usize_max` is only known to be ≥ `u32_max`
+  (`Primitives.usize_max_bound`), so a concrete bound is the direct way to
+  discharge the `slice` well-formedness obligation without assuming more.
 * **`dkey` is otherwise unconstrained, and `Hdkey_inj` is documentation.**
   Injectivity is assumed (`Hdkey_inj`) but is **not used**: Coq's section
   discharge does not quantify over it in the closed type of either

@@ -224,9 +224,10 @@
         "terminates within 10^6 iterations". The parser's loops are 16- and
         32-iteration byte comparisons, so the bound is never approached — but
         it is a bound, and it is part of the model.
-      * `Umbra_Wire.MAX_PKG = 4096`. The adversary's `list nat` submission is
-        TRUNCATED at 4096 bytes by `wire`. Packages longer than that are
-        outside the modelled attack surface.
+      * `Umbra_Wire.MAX_PKG = 65536`, exactly the N657 Secure scratch bound.
+        The adversary's `list nat` submission is truncated there, matching the
+        firmware front gate; packages beyond the device limit are rejected by
+        the implementation and outside the modelled attack surface.
       * `dkey`, the game-key-to-key-material map, is otherwise unconstrained;
         see `Hdkey_inj` below for what injectivity buys and what is still
         prose. `Hdkey_inj` is DOCUMENTATION: it is not in the closed type of
@@ -837,6 +838,32 @@ Lemma MACg_canonical_is_MG_spread :
     @MACg n (MACb_canonical mb dkey) k = MG_spread mb (dkey k).
 Proof. by []. Qed.
 
+(** Under `ArrayVectors`, the game MAC at every reachable message is an
+    encoded evaluation of the concrete engine on an actual 91-byte array.
+    This is the bridge needed to read the abstract inequality below as a
+    statement about the implementation rather than about an arbitrary total
+    extension of its byte seam. *)
+Theorem canonical_game_mac_is_engine_evaluation :
+  forall (n : nat) (macf : macf_t) (mb : byteseam_t)
+         (dkey : Key n -> key_bytes),
+    ArrayVectors ->
+    ByteSeam macf mb ->
+    forall (k : Key n) (m : nat),
+      exists p : preimage_array_t,
+        bytes91 p = canon91_of_idx m
+        /\ @MACg n (MACb_canonical mb dkey) k m
+           = engine_tag_nat macf (dkey k) p.
+Proof.
+  intros n macf mb dkey HAV Hbs k m.
+  rewrite MACg_canonical_is_MG_spread.
+  destruct (HAV (canon91_of_idx m) (canon91_of_idx_length m)
+              (canon91_of_idx_allbytes m)) as [p Hp].
+  exists p. split; [ exact Hp |].
+  unfold canon91_of_idx in Hp.
+  unfold MG_spread, MG_of, engine_tag_nat.
+  rewrite spread_idx_val -Hp -Hbs. reflexivity.
+Qed.
+
 (** `Hfactor` IS NOT VACUOUS, AT THE TYPE THE THEOREM USES. *)
 Theorem Hfactor_is_realisable :
   forall (n : nat) (macf : macf_t) (dkey : Key n -> key_bytes)
@@ -887,6 +914,37 @@ Proof.
             HS inst hs en dkey macf Hs Hf widx_lt_MSGB LA A vA Hd).
 Qed.
 
+(** Concrete-device corollary. Unlike the abstract inequality, this statement
+    carries `ArrayVectors` in its closed type and uses it to establish that the
+    game MAC is the encoded output of `macf` at every game message. The second
+    conjunct is the lossless EUF-CMA bound. *)
+Theorem device_forgery_le_eufcma_for_the_concrete_engine :
+  forall (n : nat) (HS : Type) (inst : hmac_inst HS) (hs : HS) (en : list nat)
+         (dkey : Key n -> key_bytes) (macf : macf_t) (mb : byteseam_t),
+    ArrayVectors ->
+    SeamC1 inst hs macf ->
+    ByteSeam macf mb ->
+    (forall (k : Key n) (m : nat),
+       exists p : preimage_array_t,
+         bytes91 p = canon91_of_idx m
+         /\ @MACg n (MACb_canonical mb dkey) k m
+            = engine_tag_nat macf (dkey k) p)
+    /\ forall LA (A : raw_package),
+      ValidPackage LA (@DEV_I MSGB MSGB_positive) A_export A ->
+      fdisjoint LA (EUF_locs_tt n :|: @EUF_locs_ff n MSGB MSGB_positive) ->
+      Advantage
+        (@DEV n MSGB MSGB_positive (MACb_canonical mb dkey) HS inst hs en dkey) A
+      <= Advantage
+           (@EUF_CMA n MSGB MSGB_positive (@MACg n (MACb_canonical mb dkey)))
+           (A ∘ @RED_dev MSGB MSGB_positive en).
+Proof.
+  intros n HS inst hs en dkey macf mb HAV Hs Hbs. split.
+  - exact (canonical_game_mac_is_engine_evaluation n macf mb dkey HAV Hbs).
+  - intros LA A vA Hd.
+    exact (device_forgery_le_eufcma_at_the_real_seam
+             n HS inst hs en dkey macf mb Hs Hbs LA A vA Hd).
+Qed.
+
 (** WHAT THE RIGHT-HAND SIDE NOW IS, AND WHAT IT STILL IS NOT.
 
     IS. An EUF-CMA advantage over the finite message space `'fin 256^76` — the
@@ -905,12 +963,13 @@ Qed.
     91-element list of bytes is some `array u8 91`'s read-sequence — which is
     true of Rust and unprovable here, because `Primitives.array_index_usize` is
     a bare axiom with no constructor law. So the residual is now a single named
-    statement about the EXTRACTION, discharged nowhere, rather than an
-    unfalsifiable condition on the seam; and `ArrayVectors` does not appear in
-    the closed type of the bound above, only in the theorems that say the seam
-    is pinned. A reader who declines to grant it is back to a bound over a class
-    of seams — but now a class on which no counterexample is constructible, and
-    for which the previous revision's counterexample is refuted. *)
+    statement about the EXTRACTION rather than an unfalsifiable condition on
+    the seam. It is absent from the abstract bound above and explicit in
+    `device_forgery_le_eufcma_for_the_concrete_engine`, which also returns the
+    corresponding array and its exact byte encoding. A reader who declines to
+    grant it is back to a bound over a class of seams — but now a class on which
+    no counterexample is constructible, and for which the previous revision's
+    counterexample is refuted. *)
 
 End CanonicalMAC.
 
@@ -924,3 +983,4 @@ End CanonicalMAC.
 (* ===================================================================== *)
 Print Assumptions device_forgery_le_eufcma.
 Print Assumptions device_forgery_le_eufcma_at_the_real_seam.
+Print Assumptions device_forgery_le_eufcma_for_the_concrete_engine.

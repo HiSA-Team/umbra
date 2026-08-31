@@ -21,6 +21,7 @@ UPDATE_MAGIC = 0x31505555  # "UUP1"
 PKG_LABEL = b"umbra-update-v2"       # 15 bytes; v2 = full 48-byte header covered
 PKG_PREIMAGE_LEN = 91                # 15 + 16 + 4 + 4 + 4 + 48
 ATTEST_LABEL = b"umbra-attest-v1"
+UPDATE_KEY_LABEL = b"umbra-update-key-v1"
 
 
 def quote_preimage(nonce, enclave_id, status, bm, author, version, floor,
@@ -93,12 +94,62 @@ def test_pkg_tag_preimage():
     print("[update] preimage len =", len(pre), " golden tag =", tag.hex())
 
 
-def test_kattest_derivation():
-    # The verifier derives K_attest = HMAC(MASTER_KEY, "umbra-attest-v1"); pin the label.
+def test_protocol_key_derivation():
+    # Quote and update MACs use disjoint KDF labels. This separation is what
+    # justifies omitting the quote oracle from the update-only EUF-CMA game.
     assert ATTEST_LABEL == b"umbra-attest-v1"
+    assert UPDATE_KEY_LABEL == b"umbra-update-key-v1"
     master = bytes(range(32))
-    k = hmac.new(master, ATTEST_LABEL, hashlib.sha256).digest()
-    print("[key]    K_attest(master=0..31) =", k.hex())
+    ka = hmac.new(master, ATTEST_LABEL, hashlib.sha256).digest()
+    ku = hmac.new(master, UPDATE_KEY_LABEL, hashlib.sha256).digest()
+    assert ka != ku
+    print("[key]    K_attest(master=0..31) =", ka.hex())
+    print("[key]    K_update(master=0..31) =", ku.hex())
+
+
+def test_protocol_labels_match_sources():
+    """Pin the KDF labels in both executable protocol implementations."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rust_path = os.path.join(
+        root, "src", "hardware", "platform", "stm32n657", "boot", "src",
+        "key_derivation.rs",
+    )
+    signer_path = os.path.join(root, "tools", "attest_update.py")
+
+    with open(rust_path) as f:
+        rust = f.read()
+    with open(signer_path) as f:
+        signer = f.read()
+
+    expected = {
+        "ATTEST_KEY_LABEL": ATTEST_LABEL.decode("ascii"),
+        "UPDATE_KEY_LABEL": UPDATE_KEY_LABEL.decode("ascii"),
+    }
+    for rust_name, label in expected.items():
+        assert re.search(
+            rf'pub const {rust_name}: &\[u8\] = b"{re.escape(label)}";', rust
+        ), f"{rust_path}: {rust_name} does not encode {label!r}"
+
+    assert re.search(
+        r"pub fn derive_attest_key\b.*?\.hmac\(&MASTER_KEY, ATTEST_KEY_LABEL,",
+        rust,
+        re.DOTALL,
+    ), f"{rust_path}: derive_attest_key is not wired to ATTEST_KEY_LABEL"
+    assert re.search(
+        r"pub fn derive_update_key\b.*?\.hmac\(&MASTER_KEY, UPDATE_KEY_LABEL,",
+        rust,
+        re.DOTALL,
+    ), f"{rust_path}: derive_update_key is not wired to UPDATE_KEY_LABEL"
+
+    assert re.search(
+        rf'ATTEST_LABEL = b"{re.escape(expected["ATTEST_KEY_LABEL"])}"', signer
+    ), f"{signer_path}: ATTEST_LABEL drifted"
+    assert re.search(
+        rf'UPDATE_KEY_LABEL = b"{re.escape(expected["UPDATE_KEY_LABEL"])}"', signer
+    ), f"{signer_path}: UPDATE_KEY_LABEL drifted"
+    assert "hmac.new(master, ATTEST_LABEL" in signer
+    assert "hmac.new(master, UPDATE_KEY_LABEL" in signer
+    print("[key]    Rust/Python KDF labels agree")
 
 
 def test_master_key_copies_agree():
@@ -147,7 +198,8 @@ def test_master_key_copies_agree():
 if __name__ == "__main__":
     test_quote_offsets()
     test_pkg_tag_preimage()
-    test_kattest_derivation()
+    test_protocol_key_derivation()
+    test_protocol_labels_match_sources()
     test_master_key_copies_agree()
     print("ALL PARITY VECTORS PASS")
     sys.exit(0)

@@ -9,7 +9,7 @@ Local Open Scope Primitives_scope.
 Module Chain_Types.
 
 (** Trait declaration: [umbra_chain_core::ChainHmac]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 100:0-102:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 143:0-145:1
     Visibility: public *)
 Record ChainHmac_t (Self : Type) := mkChainHmac_t {
   ChainHmac_t_hmac_chain : Self -> array u8 32%usize -> array u8 292%usize ->

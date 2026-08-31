@@ -105,6 +105,9 @@ Qed.
 
 (** The device-side HMAC, as a function of key material and preimage. *)
 Definition macf_t : Type := slice u8 -> array u8 91%usize -> array u8 32%usize.
+Definition preimage_array_t : Type := array u8 91%usize.
+Definition engine_tag_nat (m : macf_t) (kb : key_bytes)
+    (p : preimage_array_t) : nat := Z.to_nat (tag_of_arr (m kb p)).
 
 (** C1 — the seam is a deterministic keyed function. Carries no unforgeability:
     the constant function satisfies it. *)

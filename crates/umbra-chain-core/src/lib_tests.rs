@@ -184,6 +184,12 @@ fn malformed_headers_are_rejected() {
     assert_eq!(blob_block_count(&blob), None); // n == 0
 
     let mut blob = good.clone();
+    let partial = (BLOCK_LEN as u32) + 1;
+    blob[CODE_SIZE_OFF..CODE_SIZE_OFF + 4].copy_from_slice(&partial.to_le_bytes());
+    assert_eq!(blob_block_count(&blob), None); // incomplete block would escape the fold
+    assert!(!verify_blob_chain(&MockHmac, &MASTER, &blob));
+
+    let mut blob = good.clone();
     let too_many = (MAX_BLOCKS + 1) * (BLOCK_LEN as u32);
     blob[CODE_SIZE_OFF..CODE_SIZE_OFF + 4].copy_from_slice(&too_many.to_le_bytes());
     assert_eq!(blob_block_count(&blob), None); // n > MAX_BLOCKS
@@ -211,6 +217,17 @@ fn declared_code_size_is_bound_to_the_fold_count() {
     blob[CODE_SIZE_OFF..CODE_SIZE_OFF + 4].copy_from_slice(&two.to_le_bytes());
     assert_eq!(blob_block_count(&blob), Some(2));
     assert!(!verify_blob_chain(&MockHmac, &MASTER, &blob));
+}
+
+#[test]
+fn every_declared_code_byte_belongs_to_a_complete_folded_block() {
+    let mut blob = make_blob(2);
+    for remainder in [1u32, 31, 287] {
+        let malformed = 2 * (BLOCK_LEN as u32) + remainder;
+        blob[CODE_SIZE_OFF..CODE_SIZE_OFF + 4].copy_from_slice(&malformed.to_le_bytes());
+        assert_eq!(blob_block_count(&blob), None);
+        assert!(!verify_blob_chain(&MockHmac, &MASTER, &blob));
+    }
 }
 
 #[test]

@@ -55,20 +55,12 @@
         is no extracted signer to walk. The union inherits that assumption
         verbatim and does not upgrade it.
 
-    (3) THE BLOCK COUNT IS A HYPOTHESIS, NOT A CONSEQUENCE — BY STATEMENT
-        SHAPE, no longer by necessity. `Chain_Funs.blob_block_count` reads
-        `blob[0,4)` and `blob[10,14)`; under the v2 preimage BOTH windows lie
-        inside the authenticated header `blob[0,48)` (see `Umbra_UnionCore.
-        block_count_window_is_inside_the_authenticated_window` for the
-        arithmetic — under v1 only `blob[16,48)` was covered and the count was
-        underivable in principle). So equal signed cores now pin the count
-        windows too, and the strengthening — equal cores plus both
-        chain-accepts implies equal block count, via `Chain_Value.
-        blob_block_count_cong` — has become available IN PRINCIPLE; it is not
-        mechanised here, and `Chain_Body.chain_accept_pins_the_blob_body`
-        still takes the two counts as equal. The union therefore still says:
-        an accepted body OF THE VENDOR'S DECLARED BLOCK COUNT is the vendor's
-        body, with the shared count as an explicit hypothesis.
+    (3) THE BLOCK COUNT IS DERIVED, NOT POSTULATED. Each chain gate supplies its
+        own successful `blob_block_count` result. Equal authenticated cores pin
+        `blob[0,48)`, including magic and `code_size`; `Chain_Value.
+        successful_blob_block_counts_agree` then proves the two results equal.
+        The union therefore accepts two independent counts and reports body
+        agreement over the accepted package's folded region.
 
     (4) THE CHAIN SEAM IS STILL A DISJUNCT. What DID disappear is
         `Chain_Compose.MacCollisionOnPackages`, the PACKAGE-tag seam's
@@ -242,8 +234,8 @@ Notation iverdict := (@ideal_verdict MSGB MSGB_positive en).
         faithful to the core (`widx_spreads_back`).
       * `Hhonest` — without it, membership in the issue set says nothing about
         `q`, and the two cores are unrelated.
-      * the two `ChainAccepts` — `chain_accept_pins_the_blob_body` needs both
-        gates to have passed at ONE block count; see limit (3) in the header.
+      * the two `ChainAccepts` — each supplies its independently parsed count;
+        their equality is a conclusion of the signed-core branch.
 
     NOTE WHAT IS *NOT* A HYPOTHESIS, and used to be. `Chain_Compose` needs the
     two packages to have equal length and equal 32 trailing tag bytes. Both are
@@ -252,7 +244,7 @@ Notation iverdict := (@ideal_verdict MSGB MSGB_positive en).
     the union replaces by the case split. *)
 Theorem accepted_body_is_the_signed_body_or_a_forgery :
   forall (k : Key nk) (S : qset) (p q : list nat)
-         (rp rq : vupd) (nb : blkcount),
+         (rp rq : vupd) (np nq : blkcount),
     (* (1) the device accepted the adversary's package `p` *)
     Accepted inst hs (dkey k) en p rp ->
     (* (2) the device also accepts the vendor's package `q` *)
@@ -262,16 +254,17 @@ Theorem accepted_body_is_the_signed_body_or_a_forgery :
        existential lives HERE, in the hypothesis, never in the conclusion. *)
     (((@widx_ord MSGB MSGB_positive p, wtag p) \in domm S) ->
        @widx_ord MSGB MSGB_positive q = @widx_ord MSGB MSGB_positive p) ->
-    (* (4) both blobs pass the firmware's chained-measurement gate, at one
-       block count, under one master key. NOT enforced by the parser. *)
-    ChainAccepts cinst ch master (vblob rp) nb ->
-    ChainAccepts cinst ch master (vblob rq) nb ->
+    (* (4) both blobs pass the firmware's chained-measurement gate. Their
+       independently obtained block counts are proved equal in the signed-core
+       branch; they need not be postulated equal here. *)
+    ChainAccepts cinst ch master (vblob rp) np ->
+    ChainAccepts cinst ch master (vblob rq) nq ->
     (* THEN one of three, and the third is the event Tier G bounds. *)
-    BodiesAgree (vblob rp) (vblob rq) nb
+    BodiesAgree (vblob rp) (vblob rq) np
     \/ Chain_Body.SeamCollisionInRuns cinst ch master (vblob rp) (vblob rq)
     \/ iverdict S p = false.
 Proof.
-  move=> k S p q rp rq nb Ap Aq Hhonest Cp Cq.
+  move=> k S p q rp rq np nq Ap Aq Hhonest Cp Cq.
   case Hmem : ((@widx_ord MSGB MSGB_positive p, wtag p) \in domm S).
   - (* THE SIGNED-CORE BRANCH. The game's index is faithful to the core on
        structurally-accepted packages, so equal indices are equal cores. *)
@@ -282,7 +275,7 @@ Proof.
       by rewrite Hq. }
     case: (accepted_equal_indices_pin_the_blob_body
              inst hs (dkey k) macf Hseam cinst ch master
-             en p q rp rq nb Ap Aq Hidx Cp Cq) => [Hbody | Hcoll].
+             en p q rp rq np nq Ap Aq Hidx Cp Cq) => [Hbody | Hcoll].
     + by left.
     + by right; left.
   - (* THE FRESH-TAG BRANCH. The ideal device rejects, so the two worlds of
@@ -357,7 +350,7 @@ End Union.
 (* pair whose ideal world enforced "the body is the signed body" would     *)
 (* need its `dsubmit` oracle to reject packages whose bodies differ. The   *)
 (* union's body conclusion is conditional on `ChainAccepts` for BOTH       *)
-(* blobs at ONE block count, and `dev_accepts` — the real oracle — is      *)
+(* blobs, and `dev_accepts` — the real oracle — is                         *)
 (* `Update_Funs.parse_and_verify`, which performs no check on the blob     *)
 (* body whatsoever (`Umbra_Canonical.blob_body_is_not_covered_by_pkg_tag`, *)
 (* Qed). So the ideal oracle cannot compute the condition under which the  *)
@@ -380,24 +373,13 @@ End Union.
 (* means a second game — collision resistance of the chained HMAC under a  *)
 (* sampled `master` — and a second reduction.                              *)
 (*                                                                        *)
-(* O3 -- THE SHARED BLOCK COUNT IS NOT DERIVED (v2 UPDATE: it has become  *)
-(* DERIVABLE IN PRINCIPLE, and is still not derived here). Under v1,      *)
-(* `Chain_Funs.blob_block_count` read `blob[0,4)` and `blob[10,14)`,      *)
-(* neither inside the then-authenticated `blob[16,48)`, so the shared `n` *)
-(* was underivable outright. Under v2 the tag covers the full header      *)
-(* `blob[0,48)` (see `Umbra_UnionCore.block_count_window_is_inside_the_   *)
-(* authenticated_window`), so equal signed cores pin both count windows   *)
-(* and the blob length (`blob_len` is in the core), and `Chain_Value.     *)
-(* blob_block_count_cong` would force equal `n`. That derivation is NOT   *)
-(* mechanised in this tree, so the union's `ChainAccepts ... n` at a      *)
-(* SHARED `n` remains a hypothesis. Independently of it, the CROSS-LENGTH *)
-(* residue reported for v1 remains true of the CHAIN gate alone: walking  *)
-(* two folds of different lengths backwards from a common root ends in    *)
-(* THE MASTER KEY LIES IN THE IMAGE OF THE SEAM -- neither a collision,   *)
-(* nor an event `SeamCollisionInRuns` expresses, nor anything this        *)
-(* development bounds; `Chain_Trace.chain_trace_collision`'s equal-length *)
-(* hypothesis is where a third disjunct naming it would go. We claim      *)
-(* neither strengthening.                                                 *)
+(* O3 -- CLOSED AT THE COMPOSITION BOUNDARY. The union accepts independent *)
+(* counts `np` and `nq`. Equal signed cores pin the full header;             *)
+(* `successful_blob_block_counts_agree` derives `np = nq` from the two      *)
+(* successful count parses, and only then invokes the equal-length trace     *)
+(* theorem. The chain theorem in isolation still says nothing about two      *)
+(* accepted blobs with different authenticated headers; the composition does *)
+(* not need such a statement.                                                 *)
 (*                                                                        *)
 (* WHAT IS TRUE TODAY, THEN, IS THE CASE SPLIT: on a submission the real   *)
 (* device accepts, either the body is pinned (deterministically, modulo    *)

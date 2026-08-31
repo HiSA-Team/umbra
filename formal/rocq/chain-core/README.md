@@ -1,7 +1,7 @@
 # The chained measurement, verified — closing boundary B1
 
 The twelve-file chain in `../update-core/proofs-coq/` proves that the update
-package's tag authenticates a sixty-byte core. It also proves, in
+package's tag authenticates a 76-byte core. It also proves, in
 `../crypto/Umbra_Canonical.v`, that the tag authenticates **nothing of the blob
 body**. That was boundary B1, and until now it was closed by a component the
 development did not contain: a second, chained HMAC, computed by the firmware,
@@ -39,7 +39,7 @@ And the composition, which is the point:
 Chain_Compose.verified_update_pins_the_blob_body :    (* Qed *)
   two packages accepted under one armed nonce and key, of equal length and
   carrying the same 32 trailing tag bytes, whose blobs both pass the chain gate
-  with the same block count
+  with one shared block count
     => their blob bodies agree on every folded byte
        \/ SeamCollisionInRuns    (the chain seam, on THESE two folds)
        \/ MacCollisionOnPackages (the tag seam, on THESE two preimages)
@@ -258,15 +258,12 @@ of the story. Four things a reader must not read in:
    holds the rest together is a host test
    (`blob_chain_tests.rs`) and a `const` block in `api_impl.rs` that turns a
    block-geometry `cfg` flip into a compile error.
-2. **`blob[4,10)` and `blob[14,16)` are authenticated by nothing** — not by the
-   chain, not by the tag. `verdict_ignores_the_unauthenticated_header_bytes`
-   (Qed) proves the gate's verdict does not depend on them. `trust_level` is
-   among them and `is_trusted()` reads it, which sounds alarming; it is **inert
-   on the N657 today**, because `is_trusted()` has zero call sites in the whole
-   repository (`src/kernel/src/common/enclave.rs:81-83` is the only occurrence of
-   the name), and `efbc_size`/`ess_blocks` have zero field reads anywhere. This
-   is a hole in the FORMAT that becomes a hole in the PRODUCT the day one of
-   those five bytes acquires a consumer.
+2. **`blob[4,10)` and `blob[14,16)` are ignored by the chain gate but covered by
+   pkg-tag v2.** `verdict_ignores_the_unauthenticated_header_bytes` (Qed) is a
+   deliberately local statement about the chain: its verdict does not depend
+   on them. The update tag now authenticates the full `blob[0,48)` header, so an
+   update-path mutation is rejected before flash is written. Out-of-band flash
+   provisioning remains outside that guarantee.
 3. **The reloc table is uncovered on the N657 — unreachable, NOT fail-closed.**
    L552 folds it (`enclave_create.rs:282-291`), RISC-V folds it
    (`riscv32/boot/src/secure_kernel/create.rs:130-136`), the N657 does not. An
@@ -290,11 +287,12 @@ of the story. Four things a reader must not read in:
 
    It becomes real the day the N657 gains reloc support. Pinned by
    `crates/umbra-chain-core/src/lib_tests.rs::reloc_count_is_not_checked_by_the_gate`.
-4. **The block count is a hypothesis, not a guarantee.** `code_size` sits in
-   `blob[10,14)`, outside the tag's core. Two accepted blobs with *different*
-   `code_size` have unrelated bodies as far as anything here says, and
-   `Chain_Residual.accept_is_evaluated_at_the_header_count` is the exact scope
-   statement.
+4. **The local chain theorem uses one count; the update composition derives it.**
+   Each successful chain gate parses its own count. Pkg-tag v2 pins magic and
+   `code_size` inside `blob[0,48)`, and
+   `Chain_Value.successful_blob_block_counts_agree` proves the two parsed counts
+   equal before the union invokes the body theorem. The chain gate in isolation
+   still relates no blobs with different headers.
 
 **And the whole result is stated for one `cfg`.** `umbra-chain-core` hardcodes
 the 288-byte block stride of the N657's default feature set

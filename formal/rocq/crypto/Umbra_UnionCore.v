@@ -134,9 +134,10 @@ Definition ChainAccepts {CS : Type} (cinst : ChainHmac_t CS) (ch : CS)
   verify_blob_chain cinst ch master blob = Ok true
   /\ blob_block_count blob = Ok (Some n).
 
-(** THE BLOCK COUNT IS NOW READ INSIDE THE AUTHENTICATED CORE — a v2 change —
-    but `ChainAccepts`' shared block count is KEPT as a HYPOTHESIS of the union
-    rather than derived from "the core was signed".
+(** THE BLOCK COUNT IS READ INSIDE THE AUTHENTICATED CORE. Equal accepted
+    cores pin both count windows; successful count parsing means both blobs
+    also passed the non-short length branch. `successful_blob_block_counts_agree`
+    therefore derives equality of the two counts below.
 
     `Chain_Value.blob_block_count_cong` (Qed) proves `blob_block_count` is a
     function of `blob[0,4)` (the magic) and `blob[10,14)` (`code_size`) alone.
@@ -146,12 +147,9 @@ Definition ChainAccepts {CS : Type} (cinst : ChainHmac_t CS) (ch : CS)
     `Update_Encoding.msg_of_pkg` reads `pkg[4,32)` and `pkg[32,80)`, and the
     blob starts at `pkg[32)` — so both count windows now sit inside the
     authenticated core (the remark below is the arithmetic), and equal cores
-    could IN PRINCIPLE force equal counts via `blob_block_count_cong` (which
-    additionally needs the two blob lengths equal — itself available, since
-    `blob_len` is in the core and the parser's guard 4 ties the blob's length
-    to it). That derivation is NOT mechanised here; the theorems below keep
-    the v1 statement shape, concluding about an accepted body AT THE DECLARED
-    BLOCK COUNT, with the shared count as an explicit hypothesis. *)
+    now force equal successful counts via
+    `Chain_Value.successful_blob_block_counts_agree` (Qed). The union theorems
+    consequently accept two independently obtained count witnesses. *)
 Remark block_count_window_is_inside_the_authenticated_window :
   forall i : Z, (0 <= i < 4 \/ 10 <= i < 14) -> 0 <= i < 48.
 Proof. intros i H. lia. Qed.
@@ -370,7 +368,7 @@ Qed.
 (* ===================================================================== *)
 
 (** Two packages the device accepts whose AUTHENTICATED CORES are equal, and
-    whose blobs both pass the chained-measurement gate with one block count
+    whose blobs both pass the chained-measurement gate with independently parsed counts
     under one master key, have blob bodies that agree byte for byte — unless
     the CHAIN seam collided, and then the colliding pair is exhibited.
 
@@ -384,27 +382,38 @@ Qed.
 Theorem accepted_equal_cores_pin_the_blob_body :
   forall {CS : Type} (cinst : ChainHmac_t CS) (ch : CS)
          (master : Chain_Trace.ckey)
-         (pkg1 pkg2 : slice u8) (en : array u8 16%usize) r1 r2 (n : u32),
+         (pkg1 pkg2 : slice u8) (en : array u8 16%usize) r1 r2 (n1 n2 : u32),
     parse_and_verify inst pkg1 en hs key = Ok (Core_result_Result_Ok r1) ->
     parse_and_verify inst pkg2 en hs key = Ok (Core_result_Result_Ok r2) ->
     msg_of_pkg pkg1 = msg_of_pkg pkg2 ->
-    ChainAccepts cinst ch master r1.(verifiedUpdate_blob) n ->
-    ChainAccepts cinst ch master r2.(verifiedUpdate_blob) n ->
-    BodiesAgree r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n
+    ChainAccepts cinst ch master r1.(verifiedUpdate_blob) n1 ->
+    ChainAccepts cinst ch master r2.(verifiedUpdate_blob) n2 ->
+    BodiesAgree r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n1
     \/ SeamCollisionInRuns cinst ch master
          r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob).
 Proof.
-  intros CS cinst ch master pkg1 pkg2 en r1 r2 n A1 A2 Hmsg [Hv1 Hn1] [Hv2 Hn2].
+  intros CS cinst ch master pkg1 pkg2 en r1 r2 n1 n2 A1 A2 Hmsg [Hv1 Hn1] [Hv2 Hn2].
+  assert (Hheader : forall q : usize, 0 <= to_Z q < 48 ->
+            slice_index_usize r1.(verifiedUpdate_blob) q
+            = slice_index_usize r2.(verifiedUpdate_blob) q).
+  { intros q Hq. exact (accepted_equal_cores_pin_the_header_window
+                          pkg1 pkg2 en r1 r2 A1 A2 Hmsg q Hq). }
+  assert (Hcount : n1 = n2).
+  { apply (successful_blob_block_counts_agree
+             r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n1 n2
+             Hn1 Hn2).
+    - intros i Hi. apply Hheader. lia.
+    - intros i Hi. apply Hheader. lia. }
+  subst n2.
   (* v2 pins the whole header blob[0,48); the chain gate only needs its
      `header.hmac` field blob[16,48), so restrict the window. *)
   assert (Hwin : forall q : usize, 16 <= to_Z q < 48 ->
             slice_index_usize r1.(verifiedUpdate_blob) q
             = slice_index_usize r2.(verifiedUpdate_blob) q).
   { intros q Hq.
-    apply (accepted_equal_cores_pin_the_header_window pkg1 pkg2 en r1 r2
-             A1 A2 Hmsg). lia. }
+    apply Hheader. lia. }
   exact (chain_accept_pins_the_blob_body cinst ch master
-           r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n Hv1 Hv2 Hn1 Hn2
+           r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n1 Hv1 Hv2 Hn1 Hn2
            Hwin).
 Qed.
 
@@ -459,21 +468,21 @@ Qed.
     equations between wire objects or the firmware's chain-gate verdicts. *)
 Theorem wire_accepted_equal_indices_pin_the_blob_body :
   forall {CS : Type} (cinst : ChainHmac_t CS) (ch : CS)
-         (master : Chain_Trace.ckey) (en p1 p2 : list nat) r1 r2 (n : u32),
+         (master : Chain_Trace.ckey) (en p1 p2 : list nat) r1 r2 (n1 n2 : u32),
     parse_and_verify inst (wire p1) (nonce16 en) hs key
       = Ok (Core_result_Result_Ok r1) ->
     parse_and_verify inst (wire p2) (nonce16 en) hs key
       = Ok (Core_result_Result_Ok r2) ->
     widx p1 = widx p2 ->
-    ChainAccepts cinst ch master r1.(verifiedUpdate_blob) n ->
-    ChainAccepts cinst ch master r2.(verifiedUpdate_blob) n ->
-    BodiesAgree r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n
+    ChainAccepts cinst ch master r1.(verifiedUpdate_blob) n1 ->
+    ChainAccepts cinst ch master r2.(verifiedUpdate_blob) n2 ->
+    BodiesAgree r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob) n1
     \/ SeamCollisionInRuns cinst ch master
          r1.(verifiedUpdate_blob) r2.(verifiedUpdate_blob).
 Proof.
-  intros CS cinst ch master en p1 p2 r1 r2 n A1 A2 Hidx C1 C2.
+  intros CS cinst ch master en p1 p2 r1 r2 n1 n2 A1 A2 Hidx C1 C2.
   exact (accepted_equal_cores_pin_the_blob_body cinst ch master
-           (wire p1) (wire p2) (nonce16 en) r1 r2 n A1 A2
+           (wire p1) (wire p2) (nonce16 en) r1 r2 n1 n2 A1 A2
            (wire_equal_indices_are_equal_cores en p1 p2 r1 r2 A1 A2 Hidx)
            C1 C2).
 Qed.
@@ -485,18 +494,18 @@ Qed.
 Theorem accepted_equal_indices_pin_the_blob_body :
   forall {CS : Type} (cinst : ChainHmac_t CS) (ch : CS)
          (master : Chain_Trace.ckey) (en p1 p2 : list nat)
-         (r1 r2 : vupd) (n : blkcount),
+         (r1 r2 : vupd) (n1 n2 : blkcount),
     Accepted inst hs key en p1 r1 ->
     Accepted inst hs key en p2 r2 ->
     widx p1 = widx p2 ->
-    ChainAccepts cinst ch master (vblob r1) n ->
-    ChainAccepts cinst ch master (vblob r2) n ->
-    BodiesAgree (vblob r1) (vblob r2) n
+    ChainAccepts cinst ch master (vblob r1) n1 ->
+    ChainAccepts cinst ch master (vblob r2) n2 ->
+    BodiesAgree (vblob r1) (vblob r2) n1
     \/ SeamCollisionInRuns cinst ch master (vblob r1) (vblob r2).
 Proof.
-  intros CS cinst ch master en p1 p2 r1 r2 n A1 A2 Hidx C1 C2.
+  intros CS cinst ch master en p1 p2 r1 r2 n1 n2 A1 A2 Hidx C1 C2.
   exact (wire_accepted_equal_indices_pin_the_blob_body cinst ch master
-           en p1 p2 r1 r2 n A1 A2 Hidx C1 C2).
+           en p1 p2 r1 r2 n1 n2 A1 A2 Hidx C1 C2).
 Qed.
 
 (** THE HYPOTHESIS OF THE THEOREM ABOVE *IS* THE ORACLE'S `true`, in both

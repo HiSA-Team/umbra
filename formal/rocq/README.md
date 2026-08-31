@@ -104,7 +104,7 @@ formal/rocq/
 ├── REPORT.md            # feasibility findings + refactor proposal (issue #58)
 ├── AENEAS_COQ_MKARRAY_BUG.md   # the backend axiom that proves False, and the fix
 ├── ess-core/            # ESS cache state machine
-├── rot-core/            # RoT chained measurement (see the caveat below)
+├── rot-core/            # deprecated historical model; excluded from artifact claims
 ├── mem-core/            # memory-block region math
 ├── update-core/         # secure enclave update — the 12-file chain, P1..P4
 ├── chain-core/          # the update blob's chained measurement — closes B1
@@ -131,3 +131,5 @@ and close to meaningless. Worse, `Rot_Chain.v`'s `hmac_injective` is
 **unsatisfiable** by any fixed-output MAC (pigeonhole), so what it proves is
 vacuous. `chain-core` is the redone version of that argument: over the verbatim
 extracted body, and as a reduction rather than under a false hypothesis.
+`rot-core/DEPRECATED.md` is the tombstone: submission builds and assumption
+audits intentionally exclude the directory.

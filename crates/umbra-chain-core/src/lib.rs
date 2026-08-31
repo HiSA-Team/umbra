@@ -23,7 +23,7 @@
 //!            5   1  reserved0
 //!            6   2  efbc_size
 //!            8   2  ess_blocks
-//!           10   4  code_size          <- block count = code_size / 288
+//!           10   4  code_size          <- must be a positive multiple of 288
 //!           14   2  reloc_count
 //!           16  32  hmac               <- the chain root; authenticated by P2
 //!  48  ..   code_size bytes = code_size/288 blocks of 288 bytes each,
@@ -214,8 +214,10 @@ pub fn chain_root<H: ChainHmac>(
     Some(chain)
 }
 
-/// Read the block count out of the header: `code_size / 288`, subject to the
-/// magic check and the same `0 < n ≤ MAX_BLOCKS` guard the firmware applies.
+/// Read the block count out of the header. `code_size` must describe complete
+/// 288-byte blocks; rejecting a remainder prevents bytes declared as code from
+/// falling outside the folded region. The resulting count is subject to the
+/// same `0 < n ≤ MAX_BLOCKS` guard the firmware applies.
 pub fn blob_block_count(blob: &[u8]) -> Option<u32> {
     if blob.len() < HDR_LEN {
         return None;
@@ -230,6 +232,9 @@ pub fn blob_block_count(blob: &[u8]) -> Option<u32> {
         blob[CODE_SIZE_OFF + 2],
         blob[CODE_SIZE_OFF + 3],
     ]);
+    if code_size % (BLOCK_LEN as u32) != 0 {
+        return None;
+    }
     let n = code_size / (BLOCK_LEN as u32);
     if n == 0 || n > MAX_BLOCKS {
         return None;

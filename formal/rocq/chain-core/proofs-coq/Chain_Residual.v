@@ -1,8 +1,9 @@
 (** THE HONEST NEGATIVE — what the chain still does not cover.
 
     `Umbra_Canonical.blob_body_is_not_covered_by_pkg_tag` (Qed) says the package
-    tag misses `blob[0,16)` and `blob[48,blob_len)`. `Chain_Body` closes the
-    second of those two ranges — but only the part of it the fold actually walks.
+    package tag historically missed `blob[0,16)` and still misses
+    `blob[48,blob_len)`. Pkg-tag v2 now covers the full header; `Chain_Body`
+    closes the second range only for the part the fold actually walks.
     This file states, machine-checked, exactly what is left, in the same style:
     an INVARIANCE, i.e. a proof that the gate cannot separate two blobs which
     differ where nothing looks.
@@ -10,23 +11,23 @@
     THE RESIDUE, for a blob of `n` blocks:
 
       R1  `blob[4,10)` and `blob[14,16)` — `trust_level`, `reserved0`,
-          `efbc_size`, `ess_blocks`, `reloc_count`. In no chain preimage and in
-          no tag preimage. This is the one with teeth in the abstract, and
+          `efbc_size`, `ess_blocks`, `reloc_count`. In no chain preimage, but
+          covered by the v2 package tag. Locally to the chain,
           [verdict_ignores_the_unauthenticated_header_bytes] below proves it: the
           gate's verdict does not depend on those bytes at all.
 
-      R2  `blob[0,4)` and `blob[10,14)` — `magic` and `code_size`. Also
-          unauthenticated, but not free: `magic` is checked against a constant,
-          and `code_size` fixes `n`, so changing it changes how many blocks are
-          folded. [count_ignores_the_unread_header_bytes] is the exact
-          dependency.
+      R2  `blob[0,4)` and `blob[10,14)` — `magic` and `code_size`. The chain
+          reads them, and the v2 package tag authenticates them. `magic` is
+          checked against a constant and `code_size` fixes `n`;
+          [count_ignores_the_unread_header_bytes] states the exact dependency.
 
       R3  `blob[48 + 288·n, blob_len)` — the relocation table
           `protect_enclave.py` appends after the blocks: `reloc_count` u32
           entries, each a plaintext-relative offset of a 32-bit word a loader
           REWRITES after decryption. In no preimage of either kind.
 
-    WHAT R1 IS WORTH, ON THE N657, TODAY: NOTHING. `trust_level` is the alarming
+    WHAT R1 IS WORTH TO THE CHAIN ALONE: it identifies bytes the chain ignores.
+    The update tag now covers them. `trust_level` was the alarming
     one, because `UmbraEnclaveHeader::is_trusted()` reads it. That method has
     ZERO call sites in the repository — `EnclaveTrustLevel` occurs only in its own
     declaration and in the one comparison inside `is_trusted`
@@ -37,7 +38,7 @@
     field the N657 reads at all is `code_size`, and every use is bounds-checked
     (`api_impl.rs:152-155`, `339-350`). So R1 is a latent hole in the FORMAT, not
     a live hole in the product: it becomes exploitable exactly when someone gives
-    one of those five bytes a consumer.
+    one of those five bytes a consumer outside the authenticated update path.
 
     R3 IS LATENT TOO, AND FAIL-CLOSED — an earlier revision of this comment
     called it a live gap, which overstated it. It is a real asymmetry:
@@ -196,10 +197,10 @@ Proof. exact blob_block_count_cong. Qed.
 
 (** And the accept condition is evaluated at the count the blob's own header
     yields — the gate cannot be run at any other. This is why `Chain_Body` may
-    take "same block count" as a hypothesis rather than as a promise about the
-    attacker: for two accepted blobs it follows from
-    [count_ignores_the_unread_header_bytes]. What is NOT proved, and must not be
-    read in, is that two accepted blobs with DIFFERENT `code_size` have related
+    take "same block count" as a local hypothesis. The update composition uses
+    [successful_blob_block_counts_agree] to derive it from the authenticated
+    header and two successful parses. What is NOT proved, and must not be read
+    in, is that two chain-accepted blobs with DIFFERENT `code_size` have related
     bodies. They do not, and no theorem here says otherwise. *)
 Theorem accept_is_evaluated_at_the_header_count :
   forall {HS : Type} (inst : ChainHmac_t HS) (h : HS)

@@ -205,6 +205,31 @@ Local Open Scope Primitives_scope.
 (* rather than assumed.                                                    *)
 (* ===================================================================== *)
 
+(** The fixed prefix P3 refers to is concretely the ASCII byte string
+    `umbra-update-v2`, not merely an opaque fifteen-byte slice. *)
+Theorem pkg_tag_label_is_update_v2 :
+  slice_index_usize pKG_TAG_LABEL 0%usize = Ok 117%u8
+  /\ slice_index_usize pKG_TAG_LABEL 1%usize = Ok 109%u8
+  /\ slice_index_usize pKG_TAG_LABEL 2%usize = Ok 98%u8
+  /\ slice_index_usize pKG_TAG_LABEL 3%usize = Ok 114%u8
+  /\ slice_index_usize pKG_TAG_LABEL 4%usize = Ok 97%u8
+  /\ slice_index_usize pKG_TAG_LABEL 5%usize = Ok 45%u8
+  /\ slice_index_usize pKG_TAG_LABEL 6%usize = Ok 117%u8
+  /\ slice_index_usize pKG_TAG_LABEL 7%usize = Ok 112%u8
+  /\ slice_index_usize pKG_TAG_LABEL 8%usize = Ok 100%u8
+  /\ slice_index_usize pKG_TAG_LABEL 9%usize = Ok 97%u8
+  /\ slice_index_usize pKG_TAG_LABEL 10%usize = Ok 116%u8
+  /\ slice_index_usize pKG_TAG_LABEL 11%usize = Ok 101%u8
+  /\ slice_index_usize pKG_TAG_LABEL 12%usize = Ok 45%u8
+  /\ slice_index_usize pKG_TAG_LABEL 13%usize = Ok 118%u8
+  /\ slice_index_usize pKG_TAG_LABEL 14%usize = Ok 50%u8.
+Proof.
+  unfold pKG_TAG_LABEL.
+  repeat rewrite slice_index_array_to_slice.
+  exact (mk_array15_val 117%u8 109%u8 98%u8 114%u8 97%u8 45%u8 117%u8
+           112%u8 100%u8 97%u8 116%u8 101%u8 45%u8 118%u8 50%u8).
+Qed.
+
 Definition Assembles (pre : array u8 91%usize) (n : array u8 16%usize)
     (au ve bl : u32) (hh : array u8 48%usize) : Prop :=
   (forall i j : usize, 0 <= to_Z i < 15 -> to_Z j = to_Z i ->
@@ -1122,3 +1147,5 @@ Proof.
 Qed.
 
 End Composed.
+
+Print Assumptions pkg_tag_label_is_update_v2.

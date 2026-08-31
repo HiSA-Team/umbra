@@ -18,7 +18,9 @@
 
     WHAT THIS FILE DOES. It builds a CONCRETE interpretation of those operations
     over Coq lists (and, for the two bitwise ops, over `Z.lxor` / `Z.lor`) and
-    proves, `Qed`, that all twenty statements hold of it. Two theorems:
+    proves, `Qed`, that all twenty statements hold of it. The concrete-label
+    corollary uses one additional law for the generated 15-byte total
+    constructor; it is kept separate and modeled jointly below. Three theorems:
 
       [quarantine_is_the_axioms]  — the record `QuarantineHolds` below, applied to
         the Primitives symbols, is DISCHARGED BY the twenty axioms of
@@ -29,6 +31,11 @@
       [quarantine_has_a_model]    — `exists O, QuarantineHolds O`, proved from the
         model with NO use of the twenty axioms (check with `Print Assumptions`:
         only the backend's scalar-width parameters appear).
+
+      [quarantine_and_label_literal_have_a_model] — the same `model_ops`
+        satisfies both the twenty laws and `LabelLiteralLaw`, so the stronger
+        theorem identifying `umbra-update-v2` is not justified by a separate,
+        potentially incompatible model.
 
     WHAT THAT BUYS.
       * CONSISTENCY. `QuarantineHolds` is satisfiable in plain Coq, so the
@@ -289,6 +296,42 @@ Definition QuarantineHolds (O : OpaqueOps) : Prop :=
      /\ O.(op_array_index) u8 4%usize (mk_array4 b0 b1 b2 b3) 2%usize = Ok b2
      /\ O.(op_array_index) u8 4%usize (mk_array4 b0 b1 b2 b3) 3%usize = Ok b3).
 
+(** The additional concrete-label law is kept separate from Q1--Q20 because
+    the parser theorems only need a fixed label; this law supports the stronger
+    corollary identifying that label with the literal `umbra-update-v2`. *)
+Definition LabelLiteralLaw (O : OpaqueOps) : Prop :=
+  forall b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 : u8,
+    O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 0%usize = Ok b0
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 1%usize = Ok b1
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 2%usize = Ok b2
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 3%usize = Ok b3
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 4%usize = Ok b4
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 5%usize = Ok b5
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 6%usize = Ok b6
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 7%usize = Ok b7
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 8%usize = Ok b8
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 9%usize = Ok b9
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 10%usize = Ok b10
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 11%usize = Ok b11
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 12%usize = Ok b12
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 13%usize = Ok b13
+    /\ O.(op_array_index) u8 15%usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 14%usize = Ok b14.
+
 (* ===================================================================== *)
 (* 1. The bundle of the ACTUAL opaque symbols the extracted code runs on. *)
 (* ===================================================================== *)
@@ -310,6 +353,12 @@ Definition primitives_ops : OpaqueOps := {|
   op_u32_to_le_bytes := core_num_U32_to_le_bytes;
   op_u32_from_le_bytes := core_num_U32_from_le_bytes;
 |}.
+
+Lemma label_literal_is_the_axiom : LabelLiteralLaw primitives_ops.
+Proof.
+  unfold LabelLiteralLaw; cbn [op_array_index primitives_ops].
+  exact mk_array15_val.
+Qed.
 
 (* ===================================================================== *)
 (* 2. The record IS the axiom block — Coq checks the restatement.         *)
@@ -1142,9 +1191,17 @@ Proof.
   - rewrite tz3. reflexivity.
 Qed.
 
-Theorem quarantine_has_a_model : exists O, QuarantineHolds O.
+Lemma model_label_literal : LabelLiteralLaw model_ops.
 Proof.
-  exists model_ops. unfold QuarantineHolds;
+  unfold LabelLiteralLaw; cbn [op_array_index model_ops].
+  intros b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14.
+  unfold model_array_index, mk_array15, opt_result; cbn [proj1_sig].
+  repeat apply conj; reflexivity.
+Qed.
+
+Lemma model_quarantine : QuarantineHolds model_ops.
+Proof.
+  unfold QuarantineHolds;
     cbn [op_slice_len op_array_to_slice op_array_index op_slice_index
          op_range_inst op_index_mut_slice_inst op_array_index_mut
          op_copy_from_slice op_u32_to_le_bytes op_u32_from_le_bytes
@@ -1182,6 +1239,17 @@ Proof.
   - (* Q18 *) exact model_Q18.
   - (* Q19 *) exact model_Q19.
   - (* Q20 *) exact model_Q20.
+Qed.
+
+Theorem quarantine_has_a_model : exists O, QuarantineHolds O.
+Proof. exists model_ops. exact model_quarantine. Qed.
+
+Theorem quarantine_and_label_literal_have_a_model :
+  exists O, QuarantineHolds O /\ LabelLiteralLaw O.
+Proof.
+  exists model_ops. split.
+  - exact model_quarantine.
+  - exact model_label_literal.
 Qed.
 
 (* ===================================================================== *)
@@ -1244,3 +1312,4 @@ Qed.
 (* scalar-width constants.                                               *)
 (* ===================================================================== *)
 Print Assumptions quarantine_has_a_model.
+Print Assumptions quarantine_and_label_literal_have_a_model.

@@ -80,6 +80,8 @@ pub struct Kernel {
     pub state_root: [u8; 32],
     /// MASTER_KEY-derived key that signs attestation quotes.
     pub attest_key: [u8; 32],
+    /// Independent MASTER_KEY-derived key that authenticates update packages.
+    pub update_key: [u8; 32],
     /// Last nonce handed out by `umbra_attest_quote`; the update path binds to it.
     pub last_nonce: [u8; 16],
     /// True after a quote is issued, cleared after any update attempt (single-use).
@@ -92,6 +94,10 @@ pub struct Kernel {
     pub reset_cause: u32,
     pub enclave_contexts: [EnclaveContext; 4],
     pub current_enclave_id: Option<u32>,
+    /// A/B slot index (0/1) the current enclave was `create(0)`-selected from, or
+    /// `None` for an explicit-base create. Drives the failed-boot counter: a clean
+    /// termination clears this slot's count (liveness fallback). See `antirollback`.
+    pub active_boot_slot: Option<usize>,
 }
 
 static mut INSTANCE: Option<Kernel> = None;
@@ -139,6 +145,7 @@ impl Kernel {
             hmac_key: [0u8; 32],
             state_root: [0u8; 32],
             attest_key: [0u8; 32],
+            update_key: [0u8; 32],
             last_nonce: [0u8; 16],
             nonce_armed: false,
             last_restore: 0,
@@ -146,10 +153,11 @@ impl Kernel {
             reset_cause: 0,
             enclave_contexts: [EnclaveContext::empty(); 4],
             current_enclave_id: None,
+            active_boot_slot: None,
         }
     }
 
-    /// Populate `enc_key`/`hmac_key` from the master key via the KDF.
+    /// Populate all protocol-specific subkeys from the master key via the KDF.
     /// Returns `Err(UmbraError::KeyDerivation)` if the HASH engine wedges; the
     /// boot boundary halts visibly rather than booting on all-zero keys (the
     /// old body swallowed the error and returned a zero key).
@@ -160,6 +168,7 @@ impl Kernel {
             self.hmac_key = crate::key_derivation::derive_hmac_key(crypto)?;
             self.state_root = crate::key_derivation::derive_state_root(crypto)?;
             self.attest_key = crate::key_derivation::derive_attest_key(crypto)?;
+            self.update_key = crate::key_derivation::derive_update_key(crypto)?;
         }
         // Snapshot the reset cause once, then CLEAR the flags (RMVF = bit 16,
         // write-1-to-clear) so the NEXT boot's reset_cause reflects only the resets

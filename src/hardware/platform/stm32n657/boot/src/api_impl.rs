@@ -162,6 +162,9 @@ pub(crate) fn authenticated_version_at(base_addr: u32) -> Option<u32> {
     }
 
     let header = unsafe { UmbraEnclaveHeader::from_address(base_addr)? };
+    if header.code_size % TOTAL_BLOCK_SIZE != 0 {
+        return None;
+    }
     let num_blocks = header.code_size / TOTAL_BLOCK_SIZE;
     if num_blocks == 0 || (num_blocks as usize) > MAX_EFBS {
         return None;
@@ -297,19 +300,51 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     // measures the chosen slot twice (a few ms); acceptable for a rare create-time
     // selection. This runs BEFORE we take the &'static mut kernel borrow below, so
     // authenticated_version_at's own Kernel::get() does not alias it.
+    // Slot the create(0) path selected (None for an explicit-base create); recorded
+    // into the kernel below so a clean termination can clear its failed-boot counter.
+    let mut selected_slot: Option<usize> = None;
     let base_addr = if base_addr == 0 {
         use drivers::state_flash::{ENCLAVE_SLOT_A, ENCLAVE_SLOT_B};
         use kernel::key_storage_server::enclave_update::select_active_slot;
         let va = authenticated_version_at(ENCLAVE_SLOT_A);
         let vb = authenticated_version_at(ENCLAVE_SLOT_B);
+        // Liveness fallback (version-bind builds only, where the A/B secure-update path
+        // lives): exclude a slot that has failed to boot BOOT_FAIL_THRESHOLD times in a
+        // row (an authentic-but-crashing image warm-reset-looping) by passing `None` for
+        // it — `select_active_slot` stays the proven pure function; exclusion is only a
+        // masked input, then it picks the highest of what remains.
+        #[cfg(feature = "enclave_version_bind")]
+        let (va, vb) = {
+            let bf = crate::antirollback::BootFailCounter::new();
+            let k = crate::antirollback::BOOT_FAIL_THRESHOLD;
+            (
+                if bf.get(0) >= k { None } else { va },
+                if bf.get(1) >= k { None } else { vb },
+            )
+        };
         match select_active_slot(va, vb) {
-            Some(0) => ENCLAVE_SLOT_A,
-            Some(1) => ENCLAVE_SLOT_B,
+            Some(0) => {
+                selected_slot = Some(0);
+                ENCLAVE_SLOT_A
+            }
+            Some(1) => {
+                selected_slot = Some(1);
+                ENCLAVE_SLOT_B
+            }
+            // Both slots excluded or unauthenticated: halt this create rather than loop.
             _ => return nsc_status(UmbraError::EnclaveNotFound { id: 0 }),
         }
     } else {
         base_addr
     };
+
+    // Record the boot attempt BEFORE running the enclave: a crash → SYSRESETREQ (warm)
+    // leaves this increment in TAMP, so BOOT_FAIL_THRESHOLD consecutive crashes exclude
+    // the slot next boot; a clean termination clears it (usage_fault_terminate).
+    #[cfg(feature = "enclave_version_bind")]
+    if let Some(s) = selected_slot {
+        crate::antirollback::BootFailCounter::new().inc(s);
+    }
 
     let kernel = unsafe {
         match Kernel::get() {
@@ -317,6 +352,8 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
             None => return 0xFFFF_FFFE,
         }
     };
+    // A fresh create resets the slot association (None for explicit-base creates).
+    kernel.active_boot_slot = selected_slot;
 
     // 1. Validate flash range — XSPI2 memory-mapped at 0x70000000 (256 MB).
     if base_addr < 0x7000_0000 || base_addr >= 0x8000_0000 {
@@ -355,6 +392,9 @@ pub extern "C" fn umbra_enclave_create_imp(base_addr: u32) -> u32 {
     };
 
     let total_blob_size = header.code_size;
+    if total_blob_size % TOTAL_BLOCK_SIZE != 0 {
+        return 0xFFFF_FFF7;
+    }
     let num_blocks = total_blob_size / TOTAL_BLOCK_SIZE;
     if num_blocks == 0 || (num_blocks as usize) > MAX_EFBS {
         return 0xFFFF_FFF7;

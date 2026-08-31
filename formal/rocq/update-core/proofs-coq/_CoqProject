@@ -24,6 +24,10 @@ Update_Auth.v
 # package's fields, the nonce field is the armed nonce, and (P4) the update slot
 # is activated iff its authenticated version strictly exceeds the active one.
 Update_Crypto.v
+# Conservativity of the mk_array patch at the two extracted arities: an array
+# is determined by its underlying list (UIP on Z), so any consistent reading of
+# the removed axiom agrees with the total constructors. Nothing imports it.
+Update_MkArrayCanonical.v
 # Companion consistency witness for Update_Safety's 14-axiom quarantine: a
 # concrete list model of the opaque slice/array/copy ops + the machine-checked
 # proof that the axioms hold of it. Nothing imports it; it must come last.

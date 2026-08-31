@@ -2,8 +2,7 @@
 """Remote attestation verifier + secure enclave updater for Umbra N657.
 
 The verifier is TRUSTED: it holds MASTER_KEY (tools/master_key.bin) and re-derives
-the attestation key K_attest = HMAC(MASTER_KEY, "umbra-attest-v1") to check quote
-tags and to sign update packages. Talks the framed protocol
+independent keys for quote verification and update-package signing. Talks the framed protocol
     [SOF 0xA5][cmd u8][len u16 LE][payload][crc32 LE]
 to the Non-Secure relay over the ST-Link VCP.
 
@@ -30,6 +29,7 @@ QUOTE_MAGIC = 0x31545155   # "UQT1"
 UPDATE_MAGIC = 0x31505555  # "UUP1"
 QUOTE_LEN = 115
 ATTEST_LABEL = b"umbra-attest-v1"
+UPDATE_KEY_LABEL = b"umbra-update-key-v1"
 # v2: pkg_tag preimage covers the FULL 48-byte UMBR header (blob[0:48]), not just
 # header.hmac (blob[16:48]) — closes the unauthenticated trust_level/efbc_size/
 # ess_blocks/reloc_count residue. Label version moves with the preimage layout.
@@ -51,6 +51,10 @@ UPDATE_STATUS = {
 
 def kattest(master):
     return hmac.new(master, ATTEST_LABEL, hashlib.sha256).digest()
+
+
+def kupdate(master):
+    return hmac.new(master, UPDATE_KEY_LABEL, hashlib.sha256).digest()
 
 
 def send_frame(ser, cmd, payload):
@@ -179,7 +183,7 @@ def build_pkg(nonce, author_id, version, blob, master, key=None):
         sys.exit("blob too short to contain a UMBR header")
     header = blob[0:48]
     pre = PKG_LABEL + bytes(nonce) + struct.pack("<III", author_id, version, len(blob)) + header
-    tag = hmac.new(key if key is not None else kattest(master), pre, hashlib.sha256).digest()
+    tag = hmac.new(key if key is not None else kupdate(master), pre, hashlib.sha256).digest()
     return (struct.pack("<I", UPDATE_MAGIC) + bytes(nonce)
             + struct.pack("<III", author_id, version, len(blob)) + blob + tag)
 

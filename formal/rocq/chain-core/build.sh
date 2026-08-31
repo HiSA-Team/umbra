@@ -46,11 +46,13 @@ echo ">> assumption audit"
 AUDIT="$PROOFS/Chain_Audit.v"
 cat > "$AUDIT" <<'EOF'
 Require Import Chain_Body.
+Require Import Chain_Value.
 Require Import Chain_Compose.
 Require Import Chain_Residual.
 Require Import Chain_Model.
 Require Import Chain_Reachable.
 Print Assumptions chain_accept_pins_the_blob_body.
+Print Assumptions successful_blob_block_counts_agree.
 Print Assumptions verified_update_pins_the_blob_body.
 Print Assumptions chain_root_ignores_everything_outside_the_blocks.
 Print Assumptions verdict_ignores_the_unauthenticated_header_bytes.

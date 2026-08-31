@@ -1,6 +1,6 @@
 # eval-data — provenance of the N657 measurement campaigns
 
-Two campaigns, same shape: 30 attestation quotes and 30 chained enclave updates
+Three campaigns, same shape: 30 attestation quotes and 30 chained enclave updates
 (versions of `ndes`, `blob_len = 5808`, every one accepted). The `*_cyc` columns
 are DWT `CYCCNT` deltas taken by the firmware itself
 (`stm32n657/boot/src/attest_imp.rs`, CPU at 800 MHz, so 1 cycle = 1.25 ns); the
@@ -10,10 +10,11 @@ are DWT `CYCCNT` deltas taken by the firmware itself
 |---|---|---|
 | `n657_attest_update_2026-07-28.csv` | pkg-tag **v1** (75-byte preimage) | 2026-07-28 |
 | `n657_attest_update_v2_2026-08-10.csv` | pkg-tag **v2** (91-byte preimage) | 2026-08-10 |
+| `n657_attest_update_v2_keysep_2026-08-10.csv` | pkg-tag **v2**, separated update/quote keys | 2026-08-10 |
 
-**Quote the v2 file.** v1 is kept because the paper's earlier numbers came from
-it and because the pair is the only direct measurement of what widening the
-preimage costs.
+**Quote the `v2_keysep` file.** It is the only campaign run after the firmware
+began deriving distinct update and attestation keys. The two older files remain
+as controls for the cost of widening the authenticated preimage.
 
 ## v1 campaign (2026-07-28)
 
@@ -30,7 +31,7 @@ Campaign means over the 30 updates, with the sample standard deviation:
 
 `auth` is 0.0245 % of the total; flash programming is 77.6 %.
 
-## v2 campaign (2026-08-10) — the one to cite
+## v2 campaign (2026-08-10) — historical control
 
 Same board, same workload, same harness; firmware rebuilt at `295fd0a` so the tag
 covers the full 48-byte header. Versions v4..v33, 30/30 accepted.
@@ -55,6 +56,25 @@ after the 30-quote phase with the HASH block already exercised, whereas every
 later update follows a device reboot. Including it gives mean 18 206 with sd 539
 — a sd inflated 8× by one structural outlier. Report the steady state and say so.
 
+## v2 separated-key campaign (2026-08-10) — the one to cite
+
+Firmware rebuilt from the working tree based on `cdc0ac9`, with distinct
+`K_update` and `K_attest`; versions v4..v33, 30/30 accepted. These are the
+inclusive means over all 30 samples (no outlier removal):
+
+| phase | column | mean (cycles) | mean (ms) | sd (cycles) |
+|---|---|---:|---:|---:|
+| copy package to Secure | `copy_cyc` | 1 047 317 | 1.309 | 180 |
+| **authenticate** (`parse_and_verify`) | `auth_cyc` | **18 321** | **0.0229** | **660** |
+| probe both slots | `probe_cyc` | 10 063 741 | 12.580 | 943 348 |
+| flash write | `flash_cyc` | 52 731 678 | 65.915 | 1 629 130 |
+| re-verify written slot | `verify_cyc` | 4 655 576 | 5.819 | 482 205 |
+| total | — | 68 516 633 | 85.646 | — |
+
+`auth` is 0.0267% of the on-device total; flash programming is 77.0%. Quote
+generation averaged 20 676 cycles (25.845 us). The full adversarial transcript
+and run configuration are in `n657_keysep_2026-08-10.md`.
+
 ### What widening the preimage cost
 
 **+4.30 %** on `auth`: 17 548 → 18 303 cycles, i.e. 0.94 µs. Predicted before the
@@ -73,21 +93,23 @@ not by anything v2 touches.
    un-optimised code, `auth` most of all: authenticating a package is *one*
    HMAC-SHA-256 over a 91-byte preimage — five SHA-256 compression-function
    calls — issued to the HASH IP by `attest_imp.rs::hw_hmac_single`. The rest of
-   the 17.5 kcycles is the surrounding un-optimised parse, copy and marshalling.
+   the roughly 18.3 kcycles is the surrounding un-optimised parse, copy and
+   marshalling.
    So **`auth_cyc` is not a hardware-hash throughput figure**: the HASH engine is
    idle for the large majority of that window, and citing the phase as evidence
    about the accelerator is wrong in both directions (it understates the IP and
    overstates the cost of the proved logic).
 
-2. **Say which tag a number came from.** The 2026-07-28 file is v1 (75-byte
-   preimage); the 2026-08-10 file is v2 (91 bytes, full header covered). They
-   differ measurably on `auth` and only on `auth`.
+2. **Say which firmware a number came from.** The 2026-07-28 file is v1
+   (75-byte preimage); both 2026-08-10 files are v2 (91 bytes, full header
+   covered), but only `v2_keysep` has distinct update and attestation keys.
 
 3. **The `auth` dispersion is not "below timer resolution".** DWT resolution is
    1 cycle = 1.25 ns; the `auth_cyc` sample sd is 83 cycles under v1 and 69 under
-   v2, i.e. tens of times the timer resolution. What it is below is the
-   **reporting** resolution of a millisecond table: 69 cycles = 0.00009 ms, which
-   rounds to 0.00 at two decimals. Prose that says "standard deviation below
+   historical v2 run, and 660 in the inclusive separated-key run. What even the
+   largest of these is below is the **reporting** resolution of a millisecond
+   table: 660 cycles = 0.00083 ms, which rounds to 0.00 at two decimals. Prose
+   that says "standard deviation below
    timer resolution" is false; "below the 0.01 ms resolution the table reports
    at" is the defensible form.
 

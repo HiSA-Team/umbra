@@ -17,6 +17,8 @@ Add a **challenge-response attestation quote** signed with a symmetric key.
 
 - **Key:** `K_attest = HMAC-SHA256(MASTER_KEY, "umbra-attest-v1")`, derived at boot
   in `init_keys` alongside the other subkeys, computed on the HW HASH engine.
+  Secure update uses a distinct `K_update` (ADR 013), so the public quote entry
+  point is not a same-key MAC oracle for update packages.
 - **Quote** (fixed 115-byte layout, `kernel::key_storage_server::attestation`):
   nonce, enclave id + status, `BM` (`chain_state`), author id, authenticated
   version, anti-rollback floor, state-continuity anchor generation, last restore

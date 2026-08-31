@@ -15,52 +15,52 @@ Include Chain_FunsExternal.
 Module Chain_Funs.
 
 (** [umbra_chain_core::UMBR_MAGIC]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 76:0-76:40
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 118:0-118:40
     Visibility: public *)
 Definition uMBR_MAGIC : u32 := 1380794965%u32.
 
 (** [umbra_chain_core::HDR_LEN]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 78:0-78:30
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 120:0-120:30
     Visibility: public *)
 Definition hDR_LEN : usize := 48%usize.
 
 (** [umbra_chain_core::HDR_HMAC_OFF]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 81:0-81:35
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 124:0-124:35
     Visibility: public *)
 Definition hDR_HMAC_OFF : usize := 16%usize.
 
 (** [umbra_chain_core::CODE_SIZE_OFF]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 83:0-83:36
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 126:0-126:36
     Visibility: public *)
 Definition cODE_SIZE_OFF : usize := 10%usize.
 
 (** [umbra_chain_core::CODE_LEN]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 85:0-85:32
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 128:0-128:32
     Visibility: public *)
 Definition cODE_LEN : usize := 256%usize.
 
 (** [umbra_chain_core::META_LEN]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 87:0-87:31
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 130:0-130:31
     Visibility: public *)
 Definition mETA_LEN : usize := 32%usize.
 
 (** [umbra_chain_core::BLOCK_LEN]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 89:0-89:33
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 132:0-132:33
     Visibility: public *)
 Definition bLOCK_LEN : usize := 288%usize.
 
 (** [umbra_chain_core::BLOCK_PREIMAGE_LEN]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 91:0-91:42
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 134:0-134:42
     Visibility: public *)
 Definition bLOCK_PREIMAGE_LEN : usize := 292%usize.
 
 (** [umbra_chain_core::MAX_BLOCKS]
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 94:0-94:31
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 137:0-137:31
     Visibility: public *)
 Definition mAX_BLOCKS : u32 := 64%u32.
 
 (** [umbra_chain_core::block_preimage_of_block]:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 118:0-127:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 161:0-170:1
     Visibility: public *)
 Definition block_preimage_of_block
   (blk : u32) (block : array u8 288%usize) : result (array u8 292%usize) :=
@@ -115,7 +115,7 @@ Definition block_preimage_of_block
 .
 
 (** [umbra_chain_core::block_preimage]:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 137:0-150:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 180:0-193:1
     Visibility: public *)
 Definition block_preimage
   (blob : slice u8) (blk : u32) : result (option (array u8 292%usize)) :=
@@ -152,7 +152,7 @@ Definition block_preimage
 .
 
 (** [umbra_chain_core::chain_root]: loop body 0:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 162:4-172:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 205:4-215:1
     Visibility: public *)
 Definition chain_root_loop_body
   {H : Type} (chainHmacInst : ChainHmac_t H) (h : H) (blob : slice u8)
@@ -174,7 +174,7 @@ Definition chain_root_loop_body
 .
 
 (** [umbra_chain_core::chain_root]: loop 0:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 162:4-172:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 205:4-215:1
     Visibility: public *)
 Definition chain_root_loop
   {H : Type} (chainHmacInst : ChainHmac_t H) (h : H) (blob : slice u8)
@@ -188,7 +188,7 @@ Definition chain_root_loop
 .
 
 (** [umbra_chain_core::chain_root]:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 154:0-172:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 197:0-215:1
     Visibility: public *)
 Definition chain_root
   {H : Type} (chainHmacInst : ChainHmac_t H) (h : H)
@@ -199,7 +199,7 @@ Definition chain_root
 .
 
 (** [umbra_chain_core::blob_block_count]:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 176:0-195:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 221:0-243:1
     Visibility: public *)
 Definition blob_block_count (blob : slice u8) : result (option u32) :=
   let i := slice_len blob in
@@ -227,14 +227,18 @@ Definition blob_block_count (blob : slice u8) : result (option u32) :=
         core_num_U32_from_le_bytes (mk_array4 i5 i7 i10 i12)
       in
       i13 <- scalar_cast Usize U32 bLOCK_LEN;
-      n <- u32_div code_size i13;
-      if n s= 0%u32
+      i14 <- u32_rem code_size i13;
+      if i14 s<> 0%u32
       then Ok None
-      else if n s> mAX_BLOCKS then Ok None else Ok (Some n)))
+      else (
+        n <- u32_div code_size i13;
+        if n s= 0%u32
+        then Ok None
+        else if n s> mAX_BLOCKS then Ok None else Ok (Some n))))
 .
 
 (** [umbra_chain_core::ct_eq32_at]: loop body 0:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 220:4-223:5 *)
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 269:4-272:5 *)
 Definition ct_eq32_at_loop_body
   (a : array u8 32%usize) (blob : slice u8) (off : usize) (d : u8) (i : usize)
   :
@@ -253,7 +257,7 @@ Definition ct_eq32_at_loop_body
 .
 
 (** [umbra_chain_core::ct_eq32_at]: loop 0:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 220:4-223:5 *)
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 269:4-272:5 *)
 Definition ct_eq32_at_loop
   (a : array u8 32%usize) (blob : slice u8) (off : usize) (d : u8) (i : usize)
   :
@@ -265,7 +269,7 @@ Definition ct_eq32_at_loop
 .
 
 (** [umbra_chain_core::ct_eq32_at]:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 214:0-225:1 *)
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 263:0-274:1 *)
 Definition ct_eq32_at
   (a : array u8 32%usize) (blob : slice u8) (off : usize) : result bool :=
   let i := slice_len blob in
@@ -276,7 +280,7 @@ Definition ct_eq32_at
 .
 
 (** [umbra_chain_core::verify_blob_chain]:
-    Source: 'crates/umbra-chain-core/src/lib.rs', lines 201:0-211:1
+    Source: 'crates/umbra-chain-core/src/lib.rs', lines 250:0-260:1
     Visibility: public *)
 Definition verify_blob_chain
   {H : Type} (chainHmacInst : ChainHmac_t H) (h : H)

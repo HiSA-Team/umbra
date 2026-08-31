@@ -69,7 +69,7 @@ Open Scope Z_scope.
     the blob, and `usize_max` is only known to be at least `u32_max`
     (`Primitives.usize_max_bound`), so a literal is the only way to discharge
     the `slice` well-formedness obligation without assuming more. *)
-Definition MAX_PKG : nat := 4096.
+Definition MAX_PKG : nat := 65536.
 
 Lemma byte_bound : forall n : nat,
   scalar_min U8 <= Z.of_nat (Nat.min n 255) <= scalar_max U8.
@@ -95,9 +95,12 @@ Lemma wire_bound : forall l : list nat,
 Proof.
   intros l. rewrite map_length.
   pose proof (firstn_le_length MAX_PKG l) as Hf.
-  pose proof usize_max_bound as Hb. unfold u32_max in Hb.
-  assert (HM : (MAX_PKG <= 4096)%nat) by (unfold MAX_PKG; lia).
-  lia.
+  apply Nat2Z.inj_le in Hf.
+  pose proof usize_max_bound as Hb.
+  eapply Z.le_trans; [ exact Hf |].
+  eapply Z.le_trans; [| exact Hb ].
+  unfold MAX_PKG, u32_max.
+  change (65536 <= 4294967295)%Z. lia.
 Qed.
 
 (** THE MARSHALLING. Wire bytes in, the device's `slice u8` out. Total. *)

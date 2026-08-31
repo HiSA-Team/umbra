@@ -54,12 +54,15 @@ higher version. An update package (built by `tools/attest_update.py`) carries th
 nonce from the last quote plus a `pkg_tag` that binds the nonce to the blob:
 
 ```text
-pkg_tag = HMAC-SHA256(K_attest, "umbra-update-v2" ‖ nonce ‖ author ‖ version ‖ blob_len ‖ header)
+K_update = HMAC-SHA256(MASTER_KEY, "umbra-update-key-v1")
+pkg_tag  = HMAC-SHA256(K_update, "umbra-update-v2" ‖ nonce ‖ author ‖ version ‖ blob_len ‖ header)
 ```
 
 `header` is the blob's entire 48-byte UMBR header (`blob[0,48)`), so every
 header field — including `trust_level` and `reloc_count` — is authenticated by
 the tag (v1 covered only `header.hmac`, i.e. `blob[16,48)`).
+`K_update` is deliberately distinct from `K_attest`: an attacker may request
+quote MACs, but that oracle never uses the package-authentication key.
 
 The Secure handler checks the armed nonce and `pkg_tag`, writes the blob to the
 **inactive** slot, then **re-verifies it by reading from flash** (full measurement

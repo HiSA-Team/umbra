@@ -35,6 +35,16 @@ pub const RB_N_AUTHORS: usize = 4;
 /// One entry: magic(4) author_id(4) hwm(4) — three consecutive TAMP_BKPxR.
 const RB_ENTRY_STRIDE: u32 = 12;
 
+/// Per-slot failed-boot counters for the two A/B enclave slots, in the two spare
+/// backup registers BKP30/BKP31 (BKP0..11 = anti-rollback floor, BKP12..29 = state
+/// anchor). A magic tag in the high 24 bits distinguishes a real counter from a
+/// POR-wiped / garbage register, so a cold boot always reads 0 failures and never
+/// spuriously excludes a good slot. Retained across a warm/software reset (the enclave
+/// fault path's SYSRESETREQ), wiped by POR — exactly like the floor. See
+/// `antirollback::BootFailCounter` for the liveness-fallback policy.
+const BOOT_FAIL_OFF: [u32; 2] = [30 * 4, 31 * 4];
+const BOOT_FAIL_TAG: u32 = 0xB007_FA00; // "BOOT FA(il)"; low byte = count
+
 // Bring-up registers (CMSIS stm32n657xx.h, HW-confirmed 2026-06-30).
 const RCC_APB4ENR1: u32 = 0x5602_8274;
 const RCC_APB4ENR1_RTCEN: u32 = 1 << 16;
@@ -160,6 +170,32 @@ impl<M: MmioAccess> TampStore<M> {
         // Table full (capped at RB_N_AUTHORS): no eviction — a hostile author
         // cannot drop another's floor. Exhaustion is a documented DoS bound.
     }
+
+    /// Consecutive failed-boot count for A/B slot `slot` (0 = A, 1 = B); 0 if the
+    /// register is cold/untagged. Only the low byte is a count.
+    pub fn boot_fail(&self, slot: usize) -> u32 {
+        let v = self.mmio.read(BOOT_FAIL_OFF[slot & 1]);
+        if v & 0xFFFF_FF00 == BOOT_FAIL_TAG {
+            v & 0xFF
+        } else {
+            0
+        }
+    }
+
+    /// Increment the failed-boot count for `slot` (saturating at 255). Written with
+    /// the tag so a subsequent `boot_fail` reads it back; the caller does this at
+    /// slot selection, BEFORE running the enclave, so a crash→reset leaves it set.
+    pub fn boot_fail_inc(&mut self, slot: usize) {
+        let c = self.boot_fail(slot);
+        let n = if c >= 0xFF { 0xFF } else { c + 1 };
+        self.mmio.write(BOOT_FAIL_OFF[slot & 1], BOOT_FAIL_TAG | n);
+    }
+
+    /// Reset the failed-boot count for `slot` to 0 (tagged). Caller does this when
+    /// the slot's enclave terminates cleanly, or when a fresh image is written to it.
+    pub fn boot_fail_clear(&mut self, slot: usize) {
+        self.mmio.write(BOOT_FAIL_OFF[slot & 1], BOOT_FAIL_TAG);
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +225,39 @@ mod tests {
         bk.rb_bump(2, 9);
         assert_eq!(bk.rb_floor(1), 3);
         assert_eq!(bk.rb_floor(2), 9);
+    }
+
+    #[test]
+    fn boot_fail_cold_zero_inc_clear_and_per_slot() {
+        let mem = MmioMem::new(TAMP_BKP_BASE);
+        let mut bk = TampStore::new_with_mmio(mem.handle());
+        assert_eq!(bk.boot_fail(0), 0); // cold register reads 0
+        assert_eq!(bk.boot_fail(1), 0);
+        bk.boot_fail_inc(0);
+        bk.boot_fail_inc(0);
+        bk.boot_fail_inc(0);
+        assert_eq!(bk.boot_fail(0), 3);
+        assert_eq!(bk.boot_fail(1), 0); // other slot independent
+        bk.boot_fail_clear(0);
+        assert_eq!(bk.boot_fail(0), 0);
+    }
+
+    #[test]
+    fn boot_fail_ignores_untagged_garbage() {
+        let mem = MmioMem::new(TAMP_BKP_BASE);
+        let mut bk = TampStore::new_with_mmio(mem.handle());
+        // A POR/garbage register whose top bits don't match the tag reads as 0,
+        // so a cold boot never spuriously excludes a slot.
+        bk.mmio.write(BOOT_FAIL_OFF[0], 0xDEAD_BE05);
+        assert_eq!(bk.boot_fail(0), 0);
+    }
+
+    #[test]
+    fn boot_fail_saturates_at_255() {
+        let mem = MmioMem::new(TAMP_BKP_BASE);
+        let mut bk = TampStore::new_with_mmio(mem.handle());
+        bk.mmio.write(BOOT_FAIL_OFF[1], BOOT_FAIL_TAG | 0xFF);
+        bk.boot_fail_inc(1);
+        assert_eq!(bk.boot_fail(1), 0xFF); // no wrap
     }
 }

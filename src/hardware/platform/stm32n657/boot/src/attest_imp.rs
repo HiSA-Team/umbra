@@ -13,6 +13,8 @@ use kernel::key_storage_server::version_search::MonotonicCounter;
 
 use kernel::key_storage_server::enclave_update::{parse_and_verify, select_active_slot, UpdateError};
 
+use kernel::common::enclave::EnclaveState;
+
 use crate::secure_kernel::Kernel;
 
 /// NS host RAM window (AXISRAM3_NS): pointers from NS must fall inside this.
@@ -339,6 +341,7 @@ const ERR_AUTH: u32 = 0xFFFF_FF21; // pkg_tag invalid
 const ERR_VERIFY: u32 = 0xFFFF_FF22; // written slot fails measurement
 const ERR_ROLLBACK: u32 = 0xFFFF_FF23; // written version <= active version
 const ERR_FLASH: u32 = 0xFFFF_FF24; // flash write failed
+const ERR_BUSY: u32 = 0xFFFF_FF25; // a loaded enclave has not finished running
 const ERR_ARG: u32 = 0xFFFF_FFF6; // bad pointer/length or malformed package
 
 /// Secure scratch for the received update package (.bss, zero-init). 64 KB bounds
@@ -373,7 +376,22 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
         }
         // Consume the arm up-front: any outcome disarms (single-use nonce).
         kernel.nonce_armed = false;
-        (kernel.last_nonce, kernel.attest_key)
+        // Quiescence interlock: refuse while any loaded enclave could still run. The
+        // probes below re-borrow the kernel and clobber `chain_state` (the bm a later
+        // quote reports), and under `interenclave_overlay` + SysTick an enclave could
+        // be mid-execution when NS calls in — updating then would be an untested
+        // re-entrancy/consistency hazard. Only Terminated/Faulted enclaves are inert.
+        for (i, slot) in kernel.ess.loaded_enclaves.iter().enumerate() {
+            if slot.is_some()
+                && !matches!(
+                    kernel.enclave_contexts[i].status,
+                    EnclaveState::Terminated | EnclaveState::Faulted
+                )
+            {
+                return ERR_BUSY;
+            }
+        }
+        (kernel.last_nonce, kernel.update_key)
     };
 
     // Copy the package from untrusted NS memory into the Secure scratch ONCE, then
@@ -482,6 +500,13 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
             ERR_VERIFY
         }
         (Some(w), Some(a)) if w <= a => ERR_ROLLBACK,
-        (Some(_), _) => 0, // success — next create(0) selects the new higher-version slot
+        (Some(_), _) => {
+            // Fresh authenticated image in target_slot: reset its failed-boot counter so
+            // the liveness fallback gives the new image a clean chance (the slot may have
+            // held a crash-looping image that got excluded — see antirollback).
+            #[cfg(feature = "enclave_version_bind")]
+            crate::antirollback::BootFailCounter::new().clear(target_slot);
+            0 // success — next create(0) selects the new higher-version slot
+        }
     }
 }

@@ -324,6 +324,42 @@ Axiom mk_array4_val :
     /\ array_index_usize (mk_array4 b0 b1 b2 b3) 2%usize = Ok b2
     /\ array_index_usize (mk_array4 b0 b1 b2 b3) 3%usize = Ok b3.
 
+(* The fifteen-element literal used for the package-tag domain separator reads
+   back its fifteen elements. As for Q20, `mk_array15` is total; this law only
+   specifies the otherwise opaque backend index operation on that value. *)
+Axiom mk_array15_val :
+  forall b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 : u8,
+    array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 0%usize = Ok b0
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 1%usize = Ok b1
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 2%usize = Ok b2
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 3%usize = Ok b3
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 4%usize = Ok b4
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 5%usize = Ok b5
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 6%usize = Ok b6
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 7%usize = Ok b7
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 8%usize = Ok b8
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 9%usize = Ok b9
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 10%usize = Ok b10
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 11%usize = Ok b11
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 12%usize = Ok b12
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 13%usize = Ok b13
+    /\ array_index_usize
+      (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 14%usize = Ok b14.
+
 (* ===================================================================== *)
 (* ct_eq loop totality — the fixed-bound compare loops always return Ok.  *)
 (* ===================================================================== *)

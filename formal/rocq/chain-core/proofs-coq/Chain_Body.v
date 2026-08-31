@@ -8,7 +8,7 @@
     `blob[16,48)`) — and nothing of the blob BODY.
 
     [chain_accept_pins_the_blob_body] closes the body half of it. If two blobs
-    with the same block count both pass the chained-measurement gate under one
+    with independently parsed block counts both pass the chained-measurement gate under one
     master key, and they agree on the 32 bytes at `blob[16,48)` — the chain root,
     a sub-window of what `Update_Crypto.accept_implies_authenticated_fields` (P2)
     pins into the tag preimage — then either they agree on EVERY byte of the
@@ -22,13 +22,13 @@
     smuggled in here as a hypothesis. The proof is over the VERBATIM
     Aeneas-extracted body of `umbra-chain-core`.
 
-    THE RESIDUAL, STATED EXACTLY. The theorem takes the two block counts as
-    equal. They are NOT forced to be equal by anything proved elsewhere:
-    `blob_block_count` reads `blob[0,4)` (magic) and `blob[10,14)` (`code_size`),
-    both of which lie in `blob[0,16)` — outside the tag's authenticated core AND
-    outside every chain preimage. `Chain_Value.blob_block_count_cong` says what
-    would force it (equal length plus those eight bytes), and `Chain_Residual.v`
-    exhibits the bytes that remain uncovered even so. *)
+    COMPOSITION. This local theorem is intentionally parameterised by one count.
+    At the package boundary `Umbra_UnionCore.accepted_equal_cores_pin_the_blob_body`
+    starts with two independently parsed counts and derives their equality via
+    `Chain_Value.successful_blob_block_counts_agree`: the v2 tag pins the full
+    `blob[0,48)` header, including magic and `code_size`, while both successful
+    count parses supply their own length guards. `Chain_Residual.v` states the
+    bytes that remain uncovered. *)
 
 Require Import Primitives.
 Import Primitives.

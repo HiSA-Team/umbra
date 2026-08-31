@@ -513,23 +513,21 @@ Qed.
 
 (** `blob_block_count` reads `blob[0..4)` (magic) and `blob[10..14)`
     (`code_size`) and nothing else — but it also branches on `slice_len`. So two
-    blobs that agree on those eight bytes AND have equal length take the same
-    path and return the same count. Pure congruence: no decoder law is needed,
+    blobs that agree on those eight bytes and take the same length-guard branch
+    return the same count. Pure congruence: no decoder law is needed,
     because the decoder is applied to literals built from bytes that are equal on
     the nose. *)
-Lemma blob_block_count_cong :
+Lemma blob_block_count_cong_after_len_guard :
   forall blob1 blob2 : slice u8,
-    to_Z (slice_len blob1) = to_Z (slice_len blob2) ->
+    (slice_len blob1 s< hDR_LEN) = (slice_len blob2 s< hDR_LEN) ->
     (forall i : usize, 0 <= to_Z i < 4 ->
        slice_index_usize blob1 i = slice_index_usize blob2 i) ->
     (forall i : usize, 10 <= to_Z i < 14 ->
        slice_index_usize blob1 i = slice_index_usize blob2 i) ->
     blob_block_count blob1 = blob_block_count blob2.
 Proof.
-  intros blob1 blob2 Hlen Hmagic Hcs. pose proof cu32max_big as Hbig.
+  intros blob1 blob2 Hlb Hmagic Hcs. pose proof cu32max_big as Hbig.
   unfold blob_block_count.
-  assert (Hlb : (slice_len blob1 s< hDR_LEN) = (slice_len blob2 s< hDR_LEN)).
-  { unfold scalar_ltb. rewrite Hlen. reflexivity. }
   rewrite Hlb. destruct (slice_len blob2 s< hDR_LEN); [ reflexivity |].
   rewrite (Hmagic 0%usize ltac:(rewrite ctz0; lia)).
   rewrite (Hmagic 1%usize ltac:(cbn; lia)).
@@ -561,6 +559,45 @@ Proof.
   rewrite c_csoff, ctz3 in E3.
   rewrite (Hcs k3 ltac:(lia)).
   destruct (slice_index_usize blob2 k3); reflexivity.
+Qed.
+
+Lemma blob_block_count_cong :
+  forall blob1 blob2 : slice u8,
+    to_Z (slice_len blob1) = to_Z (slice_len blob2) ->
+    (forall i : usize, 0 <= to_Z i < 4 ->
+       slice_index_usize blob1 i = slice_index_usize blob2 i) ->
+    (forall i : usize, 10 <= to_Z i < 14 ->
+       slice_index_usize blob1 i = slice_index_usize blob2 i) ->
+    blob_block_count blob1 = blob_block_count blob2.
+Proof.
+  intros blob1 blob2 Hlen Hmagic Hcs.
+  apply blob_block_count_cong_after_len_guard; [| exact Hmagic | exact Hcs ].
+  unfold scalar_ltb. rewrite Hlen. reflexivity.
+Qed.
+
+(** If both calls returned a count, their length guards necessarily took the
+    same non-short branch. Equal authenticated count windows therefore force
+    the returned counts to be equal without assuming equal blob lengths. *)
+Lemma successful_blob_block_counts_agree :
+  forall (blob1 blob2 : slice u8) (n1 n2 : u32),
+    blob_block_count blob1 = Ok (Some n1) ->
+    blob_block_count blob2 = Ok (Some n2) ->
+    (forall i : usize, 0 <= to_Z i < 4 ->
+       slice_index_usize blob1 i = slice_index_usize blob2 i) ->
+    (forall i : usize, 10 <= to_Z i < 14 ->
+       slice_index_usize blob1 i = slice_index_usize blob2 i) ->
+    n1 = n2.
+Proof.
+  intros blob1 blob2 n1 n2 H1 H2 Hmagic Hcs.
+  assert (G1 : (slice_len blob1 s< hDR_LEN) = false).
+  { unfold blob_block_count in H1.
+    destruct (slice_len blob1 s< hDR_LEN); [ discriminate | reflexivity ]. }
+  assert (G2 : (slice_len blob2 s< hDR_LEN) = false).
+  { unfold blob_block_count in H2.
+    destruct (slice_len blob2 s< hDR_LEN); [ discriminate | reflexivity ]. }
+  pose proof (blob_block_count_cong_after_len_guard blob1 blob2
+                ltac:(rewrite G1, G2; reflexivity) Hmagic Hcs) as Hsame.
+  rewrite H1, H2 in Hsame. injection Hsame as Hn. exact Hn.
 Qed.
 
 (* ===================================================================== *)

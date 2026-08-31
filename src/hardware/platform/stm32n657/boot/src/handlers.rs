@@ -470,6 +470,15 @@ unsafe fn usage_fault_terminate(psp: u32, state: kernel::common::enclave::Enclav
         None => return 0xFF,
     };
     kernel.disable_systick();
+    // Liveness fallback: a CLEAN end-of-task confirms the selected A/B slot booted
+    // healthy, so clear its failed-boot counter (a future genuine crash starts from
+    // zero). Only on Terminated — a Faulted image stays counted toward exclusion.
+    #[cfg(feature = "enclave_version_bind")]
+    if state == kernel::common::enclave::EnclaveState::Terminated {
+        if let Some(s) = kernel.active_boot_slot {
+            crate::antirollback::BootFailCounter::new().clear(s);
+        }
+    }
     let enclave_id = kernel.current_enclave_id.unwrap_or(0);
 
     // NB: the terminated enclave's EFBC window + slot are NOT freed here — the NS
