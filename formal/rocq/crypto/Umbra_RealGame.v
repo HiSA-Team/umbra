@@ -278,6 +278,7 @@ Import Order.POrderTheory.
 From UmbraCrypto Require Import Umbra_EUFCMA.
 From UmbraCrypto Require Import Umbra_Canonical.
 From UmbraCrypto Require Import Umbra_ByteSpace.
+From UmbraCrypto Require Import Umbra_ArrayVectors.
 From UmbraCrypto Require Import Umbra_Wire.
 From UmbraCrypto Require Import Umbra_WireConverse.
 
@@ -914,14 +915,14 @@ Proof.
             HS inst hs en dkey macf Hs Hf widx_lt_MSGB LA A vA Hd).
 Qed.
 
-(** Concrete-device corollary. Unlike the abstract inequality, this statement
-    carries `ArrayVectors` in its closed type and uses it to establish that the
-    game MAC is the encoded output of `macf` at every game message. The second
-    conjunct is the lossless EUF-CMA bound. *)
+(** Concrete-device corollary. The first conjunct establishes that the game
+    MAC is the encoded output of `macf` at every game message; the
+    `ArrayVectors` premise it used to carry is now discharged by
+    `Umbra_ArrayVectors.ArrayVectors_holds` (a theorem, since the array reader
+    is defined). The second conjunct is the lossless EUF-CMA bound. *)
 Theorem device_forgery_le_eufcma_for_the_concrete_engine :
   forall (n : nat) (HS : Type) (inst : hmac_inst HS) (hs : HS) (en : list nat)
          (dkey : Key n -> key_bytes) (macf : macf_t) (mb : byteseam_t),
-    ArrayVectors ->
     SeamC1 inst hs macf ->
     ByteSeam macf mb ->
     (forall (k : Key n) (m : nat),
@@ -938,8 +939,9 @@ Theorem device_forgery_le_eufcma_for_the_concrete_engine :
            (@EUF_CMA n MSGB MSGB_positive (@MACg n (MACb_canonical mb dkey)))
            (A ∘ @RED_dev MSGB MSGB_positive en).
 Proof.
-  intros n HS inst hs en dkey macf mb HAV Hs Hbs. split.
-  - exact (canonical_game_mac_is_engine_evaluation n macf mb dkey HAV Hbs).
+  intros n HS inst hs en dkey macf mb Hs Hbs. split.
+  - exact (canonical_game_mac_is_engine_evaluation n macf mb dkey
+             ArrayVectors_holds Hbs).
   - intros LA A vA Hd.
     exact (device_forgery_le_eufcma_at_the_real_seam
              n HS inst hs en dkey macf mb Hs Hbs LA A vA Hd).
@@ -958,18 +960,15 @@ Qed.
     the set of genuine 91-byte vectors (`game_messages_decode_to_bytes`).
 
     IS NOT. The premise is still `ByteSeam`, which pins `mb` only on the image
-    of `bytes91`. Proving that the canonical decoding of every message of the
-    space IS in that image needs `Umbra_ByteSpace.ArrayVectors` — every
-    91-element list of bytes is some `array u8 91`'s read-sequence — which is
-    true of Rust and unprovable here, because `Primitives.array_index_usize` is
-    a bare axiom with no constructor law. So the residual is now a single named
-    statement about the EXTRACTION rather than an unfalsifiable condition on
-    the seam. It is absent from the abstract bound above and explicit in
-    `device_forgery_le_eufcma_for_the_concrete_engine`, which also returns the
-    corresponding array and its exact byte encoding. A reader who declines to
-    grant it is back to a bound over a class of seams — but now a class on which
-    no counterexample is constructible, and for which the previous revision's
-    counterexample is refuted. *)
+    of `bytes91`. That the canonical decoding of every message of the space IS
+    in that image is `Umbra_ByteSpace.ArrayVectors` — every 91-element list of
+    bytes is some `array u8 91`'s read-sequence. It used to be an unprovable
+    premise (the backend's `array_index_usize` was a bare axiom); with the
+    reader DEFINED it is the theorem `Umbra_ArrayVectors.ArrayVectors_holds`,
+    and `device_forgery_le_eufcma_for_the_concrete_engine` carries no such
+    premise: it returns, at every game message, the array and its exact byte
+    encoding outright. What remains outside every theorem here is the reading
+    of `mb` as HMAC-SHA256 under a uniform key. *)
 
 End CanonicalMAC.
 

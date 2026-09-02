@@ -11,6 +11,13 @@ This directory is that component, extracted from `crates/umbra-chain-core` by
 Charon/Aeneas and proved over the **verbatim extracted body** — not over a
 hand-written re-model of the algorithm.
 
+
+> **Revision note (2026-09-02).** Q21 (`array_u8_ext`) is now a lemma in
+> `../update-core/proofs-coq/Update_Safety.v` (arrays and scalars carry
+> decidable certificates; UIP_dec, no proof irrelevance), `Chain_Model.v` is
+> deleted, and every theorem of this directory is closed under the global
+> context. The quarantine described below is a block of lemmas.
+
 ## The target theorem
 
 ```coq
@@ -118,7 +125,7 @@ SSProve game — and where the honest accounting of that layer's residue lives.
 | kind | what |
 |---|---|
 | 12 of `Update_Safety`'s 20 quarantine axioms | the opaque array/slice/copy ops, **shared** with update-core, discharged by `Update_Model.v` |
-| `Chain_Value.array_u8_ext` (Q21) | a byte array is determined by its bytes — discharged by `Chain_Model.v` |
+| `Update_Safety.array_u8_ext` (Q21) | a byte array is determined by its bytes — a lemma since 2026-09-02 |
 | backend bare symbols | `array_index_usize`, `slice_len`, … — the same set update-core's theorems carry |
 
 No classical axiom, and no `mk_array`.
@@ -312,7 +319,6 @@ constant block at compile time and fails if either changes.
 | `Chain_Compose.v` | the composition with P2 |
 | `Chain_Residual.v` | the residue, proved — including the verdict-level invariance |
 | `Chain_Reachable.v` | gate completeness — the accept branch is reachable |
-| `Chain_Model.v` | Q21's consistency witness |
 
 ## Build
 

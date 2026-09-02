@@ -6,9 +6,10 @@
 
     The single length guard `len(pkg) >= 112` discharges every fixed index and
     range; the guard `blob_len = tag_off - 32 >= MIN_BLOB(48)` discharges the one
-    variable-offset access `blob[16..48]`. The opaque array/slice/copy ops (which
-    the Coq backend ships as bare Axioms with no theory) are pinned by the same
-    kind of quarantine as Ess_Rep — enumerated in one block below. *)
+    variable-offset access `blob[16..48]`. The array/slice/copy/codec ops the
+    Coq backend ships as bare Axioms are DEFINED in our Primitives.v; the laws
+    about them the proofs consume are LEMMAS, in one block below, and every
+    theorem here is closed under the global context. *)
 
 Require Import Primitives.
 Import Primitives.
@@ -39,13 +40,11 @@ Lemma u32_min_eq : scalar_min U32 = 0.            Proof. reflexivity. Qed.
 Lemma u32_max_eq : scalar_max U32 = u32_max.      Proof. reflexivity. Qed.
 
 Lemma to_Z_usize_bounds : forall x : usize, 0 <= to_Z x <= usize_max.
-Proof. intro x. destruct x as [z Hb]. unfold to_Z; simpl.
-  rewrite usize_min_eq, usize_max_eq in Hb. exact Hb. Qed.
+Proof. intro x. exact (to_Z_bounds x). Qed.
 Lemma usize_nonneg : forall x : usize, 0 <= to_Z x.
 Proof. intro x. apply to_Z_usize_bounds. Qed.
 Lemma to_Z_u32_bounds : forall x : u32, 0 <= to_Z x <= u32_max.
-Proof. intro x. destruct x as [z Hb]. unfold to_Z; simpl.
-  rewrite u32_min_eq, u32_max_eq in Hb. exact Hb. Qed.
+Proof. intro x. exact (to_Z_bounds x). Qed.
 
 Lemma mk_usize_ok : forall z, 0 <= z <= u32_max ->
   exists s : usize, mk_scalar Usize z = Ok s /\ to_Z s = z.
@@ -128,116 +127,442 @@ Lemma tz_hdr   : to_Z hDR_LEN     = 48. Proof. reflexivity. Qed.
 Lemma u32max_big : 257 <= u32_max. Proof. unfold u32_max. lia. Qed.
 
 (* ===================================================================== *)
-(* QUARANTINE — specs for the opaque array/slice/copy operations that the *)
-(* Coq backend ships as bare `Axiom`s with no theory (cf. Ess_Rep §6).    *)
+(* THE (FORMER) QUARANTINE — now LEMMAS.                                  *)
+(*                                                                         *)
+(* Earlier revisions POSTULATED the twenty-one laws below, because the     *)
+(* Aeneas Coq backend shipped the array/slice/copy/codec operations as     *)
+(* bare `Axiom`s with no theory, and exhibited a list model of them in a    *)
+(* companion file to show the postulates consistent. Our Primitives.v now   *)
+(* DEFINES every one of those operations (the list model IS the            *)
+(* definition), so each law is a theorem about the concrete operation and   *)
+(* nothing downstream inherits an assumption: `Print Assumptions` on every  *)
+(* result of this development is closed under the global context.          *)
+(*                                                                         *)
+(* The statements are kept VERBATIM (names, hypotheses, conclusions), so    *)
+(* every proof that consumed the axioms consumes the lemmas unchanged.      *)
 (* ===================================================================== *)
 
-(* In-bounds reads succeed. *)
-Axiom array_index_usize_ok : forall {T} {n} (a : array T n) (i : usize),
+(* --- list helpers ------------------------------------------------------ *)
+
+Lemma nth_error_in_range : forall {A} (l : list A) (k : Z),
+  0 <= k < zlen l -> exists v, nth_error l (Z.to_nat k) = Some v.
+Proof.
+  intros A l k Hk. destruct (nth_error l (Z.to_nat k)) as [v|] eqn:E.
+  - exists v; reflexivity.
+  - exfalso. apply nth_error_None in E. unfold zlen in Hk. lia.
+Qed.
+
+Lemma sub_list_length : forall {T} (l : list T) (a b : usize),
+  0 <= to_Z a -> to_Z a <= to_Z b -> to_Z b <= zlen l ->
+  zlen (sub_list l a b) = to_Z b - to_Z a.
+Proof.
+  intros T l a b H1 H2 H3. unfold zlen, sub_list in *.
+  rewrite firstn_length, skipn_length. lia.
+Qed.
+
+Lemma slice_sub_len : forall {T} (s : slice T) (a b : usize),
+  0 <= to_Z a -> to_Z a <= to_Z b -> to_Z b <= zlen (proj1_sig s) ->
+  to_Z (slice_len (slice_sub s a b)) = to_Z b - to_Z a.
+Proof.
+  intros T s a b H1 H2 H3.
+  rewrite to_Z_slice_len. unfold slice_sub; cbn [proj1_sig].
+  apply sub_list_length; assumption.
+Qed.
+
+Lemma nth_error_skipn_model : forall {A} (m : nat) (l : list A) (k : nat),
+  nth_error (skipn m l) k = nth_error l (m + k).
+Proof.
+  induction m as [|m IH]; intros l k.
+  - reflexivity.
+  - destruct l as [|x l']; simpl; [ destruct k; reflexivity | apply IH ].
+Qed.
+
+Lemma nth_error_firstn_model : forall {A} (n : nat) (l : list A) (k : nat),
+  (k < n)%nat -> nth_error (firstn n l) k = nth_error l k.
+Proof.
+  induction n as [|n IH]; intros l k Hk; [ lia |].
+  destruct l as [|x l']; simpl; [ destruct k; reflexivity |].
+  destruct k; simpl; [ reflexivity | apply IH; lia ].
+Qed.
+
+Lemma nth_error_list_eq : forall {A} (l1 l2 : list A),
+  (forall k, nth_error l1 k = nth_error l2 k) -> l1 = l2.
+Proof.
+  induction l1 as [| x t1 IH]; intros l2 H.
+  - destruct l2 as [| y t2]; [ reflexivity |].
+    specialize (H 0%nat). cbn in H. discriminate.
+  - destruct l2 as [| y t2].
+    + specialize (H 0%nat). cbn in H. discriminate.
+    + assert (Hx : x = y) by (specialize (H 0%nat); cbn in H; injection H; auto).
+      subst y. f_equal. apply IH. intro k. exact (H (S k)).
+Qed.
+
+(* --- Q1/Q2: in-bounds reads succeed ------------------------------------ *)
+
+Lemma array_index_usize_ok : forall {T} {n} (a : array T n) (i : usize),
   0 <= to_Z i < to_Z n -> exists v, array_index_usize a i = Ok v.
-Axiom slice_index_usize_ok : forall {T} (s : slice T) (i : usize),
+Proof.
+  intros T n a i Hi. unfold array_index_usize.
+  destruct (nth_error_in_range (proj1_sig a) (to_Z i)) as [v Hv].
+  { unfold zlen. rewrite (proj2_sig a). exact Hi. }
+  rewrite Hv. exists v; reflexivity.
+Qed.
+
+Lemma slice_index_usize_ok : forall {T} (s : slice T) (i : usize),
   0 <= to_Z i < to_Z (slice_len s) -> exists v, slice_index_usize s i = Ok v.
+Proof.
+  intros T s i Hi. unfold slice_index_usize.
+  destruct (nth_error_in_range (proj1_sig s) (to_Z i)) as [v Hv].
+  { rewrite <- to_Z_slice_len. exact Hi. }
+  rewrite Hv. exists v; reflexivity.
+Qed.
 
-(* array_to_slice preserves length. *)
-Axiom slice_len_array_to_slice : forall {T} {n} (a : array T n),
+(* --- Q3: array_to_slice preserves length -------------------------------- *)
+
+Lemma slice_len_array_to_slice : forall {T} {n} (a : array T n),
   to_Z (slice_len (array_to_slice a)) = to_Z n.
+Proof.
+  intros T n a. rewrite to_Z_slice_len.
+  unfold array_to_slice; cbn [proj1_sig]. exact (proj2_sig a).
+Qed.
 
-(* Sub-slicing a slice by a valid Range succeeds; the result has length end-start. *)
-Axiom slice_index_range_ok : forall {T} (s : slice T) (a b : usize),
+Lemma zlen_array_to_slice : forall {T} {N} (arr : array T N),
+  zlen (proj1_sig (array_to_slice arr)) = to_Z N.
+Proof.
+  intros T N arr. pose proof (slice_len_array_to_slice arr) as H.
+  rewrite to_Z_slice_len in H. exact H.
+Qed.
+
+(* --- Q4: a valid Range sub-slices a slice ------------------------------- *)
+
+Lemma slice_index_range_ok : forall {T} (s : slice T) (a b : usize),
   0 <= to_Z a -> to_Z a <= to_Z b -> to_Z b <= to_Z (slice_len s) ->
   exists sub,
     core_slice_index_Slice_index (core_slice_index_SliceIndexRangeUsizeSliceInst T) s
       {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |} = Ok sub
     /\ to_Z (slice_len sub) = to_Z b - to_Z a.
+Proof.
+  intros T s a b H1 H2 H3.
+  exists (slice_sub s a b). split.
+  - unfold core_slice_index_Slice_index;
+      cbn [core_slice_index_SliceIndex_get core_slice_index_SliceIndexRangeUsizeSliceInst].
+    unfold core_slice_index_SliceIndexRangeUsizeSlice_get, slice_range_get;
+      cbn [core_ops_range_Range_start core_ops_range_Range_end_].
+    destruct (Z_le_dec (to_Z a) (to_Z b)) as [|Hc]; [| lia].
+    destruct (Z_le_dec (to_Z b) (to_Z (slice_len s))) as [|Hc]; [| lia].
+    reflexivity.
+  - apply slice_sub_len; assumption.
+Qed.
 
-(* Mutable-sub-slicing an array by a Range within bounds succeeds. *)
-Axiom array_index_mut_range_ok : forall {T} {N} (arr : array T N) (a b : usize),
+(* --- Q5 and the write-back laws: what a mutable range borrow of an array
+       COMPUTES TO ---------------------------------------------------------- *)
+
+Lemma index_mut_eq : forall {T} {N} (arr : array T N) (a b : usize),
+  to_Z a <= to_Z b -> to_Z b <= to_Z N ->
+  core_array_Array_index_mut
+    (core_ops_index_IndexMutSliceInst (core_slice_index_SliceIndexRangeUsizeSliceInst T)) arr
+    {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |}
+  = Ok (slice_sub (array_to_slice arr) a b,
+        fun o => array_from_slice arr (slice_splice (array_to_slice arr) a b o)).
+Proof.
+  intros T N arr a b H1 H2.
+  assert (Hget : slice_range_index
+                   {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |}
+                   (array_to_slice arr)
+                 = Ok (slice_sub (array_to_slice arr) a b)).
+  { unfold slice_range_index, slice_range_get. cbv zeta.
+    cbn [core_ops_range_Range_start core_ops_range_Range_end_].
+    destruct (Z_le_dec (to_Z a) (to_Z b)) as [K1|K1]; [| lia].
+    destruct (Z_le_dec (to_Z b) (to_Z (slice_len (array_to_slice arr)))) as [K2|K2].
+    - reflexivity.
+    - exfalso. rewrite (slice_len_array_to_slice arr) in K2. lia. }
+  unfold core_array_Array_index_mut.
+  cbn [core_ops_index_IndexMut_index_mut core_ops_index_IndexMutSliceInst].
+  unfold core_slice_index_Slice_index_mut.
+  cbn [core_slice_index_SliceIndex_index_mut core_slice_index_SliceIndexRangeUsizeSliceInst].
+  unfold core_slice_index_SliceIndexRangeUsizeSlice_index_mut, slice_range_index_mut.
+  rewrite Hget. reflexivity.
+Qed.
+
+Lemma index_mut_bounds : forall {T} {N} (arr : array T N)
+    (a b : usize) (sub : slice T) (back : slice T -> array T N),
+  core_array_Array_index_mut
+    (core_ops_index_IndexMutSliceInst (core_slice_index_SliceIndexRangeUsizeSliceInst T)) arr
+    {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |} = Ok (sub, back) ->
+  to_Z a <= to_Z b /\ to_Z b <= to_Z N.
+Proof.
+  intros T N arr a b sub back H.
+  unfold core_array_Array_index_mut in H.
+  cbn [core_ops_index_IndexMut_index_mut core_ops_index_IndexMutSliceInst] in H.
+  unfold core_slice_index_Slice_index_mut in H.
+  cbn [core_slice_index_SliceIndex_index_mut core_slice_index_SliceIndexRangeUsizeSliceInst] in H.
+  unfold core_slice_index_SliceIndexRangeUsizeSlice_index_mut, slice_range_index_mut,
+    slice_range_index, slice_range_get in H. cbv zeta in H.
+  cbn [core_ops_range_Range_start core_ops_range_Range_end_] in H.
+  destruct (Z_le_dec (to_Z a) (to_Z b)) as [K1|K1];
+    [ destruct (Z_le_dec (to_Z b) (to_Z (slice_len (array_to_slice arr)))) as [K2|K2] |];
+    cbv beta iota in H; try discriminate H.
+  rewrite (slice_len_array_to_slice arr) in K2. split; assumption.
+Qed.
+
+Lemma array_index_mut_range_ok : forall {T} {N} (arr : array T N) (a b : usize),
   0 <= to_Z a -> to_Z a <= to_Z b -> to_Z b <= to_Z N ->
   exists sub back,
     core_array_Array_index_mut
       (core_ops_index_IndexMutSliceInst (core_slice_index_SliceIndexRangeUsizeSliceInst T)) arr
       {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |} = Ok (sub, back)
     /\ to_Z (slice_len sub) = to_Z b - to_Z a.
+Proof.
+  intros T N arr a b H1 H2 H3.
+  do 2 eexists. split.
+  - apply index_mut_eq; assumption.
+  - apply slice_sub_len; [ exact H1 | exact H2 |].
+    rewrite zlen_array_to_slice. exact H3.
+Qed.
 
-(* copy_from_slice succeeds when source and destination have equal length. *)
-Axiom copy_from_slice_ok : forall {T} (m : core_marker_Copy T) (dst src : slice T),
+(* --- Q6: copy_from_slice succeeds on equal lengths ---------------------- *)
+
+Lemma copy_from_slice_ok : forall {T} (m : core_marker_Copy T) (dst src : slice T),
   to_Z (slice_len dst) = to_Z (slice_len src) ->
   exists dst', core_slice_Slice_copy_from_slice m dst src = Ok dst'.
+Proof.
+  intros T m dst src Hlen. unfold core_slice_Slice_copy_from_slice.
+  rewrite (proj2 (Z.eqb_eq _ _) Hlen). exists src; reflexivity.
+Qed.
 
-(* --------------------------------------------------------------------- *)
-(* VALUE LAWS (quarantine, part 2).                                        *)
-(*                                                                         *)
-(* The six laws above say the opaque ops SUCCEED. That is all P3           *)
-(* (`parse_and_verify_total`) needs, and `Print Assumptions                *)
-(* parse_and_verify_total` uses exactly those six and none of the fourteen *)
-(* below. Pushing an ACCEPTED package's gates down to the package BYTES    *)
-(* (`Update_Auth.accept_implies_nonce_equal` / `accept_implies_tag_bytes`) *)
-(* additionally needs to know WHAT the ops return. Same discipline: one    *)
-(* block, no assumption smeared into a theorem, and `Update_Model.v`       *)
-(* exhibits ONE concrete list model that satisfies all twenty.             *)
-(* --------------------------------------------------------------------- *)
+(* --- Q7/Q8: indexing depends only on the numeric value of the index ----- *)
 
-(* Indexing depends only on the numeric value of the index. *)
-Axiom array_index_usize_ext : forall {T} {n} (a : array T n) (i j : usize),
+Lemma array_index_usize_ext : forall {T} {n} (a : array T n) (i j : usize),
   to_Z i = to_Z j -> array_index_usize a i = array_index_usize a j.
-Axiom slice_index_usize_ext : forall {T} (s : slice T) (i j : usize),
-  to_Z i = to_Z j -> slice_index_usize s i = slice_index_usize s j.
+Proof. intros T n a i j Hij. unfold array_index_usize. rewrite Hij. reflexivity. Qed.
 
-(* A range sub-slice that SUCCEEDED has the length the range asked for … *)
-Axiom slice_index_range_len : forall {T} (s sub : slice T) (a b : usize),
+Lemma slice_index_usize_ext : forall {T} (s : slice T) (i j : usize),
+  to_Z i = to_Z j -> slice_index_usize s i = slice_index_usize s j.
+Proof. intros T s i j Hij. unfold slice_index_usize. rewrite Hij. reflexivity. Qed.
+
+(* --- Q9/Q10: a range sub-slice that SUCCEEDED ---------------------------- *)
+
+Lemma range_index_inv : forall {T} (s sub : slice T) (a b : usize),
+  core_slice_index_Slice_index (core_slice_index_SliceIndexRangeUsizeSliceInst T) s
+    {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |} = Ok sub ->
+  to_Z a <= to_Z b /\ to_Z b <= zlen (proj1_sig s) /\ sub = slice_sub s a b.
+Proof.
+  intros T s sub a b H.
+  unfold core_slice_index_Slice_index in H;
+    cbn [core_slice_index_SliceIndex_get core_slice_index_SliceIndexRangeUsizeSliceInst] in H.
+  unfold core_slice_index_SliceIndexRangeUsizeSlice_get, slice_range_get in H;
+    cbn [core_ops_range_Range_start core_ops_range_Range_end_] in H.
+  destruct (Z_le_dec (to_Z a) (to_Z b)) as [H1|H1];
+    [ destruct (Z_le_dec (to_Z b) (to_Z (slice_len s))) as [H2|H2] |];
+    cbn [bind] in H; try discriminate.
+  rewrite to_Z_slice_len in H2.
+  injection H as H. split; [ exact H1 | split; [ exact H2 | symmetry; exact H ] ].
+Qed.
+
+Lemma slice_index_range_len : forall {T} (s sub : slice T) (a b : usize),
   core_slice_index_Slice_index (core_slice_index_SliceIndexRangeUsizeSliceInst T) s
     {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |} = Ok sub ->
   to_Z (slice_len sub) = to_Z b - to_Z a.
-(* … and reading it at i reads the parent at start + i. *)
-Axiom slice_index_range_val : forall {T} (s sub : slice T) (a b i j : usize),
+Proof.
+  intros T s sub a b H. apply range_index_inv in H as [H1 [H2 H3]]. subst sub.
+  apply slice_sub_len; [ apply to_Z_usize_nonneg | exact H1 | exact H2 ].
+Qed.
+
+Lemma slice_index_range_val : forall {T} (s sub : slice T) (a b i j : usize),
   core_slice_index_Slice_index (core_slice_index_SliceIndexRangeUsizeSliceInst T) s
     {| core_ops_range_Range_start := a; core_ops_range_Range_end_ := b |} = Ok sub ->
   0 <= to_Z i -> to_Z i < to_Z b - to_Z a -> to_Z j = to_Z a + to_Z i ->
   slice_index_usize sub i = slice_index_usize s j.
+Proof.
+  intros T s sub a b i j H Hi Hib Hj.
+  apply range_index_inv in H as [H1 [H2 H3]]. subst sub.
+  pose proof (to_Z_usize_nonneg a) as Ha.
+  unfold slice_index_usize, slice_sub; cbn [proj1_sig]. unfold sub_list.
+  rewrite nth_error_firstn_model by lia.
+  rewrite nth_error_skipn_model.
+  f_equal. rewrite Hj, Z2Nat.inj_add by lia. reflexivity.
+Qed.
 
-(* A copy that SUCCEEDED leaves the destination holding the source (Rust's
-   `dst.copy_from_slice(src)`; the Aeneas write-back value is the new dst). *)
-Axiom copy_from_slice_val : forall {T} (m : core_marker_Copy T) (dst src dst' : slice T),
+(* --- Q11: a copy that SUCCEEDED leaves the destination holding the source *)
+
+Lemma copy_from_slice_val : forall {T} (m : core_marker_Copy T) (dst src dst' : slice T),
   core_slice_Slice_copy_from_slice m dst src = Ok dst' -> dst' = src.
+Proof.
+  intros T m dst src dst' H. unfold core_slice_Slice_copy_from_slice in H.
+  destruct (Z.eqb (to_Z (slice_len dst)) (to_Z (slice_len src)));
+    [ injection H as H; symmetry; exact H | discriminate ].
+Qed.
 
-(* Writing a length-matching slice back into an array yields an array that
-   reads like that slice. *)
-Axiom array_from_slice_val : forall {T} {n} (a : array T n) (s : slice T) (i : usize),
+(* --- Q12: a length-matching slice written back into an array reads like it *)
+
+Lemma array_from_slice_val : forall {T} {n} (a : array T n) (s : slice T) (i : usize),
   to_Z (slice_len s) = to_Z n ->
   array_index_usize (array_from_slice a s) i = slice_index_usize s i.
+Proof.
+  intros T n a s i Hlen. rewrite to_Z_slice_len in Hlen.
+  unfold array_from_slice.
+  destruct (Z.eq_dec (Z.of_nat (length (proj1_sig s))) (to_Z n)) as [Hd|Hd];
+    [ reflexivity | exfalso; apply Hd; exact Hlen ].
+Qed.
 
-(* The u8 bitwise ops are the Z bitwise ops on the represented values
-   (mirrors Ess_Rep's u32_or_to_Z / u32_and_to_Z). *)
-Axiom u8_xor_to_Z : forall x y : u8, to_Z (u8_xor x y) = Z.lxor (to_Z x) (to_Z y).
-Axiom u8_or_to_Z : forall x y : u8, to_Z (u8_or x y) = Z.lor (to_Z x) (to_Z y).
+(* --- Q13/Q14: the u8 bitwise ops are the Z bitwise ops on the values ------ *)
 
-(* --------------------------------------------------------------------- *)
-(* WRITE-BACK LAWS (quarantine, part 3).                                   *)
-(*                                                                         *)
-(* Parts 1 and 2 are about the FORWARD direction: which reads succeed, and *)
-(* what a read returns. They say nothing about what a mutable borrow of a  *)
-(* window WRITES. Aeneas compiles `&mut arr[a..b]` into a pair             *)
-(* `(sub, back)`: `sub` is the window as read, and `back sub'` is the whole *)
-(* array after the window has been replaced by `sub'`. Every byte that      *)
-(* `compute_pkg_tag` puts into its 91-byte preimage goes through `back`, so *)
-(* without a law for it the assembled preimage is formally unrelated to the *)
-(* five fields written into it — which is exactly the hole that            *)
-(* `Update_Crypto.v`'s deleted C2 hypothesis used to paper over. With Q15/  *)
-(* Q16 the assembly becomes a THEOREM (`Update_Crypto.assembly_injective`). *)
-(*                                                                         *)
-(* Q17 and Q18 are the two further read laws that theorem needs: that       *)
-(* `array_to_slice` preserves reads (part 1's Q3 only preserves the length) *)
-(* and that `u32::to_le_bytes` really is the base-256 digit decomposition.  *)
-(* Q18 is a SPEC, not an injectivity assumption: injectivity of the codec   *)
-(* is derived from it in Update_Crypto (`to_le_bytes_inj`).                 *)
-(*                                                                         *)
-(* All four are discharged by the concrete model in `Update_Model.v`, which *)
-(* now interprets the write-back as the real splice                         *)
-(* `firstn a ++ sub' ++ skipn b` rather than as the identity.               *)
-(* --------------------------------------------------------------------- *)
+Lemma mk_scalar_ok : forall ty z, scalar_min ty <= z <= scalar_max ty ->
+  exists s : scalar ty, mk_scalar ty z = Ok s /\ to_Z s = z.
+Proof.
+  intros ty z Hz. unfold mk_scalar.
+  destruct (sumbool_of_bool (scalar_in_bounds ty z)) as [H|H].
+  - eexists. split; reflexivity.
+  - rewrite (scalar_in_bounds_complete ty z Hz) in H. discriminate.
+Qed.
 
-(* Inside the window: the array reads like the slice that was written back. *)
-Axiom array_index_mut_range_val_in :
+Lemma to_Z_u8_range : forall x : u8, 0 <= to_Z x < 256.
+Proof.
+  intro x. pose proof (to_Z_bounds x) as H.
+  unfold scalar_min, scalar_max, u8_min, u8_max in H. lia.
+Qed.
+
+Lemma log2_lt8 : forall a, 0 <= a < 256 -> Z.log2 a < 8.
+Proof.
+  intros a Ha. destruct (Z.eq_dec a 0) as [->|Hne]; [ cbn; lia |].
+  apply (proj1 (Z.log2_lt_pow2 a 8 ltac:(lia))). cbn. lia.
+Qed.
+
+Lemma u8_bnd_xor : forall x y : u8,
+  scalar_min U8 <= Z.lxor (to_Z x) (to_Z y) <= scalar_max U8.
+Proof.
+  intros x y. pose proof (to_Z_u8_range x) as Hx. pose proof (to_Z_u8_range y) as Hy.
+  change (scalar_min U8) with 0. change (scalar_max U8) with 255.
+  assert (Hnn : 0 <= Z.lxor (to_Z x) (to_Z y)) by (apply Z.lxor_nonneg; split; lia).
+  assert (Hub : Z.lxor (to_Z x) (to_Z y) < 256).
+  { destruct (Z.eq_dec (Z.lxor (to_Z x) (to_Z y)) 0) as [E|E]; [ lia |].
+    replace 256 with (2^8) by reflexivity.
+    apply (proj2 (Z.log2_lt_pow2 (Z.lxor (to_Z x) (to_Z y)) 8 ltac:(lia))).
+    eapply Z.le_lt_trans; [ apply Z.log2_lxor; lia |].
+    apply Z.max_lub_lt; apply log2_lt8; lia. }
+  lia.
+Qed.
+
+Lemma u8_bnd_or : forall x y : u8,
+  scalar_min U8 <= Z.lor (to_Z x) (to_Z y) <= scalar_max U8.
+Proof.
+  intros x y. pose proof (to_Z_u8_range x) as Hx. pose proof (to_Z_u8_range y) as Hy.
+  change (scalar_min U8) with 0. change (scalar_max U8) with 255.
+  assert (Hnn : 0 <= Z.lor (to_Z x) (to_Z y)) by (apply Z.lor_nonneg; lia).
+  assert (Hub : Z.lor (to_Z x) (to_Z y) < 256).
+  { destruct (Z.eq_dec (Z.lor (to_Z x) (to_Z y)) 0) as [E|E]; [ lia |].
+    replace 256 with (2^8) by reflexivity.
+    apply (proj2 (Z.log2_lt_pow2 (Z.lor (to_Z x) (to_Z y)) 8 ltac:(lia))).
+    rewrite Z.log2_lor by lia.
+    apply Z.max_lub_lt; apply log2_lt8; lia. }
+  lia.
+Qed.
+
+Lemma u8_xor_to_Z : forall x y : u8, to_Z (u8_xor x y) = Z.lxor (to_Z x) (to_Z y).
+Proof.
+  intros x y. unfold u8_xor, scalar_xor, scalar_or_default.
+  destruct (mk_scalar_ok U8 (Z.lxor (to_Z x) (to_Z y)) (u8_bnd_xor x y)) as [s [Hs Hv]].
+  rewrite Hs. exact Hv.
+Qed.
+
+Lemma u8_or_to_Z : forall x y : u8, to_Z (u8_or x y) = Z.lor (to_Z x) (to_Z y).
+Proof.
+  intros x y. unfold u8_or, scalar_or, scalar_or_default.
+  destruct (mk_scalar_ok U8 (Z.lor (to_Z x) (to_Z y)) (u8_bnd_or x y)) as [s [Hs Hv]].
+  rewrite Hs. exact Hv.
+Qed.
+
+(* --- Q15/Q16: WRITE-BACK of a mutable window ---------------------------- *)
+
+Lemma splice_nat_facts : forall {T} (l new : list T) (a b : usize),
+  to_Z a <= to_Z b -> to_Z b <= zlen l -> zlen new = to_Z b - to_Z a ->
+  Z.of_nat (Z.to_nat (to_Z a)) = to_Z a
+  /\ Z.of_nat (Z.to_nat (to_Z b)) = to_Z b
+  /\ (Z.to_nat (to_Z a) <= Z.to_nat (to_Z b))%nat
+  /\ (Z.to_nat (to_Z b) <= length l)%nat
+  /\ length new = (Z.to_nat (to_Z b) - Z.to_nat (to_Z a))%nat.
+Proof.
+  intros T l new a b Hab Hbl Hnew.
+  pose proof (to_Z_usize_nonneg a) as Ha0. pose proof (to_Z_usize_nonneg b) as Hb0.
+  unfold zlen in *.
+  assert (HA : Z.of_nat (Z.to_nat (to_Z a)) = to_Z a) by (apply Z2Nat.id; lia).
+  assert (HB : Z.of_nat (Z.to_nat (to_Z b)) = to_Z b) by (apply Z2Nat.id; lia).
+  repeat split; lia.
+Qed.
+
+Lemma splice_length : forall {T} (l new : list T) (a b : usize),
+  to_Z a <= to_Z b -> to_Z b <= zlen l -> zlen new = to_Z b - to_Z a ->
+  length (splice_list l a b new) = length l.
+Proof.
+  intros T l new a b H1 H2 H3.
+  destruct (splice_nat_facts l new a b H1 H2 H3) as [HA [HB [K1 [K2 K3]]]].
+  unfold splice_list. rewrite !app_length, firstn_length, skipn_length. lia.
+Qed.
+
+Lemma nth_error_splice_lt : forall {T} (l new : list T) (a b : usize) (k : nat),
+  to_Z a <= to_Z b -> to_Z b <= zlen l -> zlen new = to_Z b - to_Z a ->
+  (k < Z.to_nat (to_Z a))%nat ->
+  nth_error (splice_list l a b new) k = nth_error l k.
+Proof.
+  intros T l new a b k H1 H2 H3 Hk.
+  destruct (splice_nat_facts l new a b H1 H2 H3) as [HA [HB [K1 [K2 K3]]]].
+  unfold splice_list.
+  rewrite nth_error_app1 by (rewrite firstn_length; lia).
+  apply nth_error_firstn_model. exact Hk.
+Qed.
+
+Lemma nth_error_splice_in : forall {T} (l new : list T) (a b : usize) (k : nat),
+  to_Z a <= to_Z b -> to_Z b <= zlen l -> zlen new = to_Z b - to_Z a ->
+  (Z.to_nat (to_Z a) <= k)%nat -> (k < Z.to_nat (to_Z b))%nat ->
+  nth_error (splice_list l a b new) k = nth_error new (k - Z.to_nat (to_Z a)).
+Proof.
+  intros T l new a b k H1 H2 H3 Hk1 Hk2.
+  destruct (splice_nat_facts l new a b H1 H2 H3) as [HA [HB [K1 [K2 K3]]]].
+  unfold splice_list.
+  rewrite nth_error_app2 by (rewrite firstn_length; lia).
+  rewrite firstn_length.
+  replace (Nat.min (Z.to_nat (to_Z a)) (length l)) with (Z.to_nat (to_Z a)) by lia.
+  rewrite nth_error_app1 by lia. reflexivity.
+Qed.
+
+Lemma nth_error_splice_ge : forall {T} (l new : list T) (a b : usize) (k : nat),
+  to_Z a <= to_Z b -> to_Z b <= zlen l -> zlen new = to_Z b - to_Z a ->
+  (Z.to_nat (to_Z b) <= k)%nat ->
+  nth_error (splice_list l a b new) k = nth_error l k.
+Proof.
+  intros T l new a b k H1 H2 H3 Hk.
+  destruct (splice_nat_facts l new a b H1 H2 H3) as [HA [HB [K1 [K2 K3]]]].
+  unfold splice_list.
+  rewrite nth_error_app2 by (rewrite firstn_length; lia).
+  rewrite firstn_length.
+  replace (Nat.min (Z.to_nat (to_Z a)) (length l)) with (Z.to_nat (to_Z a)) by lia.
+  rewrite nth_error_app2 by lia.
+  replace (k - Z.to_nat (to_Z a) - length new)%nat
+     with (k - Z.to_nat (to_Z b))%nat by lia.
+  rewrite nth_error_skipn_model. f_equal. lia.
+Qed.
+
+Lemma proj1_slice_splice : forall {T} (s sub' : slice T) (a b : usize),
+  length (splice_list (proj1_sig s) a b (proj1_sig sub')) = length (proj1_sig s) ->
+  proj1_sig (slice_splice s a b sub') = splice_list (proj1_sig s) a b (proj1_sig sub').
+Proof.
+  intros T s sub' a b H.
+  unfold slice_splice; cbn [proj1_sig]; unfold splice_or.
+  rewrite (proj2 (Nat.eqb_eq _ _) H). reflexivity.
+Qed.
+
+(* The write-back always preserves the parent's length, so `array_from_slice`
+   always takes its length-matching branch. *)
+Lemma splice_back_len : forall {T} {N} (arr : array T N) (a b : usize) (sub' : slice T),
+  to_Z (slice_len (slice_splice (array_to_slice arr) a b sub')) = to_Z N.
+Proof.
+  intros T N arr a b sub'.
+  rewrite to_Z_slice_len. unfold zlen.
+  unfold slice_splice; cbn [proj1_sig]. rewrite splice_or_length.
+  exact (zlen_array_to_slice arr).
+Qed.
+
+Lemma array_index_mut_range_val_in :
   forall {T} {N} (arr : array T N) (a b : usize)
          (sub : slice T) (back : slice T -> array T N) (sub' : slice T) (i j : usize),
   core_array_Array_index_mut
@@ -246,9 +571,41 @@ Axiom array_index_mut_range_val_in :
   to_Z (slice_len sub') = to_Z b - to_Z a ->
   to_Z a <= to_Z i -> to_Z i < to_Z b -> to_Z j = to_Z i - to_Z a ->
   array_index_usize (back sub') i = slice_index_usize sub' j.
+Proof.
+  intros T N arr a b sub back sub' i j H Hlen Hai Hib Hj.
+  destruct (index_mut_bounds arr a b sub back H) as [Hab HbN].
+  rewrite (index_mut_eq arr a b Hab HbN) in H.
+  injection H as _ Hback. subst back.
+  rewrite to_Z_slice_len in Hlen.
+  pose proof (zlen_array_to_slice arr) as HzN.
+  assert (Hsl : length (splice_list (proj1_sig (array_to_slice arr)) a b (proj1_sig sub'))
+                = length (proj1_sig (array_to_slice arr)))
+    by (apply splice_length; [ exact Hab | rewrite HzN; exact HbN | exact Hlen ]).
+  rewrite (array_from_slice_val arr _ i (splice_back_len arr a b sub')).
+  unfold slice_index_usize. rewrite (proj1_slice_splice _ sub' a b Hsl).
+  rewrite (nth_error_splice_in _ _ a b (Z.to_nat (to_Z i)));
+    [ | exact Hab | rewrite HzN; exact HbN | exact Hlen | | ].
+  - do 2 f_equal.
+    assert (E1 : Z.of_nat (Z.to_nat (to_Z i)) = to_Z i)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    assert (E2 : Z.of_nat (Z.to_nat (to_Z a)) = to_Z a)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    assert (E3 : Z.of_nat (Z.to_nat (to_Z j)) = to_Z j)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    lia.
+  - assert (E1 : Z.of_nat (Z.to_nat (to_Z i)) = to_Z i)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    assert (E2 : Z.of_nat (Z.to_nat (to_Z a)) = to_Z a)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    lia.
+  - assert (E1 : Z.of_nat (Z.to_nat (to_Z i)) = to_Z i)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    assert (E2 : Z.of_nat (Z.to_nat (to_Z b)) = to_Z b)
+      by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+    lia.
+Qed.
 
-(* Outside the window: the array is unchanged. *)
-Axiom array_index_mut_range_val_out :
+Lemma array_index_mut_range_val_out :
   forall {T} {N} (arr : array T N) (a b : usize)
          (sub : slice T) (back : slice T -> array T N) (sub' : slice T) (i : usize),
   core_array_Array_index_mut
@@ -257,77 +614,158 @@ Axiom array_index_mut_range_val_out :
   to_Z (slice_len sub') = to_Z b - to_Z a ->
   (to_Z i < to_Z a \/ to_Z b <= to_Z i) ->
   array_index_usize (back sub') i = array_index_usize arr i.
+Proof.
+  intros T N arr a b sub back sub' i H Hlen Hout.
+  destruct (index_mut_bounds arr a b sub back H) as [Hab HbN].
+  rewrite (index_mut_eq arr a b Hab HbN) in H.
+  injection H as _ Hback. subst back.
+  rewrite to_Z_slice_len in Hlen.
+  pose proof (zlen_array_to_slice arr) as HzN.
+  assert (Hsl : length (splice_list (proj1_sig (array_to_slice arr)) a b (proj1_sig sub'))
+                = length (proj1_sig (array_to_slice arr)))
+    by (apply splice_length; [ exact Hab | rewrite HzN; exact HbN | exact Hlen ]).
+  rewrite (array_from_slice_val arr _ i (splice_back_len arr a b sub')).
+  unfold slice_index_usize, array_index_usize.
+  rewrite (proj1_slice_splice _ sub' a b Hsl).
+  assert (E1 : Z.of_nat (Z.to_nat (to_Z i)) = to_Z i)
+    by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+  assert (E2 : Z.of_nat (Z.to_nat (to_Z a)) = to_Z a)
+    by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+  assert (E3 : Z.of_nat (Z.to_nat (to_Z b)) = to_Z b)
+    by (apply Z2Nat.id; apply to_Z_usize_nonneg).
+  destruct Hout as [Hlt|Hge].
+  - rewrite (nth_error_splice_lt _ _ a b (Z.to_nat (to_Z i)));
+      [ reflexivity | exact Hab | rewrite HzN; exact HbN | exact Hlen | lia ].
+  - rewrite (nth_error_splice_ge _ _ a b (Z.to_nat (to_Z i)));
+      [ reflexivity | exact Hab | rewrite HzN; exact HbN | exact Hlen | lia ].
+Qed.
 
-(* `array_to_slice` preserves reads, not only the length. *)
-Axiom slice_index_array_to_slice :
+(* --- Q17: array_to_slice preserves reads, not only the length ------------- *)
+
+Lemma slice_index_array_to_slice :
   forall {T} {n} (a : array T n) (i : usize),
   slice_index_usize (array_to_slice a) i = array_index_usize a i.
+Proof. reflexivity. Qed.
 
-(* `u32::to_le_bytes`, byte by byte: byte i is digit i of the value, base 256. *)
-Axiom u32_to_le_bytes_val :
+(* --- Q18/Q19: the codecs are the base-256 digit (de)composition ----------- *)
+
+Lemma u32_to_le_bytes_val :
   forall (x : u32) (i : usize), 0 <= to_Z i < 4 ->
   exists bv, array_index_usize (core_num_U32_to_le_bytes x) i = Ok bv
           /\ to_Z bv = (to_Z x / 256 ^ to_Z i) mod 256.
+Proof.
+  intros x i Hi.
+  assert (Hc : to_Z i = 0 \/ to_Z i = 1 \/ to_Z i = 2 \/ to_Z i = 3) by lia.
+  unfold array_index_usize, core_num_U32_to_le_bytes, opt_result; cbn [proj1_sig].
+  destruct Hc as [E|[E|[E|E]]]; rewrite E; cbn [Z.to_nat nth_error];
+    eexists; split; reflexivity.
+Qed.
 
-(* --------------------------------------------------------------------- *)
-(* DECODER LAWS (quarantine, part 4).                                      *)
-(*                                                                         *)
-(* Q18 constrains the ENCODER only. The DECODER                            *)
-(* `core_num_U32_from_le_bytes` is what actually produces `author_id`,      *)
-(* `version` and `blob_len` out of the attacker-supplied package bytes      *)
-(* (Update_Funs.v:224/244/251/258), and it arrived with no law at all: the  *)
-(* `version` that P4 compares and that P2 claims the tag covers was         *)
-(* formally an ARBITRARY function of four bytes. Two laws close that.       *)
-(*                                                                         *)
-(* Q19 is the exact mirror of Q18 — a digit SPEC, not an injectivity        *)
-(* assumption. Round-trip (`from_le_bytes ∘ to_le_bytes = id`), decoder     *)
-(* injectivity and decoder congruence are all DERIVED from it in            *)
-(* Update_Crypto (`from_le_bytes_to_le_bytes`, `from_le_bytes_inj`,         *)
-(* `from_le_bytes_cong`, `to_le_bytes_from_le_bytes`).                      *)
-(*                                                                         *)
-(* Q20 is what connects the decoder to the package. The extracted body      *)
-(* always applies the decoder to a four-byte array LITERAL built from four  *)
-(* bytes read out of `pkg`; without a read law for that literal the four    *)
-(* bytes are formally unrelated to the array that gets decoded, and Q19     *)
-(* could not be applied to them.                                            *)
-(*                                                                         *)
-(* NB — WHAT Q20 IS NOT. It is NOT a law about the backend's `mk_array`.    *)
-(* `Primitives.mk_array : forall {T} (n : usize) (l : list T), array T n`   *)
-(* is an INCONSISTENT axiom (`array T n` is empty at `T := Empty_set,       *)
-(* n := 4`, so it proves `False`; see ../../AENEAS_COQ_MKARRAY_BUG.md), *)
-(* every result in this development used to inherit it through the          *)
-(* extracted body. `extract.sh` now rewrites the two array-literal arities  *)
-(* the body builds (`mk_array4`, and `mk_array15` for PKG_TAG_LABEL) into   *)
-(* TOTAL definitions that carry their own length proof, so `mk_array` is    *)
-(* gone from the assumption set of every theorem here. What is left in Q20  *)
-(* is purely a READ law for the opaque `array_index_usize` applied to a     *)
-(* CONCRETE array — the same kind of law as Q7/Q12/Q17, and unavoidable for *)
-(* the same reason: `array_index_usize` itself is a bare backend axiom.     *)
-(*                                                                         *)
-(* Both are discharged by the concrete model in `Update_Model.v`.           *)
-(* --------------------------------------------------------------------- *)
+Lemma zmod_add_small : forall a k m, 0 < m -> 0 <= a < m -> (a + m * k) mod m = a.
+Proof.
+  intros a k m Hm Ha. replace (a + m * k) with (a + k * m) by ring.
+  rewrite Z.mod_add by lia. apply Z.mod_small. exact Ha.
+Qed.
 
-(* `u32::from_le_bytes`, byte by byte: digit i of the decoded value is byte i. *)
-Axiom u32_from_le_bytes_val :
+Lemma zdiv_add_small : forall a k m, 0 < m -> 0 <= a < m -> (a + m * k) / m = k.
+Proof.
+  intros a k m Hm Ha. replace (a + m * k) with (a + k * m) by ring.
+  rewrite Z.div_add by lia. rewrite (Z.div_small a m) by exact Ha. lia.
+Qed.
+
+Lemma zdiv_chain2 : forall X : Z, X / 65536 = X / 256 / 256.
+Proof. intros X. rewrite Z.div_div by lia. reflexivity. Qed.
+
+Lemma zdiv_chain3 : forall X : Z, X / 16777216 = X / 65536 / 256.
+Proof. intros X. rewrite Z.div_div by lia. reflexivity. Qed.
+
+Lemma le4_digits : forall v0 v1 v2 v3,
+  0 <= v0 < 256 -> 0 <= v1 < 256 -> 0 <= v2 < 256 -> 0 <= v3 < 256 ->
+  ((v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 256 ^ 0) mod 256 = v0
+  /\ ((v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 256 ^ 1) mod 256 = v1
+  /\ ((v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 256 ^ 2) mod 256 = v2
+  /\ ((v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 256 ^ 3) mod 256 = v3.
+Proof.
+  intros v0 v1 v2 v3 H0 H1 H2 H3.
+  assert (E0 : v0 + 256 * v1 + 65536 * v2 + 16777216 * v3
+               = v0 + 256 * (v1 + 256 * v2 + 65536 * v3)) by ring.
+  assert (E1 : v1 + 256 * v2 + 65536 * v3 = v1 + 256 * (v2 + 256 * v3)) by ring.
+  assert (D0 : (v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) mod 256 = v0)
+    by (rewrite E0; apply zmod_add_small; lia).
+  assert (Q1 : (v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 256
+               = v1 + 256 * v2 + 65536 * v3)
+    by (rewrite E0; apply zdiv_add_small; lia).
+  assert (Q2 : (v1 + 256 * v2 + 65536 * v3) / 256 = v2 + 256 * v3)
+    by (rewrite E1; apply zdiv_add_small; lia).
+  assert (Q3 : (v2 + 256 * v3) / 256 = v3) by (apply zdiv_add_small; lia).
+  assert (P2 : (v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 65536
+               = v2 + 256 * v3).
+  { rewrite zdiv_chain2, Q1. exact Q2. }
+  assert (P3 : (v0 + 256 * v1 + 65536 * v2 + 16777216 * v3) / 16777216 = v3).
+  { rewrite zdiv_chain3, P2. exact Q3. }
+  repeat apply conj.
+  - replace (256 ^ 0) with 1 by reflexivity. rewrite Z.div_1_r. exact D0.
+  - replace (256 ^ 1) with 256 by reflexivity. rewrite Q1.
+    rewrite E1. apply zmod_add_small; lia.
+  - replace (256 ^ 2) with 65536 by reflexivity. rewrite P2.
+    apply zmod_add_small; lia.
+  - replace (256 ^ 3) with 16777216 by reflexivity. rewrite P3.
+    apply Z.mod_small; lia.
+Qed.
+
+Lemma u32_from_le_bytes_val :
   forall (a : array u8 4%usize) (i : usize), 0 <= to_Z i < 4 ->
   exists bv, array_index_usize a i = Ok bv
           /\ (to_Z (core_num_U32_from_le_bytes a) / 256 ^ to_Z i) mod 256
              = to_Z bv.
+Proof.
+  intros a i Hi.
+  assert (Hz : zlen (proj1_sig a) = 4)
+    by (unfold zlen; rewrite (proj2_sig a); reflexivity).
+  destruct (nth_error_in_range (proj1_sig a) 0 ltac:(lia)) as [c0 H0].
+  destruct (nth_error_in_range (proj1_sig a) 1 ltac:(lia)) as [c1 H1].
+  destruct (nth_error_in_range (proj1_sig a) 2 ltac:(lia)) as [c2 H2].
+  destruct (nth_error_in_range (proj1_sig a) 3 ltac:(lia)) as [c3 H3].
+  change (Z.to_nat 0) with 0%nat in H0. change (Z.to_nat 1) with 1%nat in H1.
+  change (Z.to_nat 2) with 2%nat in H2. change (Z.to_nat 3) with 3%nat in H3.
+  assert (B0 : byte_at a 0 = to_Z c0) by (unfold byte_at; rewrite H0; reflexivity).
+  assert (B1 : byte_at a 1 = to_Z c1) by (unfold byte_at; rewrite H1; reflexivity).
+  assert (B2 : byte_at a 2 = to_Z c2) by (unfold byte_at; rewrite H2; reflexivity).
+  assert (B3 : byte_at a 3 = to_Z c3) by (unfold byte_at; rewrite H3; reflexivity).
+  assert (Hval : to_Z (core_num_U32_from_le_bytes a)
+                 = to_Z c0 + 256 * to_Z c1 + 65536 * to_Z c2 + 16777216 * to_Z c3).
+  { change (to_Z (core_num_U32_from_le_bytes a))
+      with (byte_at a 0 + 256 * byte_at a 1 + 65536 * byte_at a 2
+            + 16777216 * byte_at a 3).
+    rewrite B0, B1, B2, B3. reflexivity. }
+  destruct (le4_digits (to_Z c0) (to_Z c1) (to_Z c2) (to_Z c3)
+              (to_Z_u8_range c0) (to_Z_u8_range c1) (to_Z_u8_range c2)
+              (to_Z_u8_range c3)) as [G0 [G1 [G2 G3]]].
+  rewrite Hval.
+  assert (Hc : to_Z i = 0 \/ to_Z i = 1 \/ to_Z i = 2 \/ to_Z i = 3) by lia.
+  unfold array_index_usize, opt_result.
+  destruct Hc as [E|[E|[E|E]]]; rewrite E.
+  - change (Z.to_nat 0) with 0%nat. rewrite H0. exists c0.
+    split; [ reflexivity | exact G0 ].
+  - change (Z.to_nat 1) with 1%nat. rewrite H1. exists c1.
+    split; [ reflexivity | exact G1 ].
+  - change (Z.to_nat 2) with 2%nat. rewrite H2. exists c2.
+    split; [ reflexivity | exact G2 ].
+  - change (Z.to_nat 3) with 3%nat. rewrite H3. exists c3.
+    split; [ reflexivity | exact G3 ].
+Qed.
 
-(* The four-element array literal the parser decodes reads back its four
-   elements. `mk_array4` is a total DEFINITION (Update_FunsExternal.v), so this
-   constrains only `array_index_usize`. *)
-Axiom mk_array4_val :
+(* --- Q20 and the label literal: the literals read back their elements ----- *)
+
+Lemma mk_array4_val :
   forall b0 b1 b2 b3 : u8,
     array_index_usize (mk_array4 b0 b1 b2 b3) 0%usize = Ok b0
     /\ array_index_usize (mk_array4 b0 b1 b2 b3) 1%usize = Ok b1
     /\ array_index_usize (mk_array4 b0 b1 b2 b3) 2%usize = Ok b2
     /\ array_index_usize (mk_array4 b0 b1 b2 b3) 3%usize = Ok b3.
+Proof. intros. repeat apply conj; reflexivity. Qed.
 
-(* The fifteen-element literal used for the package-tag domain separator reads
-   back its fifteen elements. As for Q20, `mk_array15` is total; this law only
-   specifies the otherwise opaque backend index operation on that value. *)
-Axiom mk_array15_val :
+Lemma mk_array15_val :
   forall b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 : u8,
     array_index_usize
       (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 0%usize = Ok b0
@@ -359,6 +797,45 @@ Axiom mk_array15_val :
       (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 13%usize = Ok b13
     /\ array_index_usize
       (mk_array15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14) 14%usize = Ok b14.
+Proof. intros. repeat apply conj; reflexivity. Qed.
+
+(* --- Q21 (formerly chain-core's one addition): a byte array is determined
+       by its reads. General in T for term-equal reads; for u8 the reads may
+       agree only in VALUE (`scalar_ext` closes the gap, no proof irrelevance). *)
+
+Lemma array_index_ext : forall {T} {n} (a b : array T n),
+  (forall i : usize, 0 <= to_Z i < to_Z n ->
+     array_index_usize a i = array_index_usize b i) ->
+  a = b.
+Proof.
+  intros T n a b H. apply array_ext. apply nth_error_list_eq. intro k.
+  pose proof (proj2_sig a) as Ha. pose proof (proj2_sig b) as Hb. cbn beta in Ha, Hb.
+  destruct (Z_lt_dec (Z.of_nat k) (to_Z n)) as [Hk|Hk].
+  - assert (Hbnd : scalar_min Usize <= Z.of_nat k <= scalar_max Usize).
+    { unfold scalar_min, scalar_max, usize_min.
+      pose proof (to_Z_usize_le_max n). lia. }
+    specialize (H (mk_scalar_of_bounds Usize (Z.of_nat k) Hbnd)
+                  ltac:(rewrite to_Z_mk_scalar_of_bounds; lia)).
+    unfold array_index_usize in H.
+    rewrite to_Z_mk_scalar_of_bounds, Nat2Z.id in H.
+    destruct (nth_error (proj1_sig a) k) eqn:Ea,
+             (nth_error (proj1_sig b) k) eqn:Eb;
+      cbn in H; try discriminate; [ injection H as -> | ]; reflexivity.
+  - rewrite (proj2 (nth_error_None _ _)), (proj2 (nth_error_None _ _));
+      [ reflexivity | lia | lia ].
+Qed.
+
+Lemma array_u8_ext : forall (n : usize) (a b : array u8 n),
+  (forall i : usize, 0 <= to_Z i < to_Z n ->
+     exists x y, array_index_usize a i = Ok x
+              /\ array_index_usize b i = Ok y
+              /\ to_Z x = to_Z y) ->
+  a = b.
+Proof.
+  intros n a b H. apply array_index_ext. intros i Hi.
+  destruct (H i Hi) as [x [y [Hx [Hy Hxy]]]].
+  rewrite Hx, Hy. f_equal. apply scalar_ext. exact Hxy.
+Qed.
 
 (* ===================================================================== *)
 (* ct_eq loop totality — the fixed-bound compare loops always return Ok.  *)
@@ -687,8 +1164,6 @@ Qed.
 (* MECHANISED ASSUMPTION AUDIT.  The paper's central instrument is        *)
 (* `Print Assumptions`; running it must therefore be part of the build,   *)
 (* not a claim about a manual session.  Compiling this file emits the     *)
-(* assumption set of P3 — it must list exactly the six SUCCESS laws above *)
-(* and the backend's scalar-width parameters, and in particular must NOT  *)
-(* list `mk_array` (finding F1).                                         *)
+(* assumption set of P3 — it must be "Closed under the global context".   *)
 (* ===================================================================== *)
 Print Assumptions parse_and_verify_total.

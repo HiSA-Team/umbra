@@ -65,13 +65,27 @@ ASSUMPTION_ACTUAL="$(
       inside && /^[A-Za-z_][A-Za-z0-9_.]*([[:space:]]|$)/ { print $1 }
     '
 )"
+# The deterministic layer is axiom-free (Primitives.v defines every backend
+# operation); what remains on the headline theorem is exactly what SSProve /
+# mathcomp-analysis themselves introduce: 7 entries, none from this project.
 ASSUMPTION_COUNT="$(printf '%s\n' "$ASSUMPTION_ACTUAL" | wc -l | tr -d ' ')"
-if [ "$ASSUMPTION_COUNT" != 50 ]; then
-  echo "error: headline theorem has $ASSUMPTION_COUNT assumptions, expected 50" >&2
+if [ "$ASSUMPTION_COUNT" != 7 ]; then
+  echo "error: headline theorem has $ASSUMPTION_COUNT assumptions, expected 7" >&2
+  exit 1
+fi
+if printf '%s\n' "$ASSUMPTION_ACTUAL" | grep -qE '^(Primitives|Update_|Chain_|Umbra)'; then
+  echo "error: a project-level assumption reached the headline theorem" >&2
   exit 1
 fi
 if ! diff -u "$ASSUMPTION_BASELINE" <(printf '%s\n' "$ASSUMPTION_ACTUAL"); then
   echo "error: headline assumption names differ from the frozen baseline" >&2
+  exit 1
+fi
+
+echo ">> deterministic layer must declare no Axiom"
+if grep -nE '^Axiom ' formal/rocq/update-core/proofs-coq/*.v formal/rocq/chain-core/proofs-coq/*.v \
+     | grep -v '_Template\.v'; then
+  echo "error: an Axiom is declared in the deterministic layer" >&2
   exit 1
 fi
 
@@ -114,8 +128,11 @@ else
     echo "error: PDF log contains a submission warning" >&2
     exit 1
   fi
-  if pdftotext -f 7 -l 7 "$PDF" - | \
-      grep -qiE 'boundaries of the guarantee|conclusion'; then
+  # Page 7 is references-only: its first non-blank line must be the heading
+  # (pdftotext renders small caps with a space, "R EFERENCES"). Checking for a
+  # spilled section title was fail-open when the title changed.
+  if ! pdftotext -f 7 -l 7 "$PDF" - | grep -v '^[[:space:]]*$' | head -n 1 | \
+      grep -qiE '^R ?EFERENCES'; then
     echo "error: paper body spills onto reference-only page 7" >&2
     exit 1
   fi

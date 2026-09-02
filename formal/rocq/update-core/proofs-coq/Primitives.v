@@ -6,6 +6,26 @@ Require Import Coq.ZArith.ZArith.
 Require Import Coq.ZArith.Znat.
 Require Import List.
 Import ListNotations.
+Require Import Coq.Bool.Bool.
+Require Import Coq.Logic.Eqdep_dec.
+
+(** PROJECT VARIANT of the Aeneas Coq backend's Primitives.v (issue #58).
+
+    The upstream file ships scalars' width parameters, the bitwise operators
+    and every array/slice/vector operation as bare [Axiom]s ("TODO: finish the
+    definitions"), and one of them ([mk_array]) is inconsistent. This copy keeps
+    upstream's NAMES and TYPES — the extracted code is untouched — but gives
+    every one of them a definition over the underlying [list]/[Z]
+    representation the sigma types already carry. Consequently no theorem
+    proved over the extracted code inherits a backend axiom: [Print
+    Assumptions] on the deterministic layer is closed under the global context.
+
+    The scalar carrier is a *boolean* bounds check rather than the upstream
+    [Prop] conjunction, so that two scalars with the same value are equal
+    ([scalar_ext]) by decidable UIP, without proof irrelevance.
+
+    Do not overwrite with the toolchain file: ../extract.sh checks that the
+    vendored backend file is the one this variant was derived from. *)
 
 Module Primitives.
 
@@ -96,18 +116,22 @@ Definition u64_max  : Z := 18446744073709551615%Z.
 Definition u128_min : Z := 0%Z.
 Definition u128_max : Z := 340282366920938463463374607431768211455%Z.
 
-(** The bounds of [isize] and [usize] vary with the architecture. *)
-Axiom isize_min : Z.
-Axiom isize_max : Z.
+(** The bounds of [isize] and [usize] are those of the 32-bit targets this
+    development runs on (ARMv8-M, RV32). Definitions, not axioms. *)
+Definition isize_min : Z := i32_min.
+Definition isize_max : Z := i32_max.
 Definition usize_min : Z := 0%Z.
-Axiom usize_max : Z.
+Definition usize_max : Z := u32_max.
 
 Open Scope Z_scope.
 
-(** We provide those lemmas to reason about the bounds of [isize] and [usize] *)
-Axiom isize_min_bound : isize_min <= i32_min.
-Axiom isize_max_bound : i32_max <= isize_max.
-Axiom usize_max_bound : u32_max <= usize_max.
+(** The bound lemmas upstream postulates; here they are proved. *)
+Lemma isize_min_bound : isize_min <= i32_min.
+Proof. unfold isize_min. lia. Qed.
+Lemma isize_max_bound : i32_max <= isize_max.
+Proof. unfold isize_max. lia. Qed.
+Lemma usize_max_bound : u32_max <= usize_max.
+Proof. unfold usize_max. lia. Qed.
 
 Inductive scalar_ty :=
   | Isize
@@ -186,11 +210,6 @@ Proof.
   - pose usize_max_bound. lia.
 Qed.
 
-Definition scalar (ty: scalar_ty) : Type :=
- { x: Z | scalar_min ty <= x <= scalar_max ty }.
-
-Definition to_Z {ty} (x: scalar ty) : Z := proj1_sig x.
-
 (** Bounds checks: we start by using the conservative bounds, to make sure we
     can compute in most situations, then we use the real bounds (for [isize]
     and [usize]). *)
@@ -233,11 +252,48 @@ Proof.
   - inversion H.
 Qed.
 
+Lemma scalar_in_bounds_complete (ty: scalar_ty) (x: Z) :
+  scalar_min ty <= x <= scalar_max ty -> scalar_in_bounds ty x = true.
+Proof.
+  intros [H1 H2]. unfold scalar_in_bounds, scalar_ge_min, scalar_le_max.
+  rewrite (proj2 (Z.leb_le _ _) H1), (proj2 (Z.leb_le _ _) H2).
+  rewrite !orb_true_r. reflexivity.
+Qed.
+
+(** A scalar is a [Z] with a DECIDABLE (boolean) bounds certificate, so that
+    equal values give equal scalars without proof irrelevance ([scalar_ext]). *)
+Definition scalar (ty: scalar_ty) : Type :=
+ { x: Z | scalar_in_bounds ty x = true }.
+
+Definition to_Z {ty} (x: scalar ty) : Z := proj1_sig x.
+
+Definition mk_scalar_of_bounds (ty: scalar_ty) (x: Z)
+  (H : scalar_min ty <= x <= scalar_max ty) : scalar ty :=
+  exist _ x (scalar_in_bounds_complete ty x H).
+
+Lemma to_Z_mk_scalar_of_bounds : forall ty x H, to_Z (mk_scalar_of_bounds ty x H) = x.
+Proof. reflexivity. Qed.
+
+Lemma to_Z_bounds {ty} (x: scalar ty) : scalar_min ty <= to_Z x <= scalar_max ty.
+Proof. exact (scalar_in_bounds_valid ty _ (proj2_sig x)). Qed.
+
+Lemma scalar_ext {ty} (x y: scalar ty) : to_Z x = to_Z y -> x = y.
+Proof.
+  destruct x as [x Hx], y as [y Hy]. unfold to_Z; cbn. intros ->.
+  f_equal. apply UIP_dec. apply bool_dec.
+Qed.
+
+Lemma to_Z_usize_nonneg (x: scalar Usize) : 0 <= to_Z x.
+Proof. exact (proj1 (to_Z_bounds x)). Qed.
+
+Lemma to_Z_usize_le_max (x: scalar Usize) : to_Z x <= usize_max.
+Proof. exact (proj2 (to_Z_bounds x)). Qed.
+
 Import Sumbool.
 
 Definition mk_scalar (ty: scalar_ty) (x: Z) : result (scalar ty) :=
   match sumbool_of_bool (scalar_in_bounds ty x) with
-  | left H => Ok (exist _ x (scalar_in_bounds_valid _ _ H))
+  | left H => Ok (exist _ x H)
   | right _ => Fail_ Failure
   end.
 
@@ -255,12 +311,28 @@ Definition scalar_rem {ty} (x y: scalar ty) : result (scalar ty) := mk_scalar ty
   
 Definition scalar_neg {ty} (x: scalar ty) : result (scalar ty) := mk_scalar ty (-(to_Z x)).
 
-Axiom scalar_xor : forall {ty}, scalar ty -> scalar ty -> scalar ty. (* TODO *)
-Axiom scalar_or : forall {ty}, scalar ty -> scalar ty -> scalar ty. (* TODO *)
-Axiom scalar_and : forall {ty}, scalar ty -> scalar ty -> scalar ty. (* TODO *)
-Axiom scalar_shl : forall {ty0 ty1}, scalar ty0 -> scalar ty1 -> result (scalar ty0). (* TODO *)
-Axiom scalar_shr : forall {ty0 ty1}, scalar ty0 -> scalar ty1 -> result (scalar ty0). (* TODO *)
-Axiom scalar_not : forall {ty}, scalar ty -> scalar ty. (* TODO *)
+(** Bitwise operators: the [Z] bitwise operator on the values. For every
+    unsigned width the result is in range (proved where needed, e.g.
+    Update_Safety.u8_xor_to_Z); the total signature upstream demands is met by
+    falling back to the left operand should the check ever fail. *)
+Definition scalar_or_default {ty} (r: result (scalar ty)) (d: scalar ty) : scalar ty :=
+  match r with Ok s => s | Fail_ _ => d end.
+
+Definition scalar_xor {ty} (x y: scalar ty) : scalar ty :=
+  scalar_or_default (mk_scalar ty (Z.lxor (to_Z x) (to_Z y))) x.
+Definition scalar_or {ty} (x y: scalar ty) : scalar ty :=
+  scalar_or_default (mk_scalar ty (Z.lor (to_Z x) (to_Z y))) x.
+Definition scalar_and {ty} (x y: scalar ty) : scalar ty :=
+  scalar_or_default (mk_scalar ty (Z.land (to_Z x) (to_Z y))) x.
+Definition scalar_shl {ty0 ty1} (x: scalar ty0) (y: scalar ty1) : result (scalar ty0) :=
+  mk_scalar ty0 (Z.shiftl (to_Z x) (to_Z y)).
+Definition scalar_shr {ty0 ty1} (x: scalar ty0) (y: scalar ty1) : result (scalar ty0) :=
+  mk_scalar ty0 (Z.shiftr (to_Z x) (to_Z y)).
+Definition scalar_signed (ty: scalar_ty) : bool :=
+  match ty with Isize | I8 | I16 | I32 | I64 | I128 => true | _ => false end.
+Definition scalar_not {ty} (x: scalar ty) : scalar ty :=
+  scalar_or_default
+    (mk_scalar ty (if scalar_signed ty then Z.lnot (to_Z x) else scalar_max ty - to_Z x)) x.
 
 (** Cast an integer from a [src_ty] to a [tgt_ty] *)
 (* TODO: check the semantics of casts in Rust *)
@@ -496,26 +568,26 @@ Definition core_num_U16_MIN   := u16_min %u32.
 Definition core_num_U32_MIN   := u32_min %u32.
 Definition core_num_U64_MIN   := u64_min %u64.
 Definition core_num_U128_MIN  := u64_min %u128.
-Axiom core_num_Usize_MIN : usize. (** TODO *)
+Definition core_num_Usize_MIN : usize := usize_min %usize.
 Definition core_num_I8_MIN    := i8_min %i32.
 Definition core_num_I16_MIN   := i16_min %i32.
 Definition core_num_I32_MIN   := i32_min %i32.
 Definition core_num_I64_MIN   := i64_min %i64.
 Definition core_num_I128_MIN  := i128_min %i128.
-Axiom core_num_Isize_MIN : isize. (** TODO *)
+Definition core_num_Isize_MIN : isize := isize_min %isize.
 
 Definition core_num_U8_MAX    := u8_max %u32.
 Definition core_num_U16_MAX   := u16_max %u32.
 Definition core_num_U32_MAX   := u32_max %u32.
 Definition core_num_U64_MAX   := u64_max %u64.
 Definition core_num_U128_MAX  := u64_max %u128.
-Axiom core_num_Usize_MAX : usize. (** TODO *)
+Definition core_num_Usize_MAX : usize := usize_max %usize.
 Definition core_num_I8_MAX    := i8_max %i32.
 Definition core_num_I16_MAX   := i16_max %i32.
 Definition core_num_I32_MAX   := i32_max %i32.
 Definition core_num_I64_MAX   := i64_max %i64.
 Definition core_num_I128_MAX  := i128_max %i128.
-Axiom core_num_Isize_MAX : isize. (** TODO *)
+Definition core_num_Isize_MAX : isize := isize_max %isize.
 
 (*** core *)
 
@@ -762,15 +834,55 @@ Proof.
   lia.
 Qed.
 
-(* TODO: finish the definitions *)
-Axiom mk_array : forall {T : Type} (n : usize) (l : list T), array T n.
+(* Helpers over the underlying lists. *)
+Definition zlen {T} (l : list T) : Z := Z.of_nat (length l).
+
+Definition opt_result {A} (o : option A) : result A :=
+  match o with Some v => Ok v | None => Fail_ Failure end.
+
+Fixpoint list_update {A} (l: list A) (n: nat) (a: A)
+  : list A :=
+  match l with
+  | []     => []
+  | x :: t => match n with
+    | 0%nat => a :: t
+    | S m => x :: (list_update t m a)
+end end.
+
+Lemma list_update_length : forall {A} (l : list A) (n : nat) (a : A),
+  length (list_update l n a) = length l.
+Proof. induction l as [|x t IH]; intros [|m] a; simpl; auto. Qed.
+
+(* An array is determined by its list: the length certificate is an equality
+   in [Z], a decidable type, so it is unique (UIP_dec — no axiom). *)
+Lemma array_ext {T : Type} {n : usize} (a b : array T n) :
+  proj1_sig a = proj1_sig b -> a = b.
+Proof.
+  destruct a as [la Ha], b as [lb Hb]; cbn. intros ->.
+  f_equal. apply UIP_dec. apply Z.eq_dec.
+Qed.
+
+(* There is deliberately NO `mk_array : list T -> array T n` here: upstream's
+   Axiom of that type is inconsistent (`array T n` is empty at `T := Empty_set`,
+   `n > 0`). Array literals of statically known length are built with their own
+   length proof (Update_FunsExternal.mk_array4 / mk_array15). *)
 
 (* For initialization *)
-Axiom array_repeat : forall {T : Type} (n : usize) (x : T), array T n.
+Definition array_repeat {T : Type} (n : usize) (x : T) : array T n.
+Proof.
+  refine (exist _ (repeat x (Z.to_nat (to_Z n))) _).
+  rewrite repeat_length. apply Z2Nat.id. apply to_Z_usize_nonneg.
+Defined.
 
-Axiom array_index_usize : forall {T : Type} {n : usize} (x : array T n) (i : usize), result T.
-Axiom array_update_usize : forall {T : Type} {n : usize} (x : array T n) (i : usize) (nx : T), result (array T n).
-Axiom array_update : forall {T : Type} {n : usize} (x : array T n) (i : usize) (nx : T), array T n.
+Definition array_index_usize {T : Type} {n : usize} (x : array T n) (i : usize) : result T :=
+  opt_result (nth_error (proj1_sig x) (Z.to_nat (to_Z i))).
+
+Definition array_update {T : Type} {n : usize} (x : array T n) (i : usize) (nx : T) : array T n :=
+  exist _ (list_update (proj1_sig x) (Z.to_nat (to_Z i)) nx)
+        (eq_trans (f_equal Z.of_nat (list_update_length _ _ _)) (proj2_sig x)).
+
+Definition array_update_usize {T : Type} {n : usize} (x : array T n) (i : usize) (nx : T) : result (array T n) :=
+  if Z.ltb (to_Z i) (to_Z n) then Ok (array_update x i nx) else Fail_ Failure.
 
 Definition array_index_mut_usize {T : Type} {n : usize} (a : array T n) (i : usize) :
   result (T * (T -> array T n)) :=
@@ -782,10 +894,27 @@ Definition array_index_mut_usize {T : Type} {n : usize} (a : array T n) (i : usi
 (*** Slice *)
 Definition slice T := { l: list T | Z.of_nat (length l) <= usize_max}.
 
-Axiom slice_len : forall {T : Type} (s : slice T), usize.
-Axiom slice_index_usize : forall {T : Type} (x : slice T) (i : usize), result T.
-Axiom slice_update_usize : forall {T : Type} (x : slice T) (i : usize) (nx : T), result (slice T).
-Axiom slice_update : forall {T : Type} (x : slice T) (i : usize) (nx : T), slice T.
+Definition slice_len {T : Type} (s : slice T) : usize.
+Proof.
+  refine (exist _ (zlen (proj1_sig s)) _).
+  apply scalar_in_bounds_complete. pose proof (proj2_sig s) as Hs.
+  cbn [scalar_min scalar_max]. unfold usize_min, zlen in *. lia.
+Defined.
+
+Lemma to_Z_slice_len : forall {T : Type} (s : slice T), to_Z (slice_len s) = zlen (proj1_sig s).
+Proof. reflexivity. Qed.
+
+Definition slice_index_usize {T : Type} (x : slice T) (i : usize) : result T :=
+  opt_result (nth_error (proj1_sig x) (Z.to_nat (to_Z i))).
+
+Definition slice_update {T : Type} (x : slice T) (i : usize) (nx : T) : slice T.
+Proof.
+  refine (exist _ (list_update (proj1_sig x) (Z.to_nat (to_Z i)) nx) _).
+  rewrite list_update_length. exact (proj2_sig x).
+Defined.
+
+Definition slice_update_usize {T : Type} (x : slice T) (i : usize) (nx : T) : result (slice T) :=
+  if Z.ltb (to_Z i) (zlen (proj1_sig x)) then Ok (slice_update x i nx) else Fail_ Failure.
 
 Definition slice_index_mut_usize {T : Type} (s : slice T) (i : usize) :
   result (T * (T -> slice T)) :=
@@ -796,19 +925,130 @@ Definition slice_index_mut_usize {T : Type} (s : slice T) (i : usize) :
 
 (*** Subslices *)
 
-Axiom array_to_slice : forall {T : Type} {n : usize} (x : array T n), slice T.
-Axiom array_from_slice : forall {T : Type} {n : usize} (x : array T n) (s : slice T), array T n.
+Definition array_to_slice {T : Type} {n : usize} (x : array T n) : slice T.
+Proof.
+  refine (exist _ (proj1_sig x) _).
+  rewrite (proj2_sig x). apply to_Z_usize_le_max.
+Defined.
+
+(* Rust's write-back of a length-matching slice into an array: a slice whose
+   length matches IS the array. A mismatch cannot arise on any path Aeneas
+   produces (the slice handed back is the one borrowed); the model then keeps
+   the original array, which is what makes the operation total. *)
+Definition array_from_slice {T : Type} {n : usize} (x : array T n) (s : slice T) : array T n :=
+  match Z.eq_dec (Z.of_nat (length (proj1_sig s))) (to_Z n) with
+  | left Hs => exist _ (proj1_sig s) Hs
+  | right _ => x
+  end.
 
 Definition array_to_slice_mut {T : Type} {n : usize} (a : array T n) :
   slice T * (slice T -> array T n) :=
   (array_to_slice a, array_from_slice a)
 .
 
-Axiom array_subslice: forall {T : Type} {n : usize} (x : array T n) (r : core_ops_range_Range usize), result (slice T).
-Axiom array_update_subslice: forall {T : Type} {n : usize} (x : array T n) (r : core_ops_range_Range usize) (ns : slice T), result (array T n).
+(* --- range sub-slicing: Rust's `&s[a..b]` --------------------------------- *)
 
-Axiom slice_subslice: forall {T : Type} (x : slice T) (r : core_ops_range_Range usize), result (slice T).
-Axiom slice_update_subslice: forall {T : Type} (x : slice T) (r : core_ops_range_Range usize) (ns : slice T), result (slice T).
+Definition sub_list {T} (l : list T) (a b : usize) : list T :=
+  firstn (Z.to_nat (to_Z b - to_Z a)) (skipn (Z.to_nat (to_Z a)) l).
+
+Lemma sub_list_zlen_le : forall {T} (l : list T) (a b : usize),
+  zlen (sub_list l a b) <= zlen l.
+Proof.
+  intros T l a b. unfold zlen, sub_list.
+  rewrite firstn_length, skipn_length. lia.
+Qed.
+
+Definition slice_sub {T : Type} (s : slice T) (a b : usize) : slice T.
+Proof.
+  refine (exist _ (sub_list (proj1_sig s) a b) _).
+  pose proof (proj2_sig s) as Hs.
+  pose proof (sub_list_zlen_le (proj1_sig s) a b) as Hle. unfold zlen in Hle.
+  exact (Z.le_trans _ _ _ Hle Hs).
+Defined.
+
+(* In range -> the sub-slice; out of range -> `None`, which
+   `core_slice_index_Slice_index` turns into a panic (`Fail`). *)
+Definition slice_range_get {T : Type} (r : core_ops_range_Range usize) (s : slice T)
+  : result (option (slice T)) :=
+  let a := r.(core_ops_range_Range_start) in
+  let b := r.(core_ops_range_Range_end_) in
+  match Z_le_dec (to_Z a) (to_Z b), Z_le_dec (to_Z b) (to_Z (slice_len s)) with
+  | left _, left _ => Ok (Some (slice_sub s a b))
+  | _, _ => Ok None
+  end.
+
+Definition slice_range_index {T : Type} (r : core_ops_range_Range usize) (s : slice T)
+  : result (slice T) :=
+  match slice_range_get r s with
+  | Ok (Some sub) => Ok sub
+  | Ok None => Fail_ Failure
+  | Fail_ e => Fail_ e
+  end.
+
+(* --- the WRITE-BACK of a mutable window: the real splice ------------------ *)
+
+(* `&mut s[a..b]` handed back a new window `new`: the result keeps s's elements
+   before a and from b on, and takes `new` in between. *)
+Definition splice_list {T} (l : list T) (a b : usize) (new : list T) : list T :=
+  firstn (Z.to_nat (to_Z a)) l ++ new ++ skipn (Z.to_nat (to_Z b)) l.
+
+(* A slice is a list with a length bound, so the splice is only usable as a
+   slice when it does not change the length. On every path Aeneas can produce
+   (the window handed back is the window that was borrowed) it does not; off
+   those paths the model keeps the original, which is what makes this total. *)
+Definition splice_or {T : Type} (s : slice T) (a b : usize) (new : list T) : list T :=
+  if Nat.eqb (length (splice_list (proj1_sig s) a b new)) (length (proj1_sig s))
+  then splice_list (proj1_sig s) a b new else proj1_sig s.
+
+Lemma splice_or_length : forall {T : Type} (s : slice T) (a b : usize) (new : list T),
+  length (splice_or s a b new) = length (proj1_sig s).
+Proof.
+  intros T s a b new. unfold splice_or.
+  destruct (Nat.eqb_spec (length (splice_list (proj1_sig s) a b new))
+                         (length (proj1_sig s))) as [E|_];
+    [ exact E | reflexivity ].
+Qed.
+
+Definition slice_splice {T : Type} (s : slice T) (a b : usize) (sub' : slice T) : slice T.
+Proof.
+  refine (exist _ (splice_or s a b (proj1_sig sub')) _).
+  rewrite splice_or_length. exact (proj2_sig s).
+Defined.
+
+Definition slice_range_get_mut {T : Type} (r : core_ops_range_Range usize) (s : slice T)
+  : result (option (slice T) * (option (slice T) -> slice T)) :=
+  match slice_range_get r s with
+  | Ok o => Ok (o, fun o' =>
+      match o' with
+      | Some sub' => slice_splice s r.(core_ops_range_Range_start)
+                                   r.(core_ops_range_Range_end_) sub'
+      | None => s
+      end)
+  | Fail_ e => Fail_ e
+  end.
+
+Definition slice_range_index_mut {T : Type} (r : core_ops_range_Range usize) (s : slice T)
+  : result (slice T * (slice T -> slice T)) :=
+  match slice_range_index r s with
+  | Ok sub => Ok (sub, slice_splice s r.(core_ops_range_Range_start)
+                                      r.(core_ops_range_Range_end_))
+  | Fail_ e => Fail_ e
+  end.
+
+Definition slice_subslice {T : Type} (x : slice T) (r : core_ops_range_Range usize) : result (slice T) :=
+  slice_range_index r x.
+Definition slice_update_subslice {T : Type} (x : slice T) (r : core_ops_range_Range usize) (ns : slice T) : result (slice T) :=
+  match slice_range_index_mut r x with
+  | Ok (_, back) => Ok (back ns)
+  | Fail_ e => Fail_ e
+  end.
+Definition array_subslice {T : Type} {n : usize} (x : array T n) (r : core_ops_range_Range usize) : result (slice T) :=
+  slice_range_index r (array_to_slice x).
+Definition array_update_subslice {T : Type} {n : usize} (x : array T n) (r : core_ops_range_Range usize) (ns : slice T) : result (array T n) :=
+  match slice_range_index_mut r (array_to_slice x) with
+  | Ok (_, back) => Ok (array_from_slice x (back ns))
+  | Fail_ e => Fail_ e
+  end.
 
 (*** Vectors *)
 
@@ -829,16 +1069,7 @@ Proof.
 Qed.
 
 Definition alloc_vec_Vec_len {T: Type} (v: alloc_vec_Vec T) : usize :=
-  exist _ (alloc_vec_Vec_length v) (alloc_vec_Vec_len_in_usize v).
-
-Fixpoint list_update {A} (l: list A) (n: nat) (a: A)
-  : list A :=
-  match l with
-  | []     => []
-  | x :: t => match n with
-    | 0%nat => a :: t
-    | S m => x :: (list_update t m a)
-end end.
+  mk_scalar_of_bounds Usize (alloc_vec_Vec_length v) (alloc_vec_Vec_len_in_usize v).
 
 Definition alloc_vec_Vec_bind {A B} (v: alloc_vec_Vec A) (f: list A -> result (list B)) : result (alloc_vec_Vec B) :=
   l <- f (alloc_vec_Vec_to_list v) ;
@@ -856,12 +1087,14 @@ Definition alloc_vec_Vec_insert {T: Type} (v: alloc_vec_Vec T) (i: usize) (x: T)
     then Ok (list_update l (usize_to_nat i) x)
     else Fail_ Failure).
 
-(* Helper *)
-Axiom alloc_vec_Vec_index_usize : forall {T : Type} (v : alloc_vec_Vec T) (i : usize), result T.
-
-(* Helper *)
-Axiom alloc_vec_Vec_update_usize : forall {T : Type} (v : alloc_vec_Vec T) (i : usize) (x : T), result (alloc_vec_Vec T).
-Axiom alloc_vec_Vec_update : forall {T : Type} (v : alloc_vec_Vec T) (i : usize) (x : T), alloc_vec_Vec T.
+(* `alloc_vec_Vec T` and `slice T` are the same sigma type, so the vector
+   helpers ARE the slice ones. *)
+Definition alloc_vec_Vec_index_usize {T : Type} (v : alloc_vec_Vec T) (i : usize) : result T :=
+  slice_index_usize v i.
+Definition alloc_vec_Vec_update_usize {T : Type} (v : alloc_vec_Vec T) (i : usize) (x : T) : result (alloc_vec_Vec T) :=
+  slice_update_usize v i x.
+Definition alloc_vec_Vec_update {T : Type} (v : alloc_vec_Vec T) (i : usize) (x : T) : alloc_vec_Vec T :=
+  slice_update v i x.
 
 Definition alloc_vec_Vec_index_mut_usize {T : Type} (v: alloc_vec_Vec T) (i: usize) :
   result (T * (T -> alloc_vec_Vec T)) :=
@@ -906,13 +1139,15 @@ Definition core_slice_index_Slice_index
   end.
 
 (* [core::slice::index::Range:::get]: forward function *)
-Axiom core_slice_index_SliceIndexRangeUsizeSlice_get : forall {T : Type} (i : core_ops_range_Range usize) (s : slice T), result (option (slice T)).
+Definition core_slice_index_SliceIndexRangeUsizeSlice_get {T : Type} (i : core_ops_range_Range usize) (s : slice T) : result (option (slice T)) :=
+  slice_range_get i s.
 
 (* [core::slice::index::Range::get_mut]: forward function *)
-Axiom core_slice_index_SliceIndexRangeUsizeSlice_get_mut :
-  forall {T : Type},
+Definition core_slice_index_SliceIndexRangeUsizeSlice_get_mut
+  {T : Type} :
     core_ops_range_Range usize -> slice T ->
-    result (option (slice T) * (option (slice T) -> slice T)).
+    result (option (slice T) * (option (slice T) -> slice T)) :=
+  slice_range_get_mut.
 
 (* [core::slice::index::Range::get_unchecked]: forward function *)
 Definition core_slice_index_SliceIndexRangeUsizeSlice_get_unchecked
@@ -931,28 +1166,38 @@ Definition core_slice_index_SliceIndexRangeUsizeSlice_get_unchecked_mut
   fun _ _ => Fail_ Failure.
 
 (* [core::slice::index::Range::index]: forward function *)
-Axiom core_slice_index_SliceIndexRangeUsizeSlice_index :
-  forall {T : Type}, core_ops_range_Range usize -> slice T -> result (slice T).
+Definition core_slice_index_SliceIndexRangeUsizeSlice_index
+  {T : Type} : core_ops_range_Range usize -> slice T -> result (slice T) :=
+  slice_range_index.
 
 (* [core::slice::index::Range::index_mut]: forward function *)
-Axiom core_slice_index_SliceIndexRangeUsizeSlice_index_mut :
-  forall {T : Type}, core_ops_range_Range usize -> slice T -> result (slice T * (slice T -> slice T)).
+Definition core_slice_index_SliceIndexRangeUsizeSlice_index_mut
+  {T : Type} : core_ops_range_Range usize -> slice T -> result (slice T * (slice T -> slice T)) :=
+  slice_range_index_mut.
 
 (* [core::slice::index::[T]::index_mut]: forward function *)
-Axiom core_slice_index_Slice_index_mut :
-  forall {T Idx Output : Type} (inst : core_slice_index_SliceIndex Idx (slice T) Output),
-  slice T -> Idx -> result (Output * (Output -> slice T)).
+Definition core_slice_index_Slice_index_mut
+  {T Idx Output : Type} (inst : core_slice_index_SliceIndex Idx (slice T) Output)
+  (s : slice T) (i : Idx) : result (Output * (Output -> slice T)) :=
+  inst.(core_slice_index_SliceIndex_index_mut) i s.
 
-(* [core::array::[T; N]::index]: forward function *)
-Axiom core_array_Array_index :
-  forall {T Idx Output : Type} {N : usize} (inst : core_ops_index_Index (slice T) Idx Output)
-  (a : array T N) (i : Idx), result Output.
+(* [core::array::[T; N]::index]: forward function. Rust's `impl Index for
+   [T; N]` forwards to the slice impl. *)
+Definition core_array_Array_index
+  {T Idx Output : Type} {N : usize} (inst : core_ops_index_Index (slice T) Idx Output)
+  (a : array T N) (i : Idx) : result Output :=
+  core_ops_index_Index_index _ inst (array_to_slice a) i.
 
-(* [core::array::[T; N]::index_mut]: forward function *)
-Axiom core_array_Array_index_mut :
-  forall {T Idx Output : Type} {N : usize} (inst : core_ops_index_IndexMut (slice T) Idx Output)
-  (a : array T N) (i : Idx),
-  result (Output * (Output -> array T N)).
+(* [core::array::[T; N]::index_mut]: forward function. Forwards to the slice
+   impl, write-back included: the slice-level write-back is composed with
+   `array_from_slice` to land back in the array type. *)
+Definition core_array_Array_index_mut
+  {T Idx Output : Type} {N : usize} (inst : core_ops_index_IndexMut (slice T) Idx Output)
+  (a : array T N) (i : Idx) : result (Output * (Output -> array T N)) :=
+  match inst.(core_ops_index_IndexMut_index_mut) (array_to_slice a) i with
+  | Ok (out, back) => Ok (out, fun o => array_from_slice a (back o))
+  | Fail_ e => Fail_ e
+  end.
 
 (* Trait implementation: [core::slice::index::private_slice_index::Range] *)
 Definition core_slice_index_private_slice_index_SealedRangeUsizeInst
@@ -1001,26 +1246,35 @@ Definition core_ops_index_IndexMutArrayInst {T Idx Output : Type} (N : usize)
 |}.
 
 (* [core::slice::index::usize::get]: forward function *)
-Axiom core_slice_index_usize_get : forall {T : Type}, usize -> slice T -> result (option T).
+Definition core_slice_index_usize_get {T : Type} (i : usize) (s : slice T) : result (option T) :=
+  Ok (nth_error (proj1_sig s) (Z.to_nat (to_Z i))).
 
 (* [core::slice::index::usize::get_mut]: forward function *)
-Axiom core_slice_index_usize_get_mut :
-  forall {T : Type}, usize -> slice T -> result (option T * (option T -> slice T)).
+Definition core_slice_index_usize_get_mut
+  {T : Type} (i : usize) (s : slice T) : result (option T * (option T -> slice T)) :=
+  Ok (nth_error (proj1_sig s) (Z.to_nat (to_Z i)),
+      fun o => match o with Some x => slice_update s i x | None => s end).
 
 (* [core::slice::index::usize::get_unchecked]: forward function *)
-Axiom core_slice_index_usize_get_unchecked :
-  forall {T : Type}, usize -> const_raw_ptr (slice T) -> result (const_raw_ptr T).
+Definition core_slice_index_usize_get_unchecked
+  {T : Type} : usize -> const_raw_ptr (slice T) -> result (const_raw_ptr T) :=
+  (* Don't know what the model should be - for now we always fail to make
+     sure code which uses it fails *)
+  fun _ _ => Fail_ Failure.
 
 (* [core::slice::index::usize::get_unchecked_mut]: forward function *)
-Axiom core_slice_index_usize_get_unchecked_mut :
-  forall {T : Type}, usize -> mut_raw_ptr (slice T) -> result (mut_raw_ptr T).
+Definition core_slice_index_usize_get_unchecked_mut
+  {T : Type} : usize -> mut_raw_ptr (slice T) -> result (mut_raw_ptr T) :=
+  fun _ _ => Fail_ Failure.
 
 (* [core::slice::index::usize::index]: forward function *)
-Axiom core_slice_index_usize_index : forall {T : Type}, usize -> slice T -> result T.
+Definition core_slice_index_usize_index {T : Type} (i : usize) (s : slice T) : result T :=
+  slice_index_usize s i.
 
 (* [core::slice::index::usize::index_mut]: forward function *)
-Axiom core_slice_index_usize_index_mut :
-  forall {T : Type}, usize -> slice T -> result (T * (T -> slice T)).
+Definition core_slice_index_usize_index_mut
+  {T : Type} (i : usize) (s : slice T) : result (T * (T -> slice T)) :=
+  slice_index_mut_usize s i.
 
 (* Trait implementation: [core::slice::index::private_slice_index::usize] *)
 Definition core_slice_index_private_slice_index_SealedUsizeInst
@@ -1039,15 +1293,17 @@ Definition core_slice_index_SliceIndexUsizeSliceInst (T : Type) :
 |}.
 
 (* [alloc::vec::Vec::index]: forward function *)
-Axiom alloc_vec_Vec_index : forall {T Idx Output : Type}
+Definition alloc_vec_Vec_index {T Idx Output : Type}
   (inst : core_slice_index_SliceIndex Idx (slice T) Output)
-  (Self : alloc_vec_Vec T) (i : Idx), result Output.
+  (Self : alloc_vec_Vec T) (i : Idx) : result Output :=
+  inst.(core_slice_index_SliceIndex_index) i Self.
 
 (* [alloc::vec::Vec::index_mut]: forward function *)
-Axiom alloc_vec_Vec_index_mut : forall {T Idx Output : Type}
+Definition alloc_vec_Vec_index_mut {T Idx Output : Type}
   (inst : core_slice_index_SliceIndex Idx (slice T) Output)
-  (Self : alloc_vec_Vec T) (i : Idx),
-  result (Output * (Output -> alloc_vec_Vec T)).
+  (Self : alloc_vec_Vec T) (i : Idx) :
+  result (Output * (Output -> alloc_vec_Vec T)) :=
+  inst.(core_slice_index_SliceIndex_index_mut) i Self.
 
 (* Trait implementation: [alloc::vec::Vec] *)
 Definition alloc_vec_Vec_IndexInst {T Idx Output : Type}
@@ -1066,12 +1322,14 @@ Definition alloc_vec_Vec_IndexMutInst {T Idx Output : Type}
 
 (*** Theorems *)
 
-Axiom alloc_vec_Vec_index_eq : forall {a : Type} (v : alloc_vec_Vec a) (i : usize) (x : a),
+Lemma alloc_vec_Vec_index_eq : forall {a : Type} (v : alloc_vec_Vec a) (i : usize) (x : a),
   alloc_vec_Vec_index (core_slice_index_SliceIndexUsizeSliceInst a) v i =
     alloc_vec_Vec_index_usize v i.
+Proof. reflexivity. Qed.
 
-Axiom alloc_vec_Vec_index_mut_eq : forall {a : Type} (v : alloc_vec_Vec a) (i : usize) (x : a),
+Lemma alloc_vec_Vec_index_mut_eq : forall {a : Type} (v : alloc_vec_Vec a) (i : usize) (x : a),
   alloc_vec_Vec_index_mut (core_slice_index_SliceIndexUsizeSliceInst a) v i =
     alloc_vec_Vec_index_mut_usize v i.
+Proof. reflexivity. Qed.
 
 End Primitives.

@@ -28,7 +28,6 @@ Update_Crypto.v
 # is determined by its underlying list (UIP on Z), so any consistent reading of
 # the removed axiom agrees with the total constructors. Nothing imports it.
 Update_MkArrayCanonical.v
-# Companion consistency witness for Update_Safety's 14-axiom quarantine: a
-# concrete list model of the opaque slice/array/copy ops + the machine-checked
-# proof that the axioms hold of it. Nothing imports it; it must come last.
-Update_Model.v
+# Non-vacuity: the extracted parser ACCEPTS one concrete package (vm_compute),
+# and rejects it on a flipped nonce / a disagreeing seam.
+Update_Reachable.v

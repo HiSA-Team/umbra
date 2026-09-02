@@ -8,6 +8,24 @@ by the firmware — it is an independent verification artifact.
 Backend decision: **Coq only.** Aeneas also has a Lean backend (more mature),
 but this project targets Coq; see [`REPORT.md`](REPORT.md) for the trade-offs.
 
+
+> **Revision note (2026-09-02): the deterministic layer is axiom-free.**
+> `update-core/proofs-coq/Primitives.v` is now a project variant of the Aeneas
+> backend file in which every backend `Axiom` (scalar widths, bitwise
+> operators, array/slice/vector operations, and the inconsistent `mk_array`,
+> which is simply gone) is a definition over the `list`/`Z` representation the
+> sigma types already carried. The "quarantine" laws of `Update_Safety.v` and
+> chain-core's `array_u8_ext` are therefore lemmas, the companion model files
+> (`Update_Model.v`, `Chain_Model.v`) are deleted because the model *is* the
+> definition, the scalar carrier is a boolean bounds check so equal values give
+> equal scalars without proof irrelevance, and `Print Assumptions` on every
+> update-core and chain-core theorem reports "Closed under the global context".
+> The headline SSProve theorem keeps only the 7 assumptions SSProve/mathcomp
+> themselves introduce (`crypto/headline-assumptions.txt`). A concrete accepted
+> package is exhibited by computation in `Update_Reachable.v`. Passages below
+> that describe the quarantine as axioms, or count 43/50 assumptions, predate
+> this revision.
+
 ## Dependencies
 
 | Tool | Version pinned/used | Why |

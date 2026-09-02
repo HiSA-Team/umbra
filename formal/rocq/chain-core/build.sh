@@ -10,8 +10,7 @@
 # single load path clash. So update-core must be built first, always.
 #
 # The build EMITS THE ASSUMPTION AUDIT: `Print Assumptions` on the two headline
-# theorems and on the axiom the model discharges, so every run prints the sets
-# rather than asserting them.
+# theorems, so every run prints the sets rather than asserting them.
 #   ./build.sh 2>&1 | tee assumptions.log
 set -euo pipefail
 
@@ -31,7 +30,7 @@ if [ "${1:-}" = "--deps" ]; then
 fi
 
 for f in Primitives AeneasLoopShim Update_Types Update_FunsExternal Update_Funs \
-         Update_Safety Update_Crypto Update_Model; do
+         Update_Safety Update_Crypto; do
   [ -f "$UP/$f.vo" ] || {
     echo "error: $UP/$f.vo missing — build update-core first (./build.sh --deps)" >&2
     exit 1; }
@@ -49,16 +48,12 @@ Require Import Chain_Body.
 Require Import Chain_Value.
 Require Import Chain_Compose.
 Require Import Chain_Residual.
-Require Import Chain_Model.
 Require Import Chain_Reachable.
 Print Assumptions chain_accept_pins_the_blob_body.
 Print Assumptions successful_blob_block_counts_agree.
 Print Assumptions verified_update_pins_the_blob_body.
 Print Assumptions chain_root_ignores_everything_outside_the_blocks.
 Print Assumptions verdict_ignores_the_unauthenticated_header_bytes.
-(* and the witness that the ONE added axiom is satisfiable — note that THIS
-   one's assumption set contains proof_irrelevance and NOT array_u8_ext *)
-Print Assumptions array_ext_has_a_model.
 (* non-vacuity: the accept branch is reachable *)
 Print Assumptions chain_gate_accepts_a_matching_measurement.
 EOF

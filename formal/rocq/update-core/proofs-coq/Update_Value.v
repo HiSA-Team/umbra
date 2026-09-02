@@ -13,7 +13,7 @@
 
     It rests on the VALUE half of Update_Safety's quarantine (`u8_xor_to_Z`,
     `u8_or_to_Z`, `array_index_usize_ext`, `slice_index_usize_ext`), all of which
-    `Update_Model.v` discharges against the concrete list model.
+    are now LEMMAS over the concrete Primitives (see Update_Safety.v).
 
     CONCLUSION SHAPE. The comparators' operands are `u8 = {z : Z | 0 <= z <= 255}`,
     a sigma type over a `Prop`. Two `u8`s with the same `to_Z` are equal only up to

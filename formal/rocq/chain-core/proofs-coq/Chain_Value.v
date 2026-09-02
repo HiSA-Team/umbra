@@ -17,7 +17,7 @@
     ASSUMPTION DISCIPLINE. Every opaque array/slice/copy operation used here is
     pinned by `Update_Safety`'s existing 20-axiom quarantine — the SAME block, not
     a second parallel one — and that block is discharged against a concrete list
-    model in `Update_Model.v`. This file introduces no axiom of its own.
+    Primitives (they are lemmas). This file introduces no axiom of its own.
 
     NB the extracted `block_preimage` computes `base` from `blk` ALONE (a cast, a
     multiply and an add; the blob is not consulted), so two runs at the same index
@@ -82,7 +82,7 @@ Proof.
   intros z Hz.
   assert (Hb : scalar_min Usize <= z <= scalar_max Usize)
     by (rewrite usize_min_eq, usize_max_eq; lia).
-  exists (exist (fun x : Z => scalar_min Usize <= x <= scalar_max Usize) z Hb).
+  exists (mk_scalar_of_bounds Usize z Hb).
   reflexivity.
 Qed.
 
@@ -601,31 +601,17 @@ Proof.
 Qed.
 
 (* ===================================================================== *)
-(* THE ONE ADDITION TO THE QUARANTINE.                                    *)
+(* Q21 — a byte array is determined by its bytes.                         *)
 (*                                                                        *)
 (* The accept gate is a COMPARISON, so all it can establish is that the    *)
 (* computed root and the blob's `header.hmac` window have equal byte       *)
-(* VALUES — `to_Z x = to_Z y`, never `x = y`. Every result in update-core  *)
-(* lives at that level for the same reason. But the collision reduction    *)
+(* VALUES — `to_Z x = to_Z y`, never `x = y`. The collision reduction      *)
 (* (Chain_Trace) needs the two accepted runs to end at the SAME root as a  *)
-(* term, because that is what "both traces end at r" means.                *)
-(*                                                                        *)
-(* Q21 closes exactly that gap and nothing else: a byte array is           *)
-(* determined by its bytes. It is a statement about the opaque reader      *)
-(* `Primitives.array_index_usize`, in the same family as Q7/Q12/Q17, and   *)
-(* it is DISCHARGED against the same concrete list model in Chain_Model.v  *)
-(* (`array_ext_has_a_model`). It says nothing about HMAC, about the seam,  *)
-(* or about any blob.                                                      *)
-(*                                                                        *)
-(* It is stated for `u8` arrays only, which is all the extracted body has. *)
+(* term. `Update_Safety.array_u8_ext` closes exactly that gap: it is a     *)
+(* LEMMA (array = list with a decidable length certificate; u8 = Z with a  *)
+(* decidable bounds certificate; both by UIP_dec, no proof irrelevance).   *)
+(* It used to be the one axiom this development added.                    *)
 (* ===================================================================== *)
-
-Axiom array_u8_ext : forall (n : usize) (a b : array u8 n),
-  (forall i : usize, 0 <= to_Z i < to_Z n ->
-     exists x y, array_index_usize a i = Ok x
-              /\ array_index_usize b i = Ok y
-              /\ to_Z x = to_Z y) ->
-  a = b.
 
 (** The result-level form of Q21, which is what the callers actually have: a read
     that succeeds in one array and agrees as a RESULT with the other's is enough.
@@ -638,19 +624,6 @@ Proof.
   intros n a b H. apply (array_u8_ext n). intros i Hi.
   destruct (array_index_usize_ok a i Hi) as [x Hx].
   exists x, x. split; [ exact Hx |]. split; [ rewrite <- (H i Hi); exact Hx | reflexivity ].
-Qed.
-
-(** Lists agreeing at every `nth_error` are equal. *)
-Lemma nth_error_list_eq : forall {A} (l1 l2 : list A),
-  (forall k, nth_error l1 k = nth_error l2 k) -> l1 = l2.
-Proof.
-  induction l1 as [| x t1 IH]; intros l2 H.
-  - destruct l2 as [| y t2]; [ reflexivity |].
-    specialize (H 0%nat). cbn in H. discriminate.
-  - destruct l2 as [| y t2].
-    + specialize (H 0%nat). cbn in H. discriminate.
-    + assert (Hx : x = y) by (specialize (H 0%nat); cbn in H; injection H; auto).
-      subst y. f_equal. apply IH. intro k. exact (H (S k)).
 Qed.
 
 (** The little-endian encoder is a function of the VALUE, not of the term: two

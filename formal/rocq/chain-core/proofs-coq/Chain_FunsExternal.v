@@ -1,8 +1,8 @@
 (** Filled from the Aeneas template by ../extract.sh. NOT auto-generated
     verbatim: every opaque seam is an ALIAS of the constant of the same name in
-    `Update_FunsExternal`, so that `Update_Safety`'s existing 20-axiom quarantine
-    — discharged against the concrete list model in `Update_Model.v` — applies to
-    this model too, and no second, parallel axiom block is opened.
+    `Update_FunsExternal` (all DEFINITIONS there), so that `Update_Safety`'s
+    laws about them apply to this model too, and no second, parallel block of
+    seams is opened.
 
     `mk_array4` is update-core's TOTAL definition, never the Coq backend's
     `Primitives.mk_array`, which is an inconsistent axiom (it proves `False`;

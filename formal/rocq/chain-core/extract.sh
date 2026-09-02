@@ -46,7 +46,7 @@ fi
 # operation, so a naive fill would give this model its OWN
 # `core_slice_Slice_copy_from_slice` — a constant DISTINCT from update-core's,
 # about which `Update_Safety`'s 20-axiom quarantine says nothing. That would
-# force a second, parallel axiom block, and nothing in `Update_Model.v` would
+# force a second, parallel seam block, and nothing in `Update_Safety.v` would
 # discharge it. Instead every opaque seam here is a transparent ALIAS of
 # update-core's constant, so the existing quarantine applies verbatim and
 # `Print Assumptions` on the theorems below lists those same axioms and no new
@@ -63,9 +63,9 @@ grep -q '^Axiom core_slice_Slice_copy_from_slice :' "$PROOFS/Chain_FunsExternal_
 cat > "$PROOFS/Chain_FunsExternal.v" <<'EOF'
 (** Filled from the Aeneas template by ../extract.sh. NOT auto-generated
     verbatim: every opaque seam is an ALIAS of the constant of the same name in
-    `Update_FunsExternal`, so that `Update_Safety`'s existing 20-axiom quarantine
-    — discharged against the concrete list model in `Update_Model.v` — applies to
-    this model too, and no second, parallel axiom block is opened.
+    `Update_FunsExternal` (all DEFINITIONS there), so that `Update_Safety`'s
+    laws about them apply to this model too, and no second, parallel block of
+    seams is opened.
 
     `mk_array4` is update-core's TOTAL definition, never the Coq backend's
     `Primitives.mk_array`, which is an inconsistent axiom (it proves `False`;

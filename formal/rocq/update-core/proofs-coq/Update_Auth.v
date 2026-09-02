@@ -40,7 +40,7 @@
     for every j < 16. It composes P1 with `Update_Value.ct_eq16_sound` and the
     VALUE half of Update_Safety's quarantine (`copy_from_slice_val`,
     `array_from_slice_val`, `slice_index_range_len/val`), all of which
-    `Update_Model.v` discharges against the concrete list model. Unlike
+    are now LEMMAS over the concrete Primitives (Update_Safety.v). Unlike
     `accept_implies_auth_gates`, it therefore DOES rest on quarantine axioms —
     see the assumption table in REPORT §7.
 

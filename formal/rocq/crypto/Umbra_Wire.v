@@ -80,11 +80,11 @@ Qed.
 (** A byte CODE becomes a byte. Codes above 255 are clamped, so the map is
     total; on the byte range it is the identity, which is what makes the
     package space faithful (see `to_Z_byte_of_nat`). *)
-Definition byte_of_nat (n : nat) : u8 := exist _ (Z.of_nat (Nat.min n 255)) (byte_bound n).
+Definition byte_of_nat (n : nat) : u8 := mk_scalar_of_bounds U8 (Z.of_nat (Nat.min n 255)) (byte_bound n).
 
 Lemma to_Z_byte_of_nat : forall n : nat,
   (n <= 255)%nat -> to_Z (byte_of_nat n) = Z.of_nat n.
-Proof. intros n Hn. unfold to_Z, byte_of_nat; cbn [proj1_sig]. lia. Qed.
+Proof. intros n Hn. unfold to_Z, byte_of_nat, mk_scalar_of_bounds; cbn [proj1_sig]. lia. Qed.
 
 (* ===================================================================== *)
 (* THE WIRE DECODER                                                       *)

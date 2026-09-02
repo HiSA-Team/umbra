@@ -4,26 +4,20 @@
     at `256^76` and proves that on that space any two seams satisfying
     `ByteSeam` agree — but only under one named model-level premise,
     `ArrayVectors`: every 91-element list of bytes is the read-sequence
-    (`bytes91`) of some `array u8 91`. That premise is true of Rust and is not
-    provable against the Aeneas backend, whose `Primitives.array_index_usize`
-    is a bare axiom with no law relating any constructor to indexing. Asserting
-    such a premise without checking it is how a development quietly becomes
-    inconsistent, and asserting more than the result needs is how a development
-    quietly becomes unfalsifiable. This file rules out both.
+    (`bytes91`) of some `array u8 91`. That premise is true of Rust; it used to
+    be unprovable against the Aeneas backend, whose `array_index_usize` was a
+    bare axiom with no law relating any constructor to indexing. Our
+    Primitives.v now DEFINES `array_index_usize` (nth_error on the underlying
+    list), so the premise is a theorem (`ArrayVectors_holds`). Asserting more
+    than the result needs is how a development quietly becomes unfalsifiable;
+    the necessity half of this file rules that out.
 
     WHAT IS PROVED, AND WHY THE PAIR MATTERS.
 
-    * SUFFICIENT AND CONSISTENT — `ArrayVectors_holds_in_the_list_model`.
-      `ArrayVectors` holds under `ModelIndex`, the statement that
-      `array_index_usize` is interpreted by `Update_Model.model_array_index`.
-      That function is not a fresh model invented for this file: it is
-      literally the `op_array_index` field of `Update_Model.model_ops`, the
-      witness of `Update_Model.quarantine_has_a_model`. So the SAME
-      interpretation of the SAME symbol satisfies all twenty quarantine laws
-      AND `ArrayVectors` simultaneously — adding the premise cannot have made
-      the axiom set inconsistent, and it cannot have silently displaced any of
-      the twenty. The proof is constructive: it BUILDS the array (clamp each
-      `Z` into `u8`) and computes its read-sequence.
+    * SUFFICIENT — `ArrayVectors_holds`. Proved outright against the concrete
+      `array_index_usize`, with no hypothesis and no axiom. The proof is
+      constructive: it BUILDS the array (clamp each `Z` into `u8`) and
+      computes its read-sequence.
 
     * NECESSARY — `the_counterexample_rebuilds_without_ArrayVectors` and its
       contrapositive `pinning_forces_ArrayVectors_on_the_reachable_messages`.
@@ -34,10 +28,7 @@
       `ArrayVectors` instances it quantifies over.
 
     Together: the fix is EXACTLY `ArrayVectors` on the reachable messages —
-    necessary and sufficient, no slack, nothing displaced. Nothing here weakens
-    the honest statement that the premise is unprovable against the backend's
-    uninterpreted `array_index_usize`; it establishes that the premise is the
-    right one to be stuck on. *)
+    necessary and sufficient, no slack — and it is now a theorem. *)
 
 Require Import Primitives.
 Import Primitives.
@@ -47,7 +38,6 @@ Require Import List.
 Import ListNotations.
 Require Import Update_Types.
 Require Import Update_Safety.
-Require Import Update_Model.
 Require Import Update_Encoding.
 Require Import Umbra_Canonical.
 Require Import Umbra_ByteSpace.
@@ -58,14 +48,6 @@ Local Open Scope Primitives_scope.
 (* ===================================================================== *)
 (** * 1. Satisfiability, in the model that already discharges the quarantine *)
 (* ===================================================================== *)
-
-(** The model's interpretation of the ONE opaque symbol `bytes91` depends on,
-    verbatim from `Update_Model.model_array_index` — which is the
-    `op_array_index` field of `model_ops`, the witness of
-    `Update_Model.quarantine_has_a_model`. *)
-Definition ModelIndex : Prop :=
-  forall (T : Type) (n : usize) (a : array T n) (i : usize),
-    @array_index_usize T n a i = model_array_index T n a i.
 
 (* ---- a TOTAL clamp Z -> u8; `scalar` is a sigma over Z, so this is direct ---- *)
 Definition clampZ (z : Z) : Z := Z.max 0 (Z.min z 255).
@@ -79,11 +61,11 @@ Proof.
   lia.
 Qed.
 
-Definition mkbyte (z : Z) : u8 := exist _ (clampZ z) (clampZ_ok z).
+Definition mkbyte (z : Z) : u8 := mk_scalar_of_bounds U8 (clampZ z) (clampZ_ok z).
 
 Lemma to_Z_mkbyte : forall z, 0 <= z <= 255 -> to_Z (mkbyte z) = z.
 Proof.
-  intros z Hz. unfold to_Z, mkbyte, clampZ. cbn [proj1_sig]. lia.
+  intros z Hz. unfold to_Z, mkbyte, mk_scalar_of_bounds, clampZ. cbn [proj1_sig]. lia.
 Qed.
 
 Lemma map_to_Z_mkbyte : forall b, allbytes b = true -> map to_Z (map mkbyte b) = b.
@@ -93,10 +75,12 @@ Proof.
   intros z Hz. apply to_Z_mkbyte. exact (proj1 (allbytes_spec b) Hb z Hz).
 Qed.
 
-(** The check the re-indexing had assumed rather than performed. *)
-Theorem ArrayVectors_holds_in_the_list_model : ModelIndex -> ArrayVectors.
+(** The check the re-indexing had assumed rather than performed. With
+    `array_index_usize` DEFINED (nth_error on the underlying list, Primitives.v)
+    the premise is a theorem outright, under no hypothesis. *)
+Theorem ArrayVectors_holds : ArrayVectors.
 Proof.
-  intros HM b Hlen Hb.
+  intros b Hlen Hb.
   assert (Hl : Z.of_nat (length (map mkbyte b)) = to_Z 91%usize).
   { rewrite map_length, Hlen. reflexivity. }
   exists (exist _ (map mkbyte b) Hl).
@@ -107,7 +91,7 @@ Proof.
                              (uz (Z.of_nat i)) with
     | Ok v => to_Z v | _ => 256 end
     = nth i b 0).
-  { intros i Hi. rewrite HM. unfold model_array_index, opt_result.
+  { intros i Hi. unfold array_index_usize, opt_result.
     cbn [proj1_sig].
     assert (Hrange : 0 <= Z.of_nat i <= usize_max).
     { pose proof usize_max_bound as Hu. unfold u32_max in Hu. lia. }
@@ -201,6 +185,6 @@ Proof.
            (Hpin macf mb mb0 Hmb Hbs (exist _ (@nil u8) Hk) j)).
 Qed.
 
-Print Assumptions ArrayVectors_holds_in_the_list_model.
+Print Assumptions ArrayVectors_holds.
 Print Assumptions the_counterexample_rebuilds_without_ArrayVectors.
 Print Assumptions pinning_forces_ArrayVectors_on_the_reachable_messages.

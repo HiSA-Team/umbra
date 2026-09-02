@@ -115,8 +115,8 @@
         `u32::from_le_bytes` used to have no law at all, so `r.(version)` was
         formally an arbitrary function of four attacker-supplied bytes. With Q19
         (the decoder digit spec, the mirror of Q18) and Q20 (the read law for the
-        4-byte `mk_array` literal the parser decodes), both discharged in
-        Update_Model.v, these say: `pkg[24..28]` read little-endian IS the
+        4-byte `mk_array` literal the parser decodes), both proved in
+        Update_Safety.v, these say: `pkg[24..28]` read little-endian IS the
         version handed back and compared by `select_active_slot`, those same four
         bytes are the ones inside the MAC'd preimage at [35,39), and activation
         implies that reading strictly exceeds the active slot's version.

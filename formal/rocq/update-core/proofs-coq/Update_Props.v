@@ -20,8 +20,8 @@
     TWENTY axioms in total: those six SUCCESS laws, plus eight VALUE laws used
     by the byte-level authentication results, plus four WRITE-BACK/ENCODER laws
     used by the preimage-assembly results, plus two DECODER laws used by the
-    wire-format results. All twenty have a machine-checked model in
-    `Update_Model.v`. See REPORT §7. *)
+    wire-format results. All twenty are now LEMMAS over the concrete
+    Primitives (no axiom survives). See REPORT §7. *)
 
 Require Import Primitives.
 Import Primitives.
@@ -146,8 +146,8 @@ Proof. apply select_none_none. Qed.
 
 (* --------------------------------------------------------------------------
    P3 — parse_and_verify bounds-safety (no-Fail). DONE: proved in Update_Safety.v
-   exactly in the shape sketched below; the obligation list is the quarantine
-   that file declares (and Update_Model.v exhibits a model for).
+   exactly in the shape sketched below; the obligation list is the block of
+   laws that file PROVES about the concrete Primitives.
 
      Theorem parse_and_verify_total :
        forall {H} (inst : PkgHmac_t H) pkg en (h : H) key,

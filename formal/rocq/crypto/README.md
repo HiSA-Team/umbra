@@ -22,6 +22,16 @@ cryptographic proof consumes, and proves a **reduction**: an adversary that gets
 the device to accept a package whose authenticated core was never signed is an
 adversary against the EUF-CMA security of the underlying MAC.
 
+> **Revision note (2026-09-02).** The Aeneas half of the axiom budget described
+> below no longer exists: the backend operations are defined, not postulated
+> (`../update-core/proofs-coq/Primitives.v`), `Update_Safety`'s laws are lemmas,
+> `Update_Model.v` is gone, and `ArrayVectors` is a theorem
+> (`Umbra_ArrayVectors.ArrayVectors_holds`) rather than a premise, so
+> `device_forgery_le_eufcma_for_the_concrete_engine` no longer carries it.
+> `Print Assumptions device_forgery_le_eufcma_at_the_real_seam` now lists the
+> **7** SSProve/mathcomp foundations and nothing else; every count of 43 or 50
+> below is historical.
+
 Read ["What is *not* proved"](#what-is-not-proved) before quoting any of it.
 
 ## Read this first: the bound does not cover the update blob
@@ -295,7 +305,7 @@ digit bound being `256` rather than `255`. Only the index set changes.
 | `Umbra_WireConverse.widx_spreads_back` (`Qed`) | on an accepted package the game's index spreads back to exactly the message the device authenticates |
 | `Umbra_WireConverse.msg_space256_pins_the_seam` (`Qed`, premise `ArrayVectors`) | **any two seams `ByteSeam` admits give the same pinned MAC at every message of the space** — the exact negation of the counterexample |
 | `Umbra_WireConverse.patching_cannot_create_a_collision_at_MSGB256n` (`Qed`, premise `ArrayVectors`) | no choice of conforming seam creates a collision the engine did not already have |
-| `Umbra_ArrayVectors.ArrayVectors_holds_in_the_list_model` (`Qed`) | that premise is **satisfiable in the same list model** that witnesses `Update_Model.quarantine_has_a_model` — the very interpretation of `array_index_usize` that discharges the twenty quarantine laws also validates `ArrayVectors`, so adding it displaced nothing |
+| `Umbra_ArrayVectors.ArrayVectors_holds` (`Qed`, unconditional since 2026-09-02; was `ArrayVectors_holds_in_the_list_model : ModelIndex -> ArrayVectors`) | that premise is **satisfiable in the same list model** that witnesses `Update_Model.quarantine_has_a_model` — the very interpretation of `array_index_usize` that discharges the twenty quarantine laws also validates `ArrayVectors`, so adding it displaced nothing |
 | `Umbra_ArrayVectors.pinning_forces_ArrayVectors_on_the_reachable_messages` (`Qed`) | and it is **necessary**: deny it at a single reachable message and the dead-zone counterexample rebuilds there |
 
 **A correction to the record.** The `ArrayVectors` annotation on the
@@ -1251,7 +1261,7 @@ disclosed one. It does not close it.
   about that need, and they are why the premise is defensible rather than
   merely honest:
 
-  * `Umbra_ArrayVectors.ArrayVectors_holds_in_the_list_model` (`Qed`) — under
+  * `Umbra_ArrayVectors.ArrayVectors_holds` (`Qed`; before 2026-09-02 it was conditional) — under
     `ModelIndex` (`array_index_usize` interpreted by
     `Update_Model.model_array_index`), `ArrayVectors` **holds**. That function
     is not a model built for the occasion: it is literally the

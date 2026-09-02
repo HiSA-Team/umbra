@@ -223,8 +223,8 @@ Definition tag_of_pkg (pkg : slice u8) : Z :=
     syntactically distinct atoms for the same projection. *)
 Lemma u8_to_Z_range : forall b : u8, 0 <= to_Z b <= 255.
 Proof.
-  intro b. unfold to_Z. destruct b as [x Hx].
-  cbn. cbn in Hx. unfold u8_min, u8_max in Hx. lia.
+  intro b. pose proof (to_Z_bounds b) as Hx.
+  unfold scalar_min, scalar_max, u8_min, u8_max in Hx. lia.
 Qed.
 
 (** Every digit of the encoding is a legal base-257 digit. *)

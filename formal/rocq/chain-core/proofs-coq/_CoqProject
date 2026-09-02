@@ -35,7 +35,3 @@ Chain_Residual.v
 # measurement IS accepted, so the target theorem's hypothesis is met by every
 # honestly-signed blob.
 Chain_Reachable.v
-# Companion consistency witness for the ONE axiom added to update-core's
-# quarantine (Q21, array_u8_ext): it holds of the same list model that satisfies
-# Q1..Q20. Nothing imports it; it must come last.
-Chain_Model.v
