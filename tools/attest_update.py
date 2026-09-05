@@ -184,8 +184,43 @@ def build_pkg(nonce, author_id, version, blob, master, key=None):
     header = blob[0:48]
     pre = PKG_LABEL + bytes(nonce) + struct.pack("<III", author_id, version, len(blob)) + header
     tag = hmac.new(key if key is not None else kupdate(master), pre, hashlib.sha256).digest()
+    _DUMP["last"] = (bytes(nonce), pre, tag, key is None)
     return (struct.pack("<I", UPDATE_MAGIC) + bytes(nonce)
             + struct.pack("<III", author_id, version, len(blob)) + blob + tag)
+
+
+# ---------------------------------------------------------------------------
+# Package dump (differential corpus). With --dump FILE, every package sent to
+# the device appends one line: `name status armed_nonce pkg seam pre tag`, hex,
+# '-' when unknown. seam = real (tag under K_update; enters the Rocq table
+# seam), forged (random key; never enters the table), none (bytes not built by
+# build_pkg, e.g. the malformed class). Consumed by
+# crates/umbra-update-core/src/differential_dump.rs via
+# UMBRA_DIFFERENTIAL_DEVICE=FILE, which re-runs the Rust and the extracted
+# parser on the same bytes and checks both against the device's status word.
+# The armed nonce is the last one this process sent with a quote request
+# (zeros if none): what the device compares the package nonce against.
+# ---------------------------------------------------------------------------
+_DUMP = {"path": None, "name": "manual", "armed": None, "last": None}
+
+
+def _dump_line(pkg, status):
+    if not _DUMP["path"]:
+        return
+    pkg = bytes(pkg)
+    seam, pre, tag = "none", "-", "-"
+    last = _DUMP["last"]
+    # The built package is recognised by its nonce and tag surviving intact;
+    # header/code mutations (tamper, header-flip) keep both, so the recorded
+    # (pre, tag) is the SIGNED one and the seam lookup on a mutated header
+    # misses, exactly as the real HMAC would mismatch.
+    if last is not None and len(pkg) >= 52 and pkg[4:20] == last[0] and pkg[-32:] == last[2]:
+        seam = "real" if last[3] else "forged"
+        pre, tag = last[1].hex(), last[2].hex()
+    armed = _DUMP["armed"] or bytes(16)
+    st = "-" if status is None else f"{status:08x}"
+    with open(_DUMP["path"], "a") as f:
+        f.write(f"{_DUMP['name']} {st} {armed.hex()} {pkg.hex()} {seam} {pre} {tag}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +236,7 @@ def _quote(ser):
     """Request a quote with a fresh nonce; return (fields|None, nonce, raw)."""
     nonce = secrets.token_bytes(16)
     send_frame(ser, CMD_QUOTE_REQ, nonce)
+    _DUMP["armed"] = nonce
     cmd, payload, _ = recv_frame(ser)
     if cmd != CMD_QUOTE_RESP or len(payload) != QUOTE_LEN:
         return None, nonce, payload
@@ -210,7 +246,9 @@ def _quote(ser):
 def _update(ser, pkg):
     send_frame(ser, CMD_UPDATE_REQ, bytes(pkg))
     cmd, payload, _ = recv_frame(ser)
-    return struct.unpack("<I", payload[:4])[0] if payload and len(payload) >= 4 else None
+    st = struct.unpack("<I", payload[:4])[0] if payload and len(payload) >= 4 else None
+    _dump_line(pkg, st)
+    return st
 
 
 def _dummy_blob():
@@ -229,6 +267,9 @@ ATTACKS = {
     "tamper":      (True, {ERR_VERIFY}, "valid tag, flipped code byte (measurement fails)"),
     "header-flip": (True, {ERR_AUTH}, "flip trust_level after signing (tag covers blob[0:48])"),
     "downgrade":   (True, {ERR_ROLLBACK, ERR_VERIFY}, "install version <= active"),
+    # Needs a FRESH blob (--version above the active slot, derived == declared):
+    # run it alone (`--attack re-arm`), not under `all` with the stale blob.
+    "re-arm":      (True, {ERR_ROLLBACK}, "re-arm a past challenge, resubmit the identical accepted package"),
 }
 
 
@@ -278,11 +319,29 @@ def _one_attack(ser, master, name, blob, version, author_id):
         _q, n, _ = _quote(ser)
         st = _update(ser, build_pkg(n, author_id, version, blob, master))
         return st in (ERR_ROLLBACK, ERR_VERIFY), f"status=0x{st:08x}"
+    if name == "re-arm":
+        # Any Non-Secure caller can arm any challenge, including one already used:
+        # the nonce is single-use per arming, not a replay defense. Install `blob`
+        # for real, wait for the reboot, re-arm the SAME challenge and resend the
+        # SAME bytes; the install gate (derived == declared > active) must stop it.
+        _q, n, _ = _quote(ser)
+        pkg = build_pkg(n, author_id, version, blob, master)
+        st = _update(ser, pkg)
+        if st != 0:
+            return False, f"install status=0x{st:08x} (needs a fresh blob at --version above the active slot)"
+        if wait_ready(ser, master, timeout=120.0, expect_version=version) is None:
+            return False, "device did not come back after the install"
+        send_frame(ser, CMD_QUOTE_REQ, n)      # re-arm c_old
+        _DUMP["armed"] = n
+        recv_frame(ser)
+        st = _update(ser, pkg)                 # identical bytes, second time
+        return st == ERR_ROLLBACK, f"status=0x{st:08x}"
     raise ValueError(name)
 
 
 def run_attack(ser, master, name, count, blob, version, author_id):
     mut, accept, label = ATTACKS[name]
+    _DUMP["name"] = name
     accept_str = "/".join(UPDATE_STATUS.get(c, hex(c)) for c in sorted(accept))
     n = 1 if mut else count   # mutating attacks touch the inactive slot; run once
     defended, last = 0, ""
@@ -402,7 +461,12 @@ def main():
     ap.add_argument("--csv", help="append per-sample bench rows to this CSV file")
     ap.add_argument("--cpu-hz", type=float, default=800e6,
                     help="CPU clock for cycle->time conversion (default 800 MHz)")
+    ap.add_argument("--dump", metavar="FILE",
+                    help="append every package sent to the device (bytes, armed nonce, "
+                         "signed preimage/tag, device status) to FILE for the Rust-vs-Rocq "
+                         "differential corpus (UMBRA_DIFFERENTIAL_DEVICE=FILE)")
     args = ap.parse_args()
+    _DUMP["path"] = args.dump
 
     try:
         import serial  # noqa: PLC0415 — optional dep; only needed when talking to the board
@@ -422,8 +486,8 @@ def main():
         # "all" runs the whole adversarial suite in one pass. Order matters: the
         # non-mutating attacks run first, so a mutating one cannot leave the device
         # rebooted into a different version underneath them.
-        names = (sorted(ATTACKS, key=lambda n: ATTACKS[n][0])
-                 if args.attack == "all" else [args.attack])
+        names = (sorted((n for n in ATTACKS if n != "re-arm"), key=lambda n: ATTACKS[n][0])
+                 if args.attack == "all" else [args.attack])   # re-arm needs its own fresh blob
         blob = open(args.update_blob, "rb").read() if args.update_blob else None
         results = []
         for name in names:
@@ -450,6 +514,7 @@ def main():
         nonce = secrets.token_bytes(16)
         print("[*] requesting quote...")
         send_frame(ser, CMD_QUOTE_REQ, nonce)
+        _DUMP["armed"] = nonce
         cmd, payload, _ = recv_frame(ser)
         if cmd != CMD_QUOTE_RESP or len(payload) != QUOTE_LEN:
             st = struct.unpack("<I", payload[:4])[0] if len(payload) >= 4 else 0
@@ -478,6 +543,8 @@ def main():
         cmd, payload, pre = recv_frame(ser)
         t_resp = time.perf_counter() - t0 - t_tx
         st = struct.unpack("<I", payload[:4])[0]
+        _DUMP["name"] = "tamper" if args.tamper else f"update-v{ver}"
+        _dump_line(pkg, st)
         name = "OK" if st == 0 else UPDATE_STATUS.get(st, "REJECTED")
         print(f"[*] update status: 0x{st:08x} ({name})")
         phases = {k: bench_cycles(pre, rf"{k}=([0-9A-F]{{8}})")

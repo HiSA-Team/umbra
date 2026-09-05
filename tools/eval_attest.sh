@@ -38,8 +38,11 @@ for ((v = START; v < START + NUPD; v++)); do
     # Always a clean blob build (~15 s): protect_enclave.py in-place re-sign is NOT
     # idempotent — a fast re-sign produced a measured-OK but crashing enclave (2026-07-19).
     "$ROOT/tools/make_update_blob.sh" "$v" "$BLOB" "$APP"
+    # UMBRA_DUMP=<file>: also record every package sent (differential corpus,
+    # see attest_update.py --dump and differential_dump.rs).
     "$PY" "$ROOT/tools/attest_update.py" --port "$PORT" \
         --update-blob "$BLOB" --version "$v" --bench --csv "$CSV" \
+        ${UMBRA_DUMP:+--dump "$UMBRA_DUMP"} \
         || { echo "ABORT: update to v$v failed (see $CSV)"; exit 1; }
 done
 

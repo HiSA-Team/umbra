@@ -121,3 +121,30 @@ not by anything v2 touches.
    end up holding four *different* keys — at which point the device's tags fail
    host verification and the run is worthless. This happened on 2026-08-10 and
    presented as `tag: FAIL` on a board that had just been flashed correctly.
+
+## 2026-09-05: `n657_attest_update_v2_relocguard_2026-09-05.csv` and the differential corpus
+
+Firmware: pkg-tag v2, separated keys, plus two install-handler rules added on
+2026-09-04/05: the exact-length rule (`reloc_count == 0` and
+`blob_len == 48 + code_size`, so no unauthenticated tail exists past the
+measured blocks) and the declared/derived version binding (the tag-covered
+`version` field must equal the version the measurement chain yields, else
+`ERR_VERIFY`). Both live in `attest_imp.rs`, outside the verified crate.
+
+The CSV holds **two runs appended** (the eval script appends): rows 1-30 of each
+kind are run 1 (exact-length rule only), rows 31-60 are run 2 (both rules), the
+build the paper reports. Run 2: `auth_cyc` mean 19,130, sd 52 (0.024 ms) of an
+83.3 ms on-device update; 30/30 installs; the eight adversarial classes 8/8
+defended (downgrade with a below-floor image returns `ERR_VERIFY`, not
+`ERR_ROLLBACK`: the image is unmeasurable inside the floor window, so the
+re-probe fails before the rollback arm). Run 1's "downgrade" attempt was a
+harness misuse (v40 image declared v2) and is what motivated the binding.
+
+`n657_differential_corpus.txt` is the run-2 transcript of every package the
+host sent (`attest_update.py --dump`): name, device status, armed nonce,
+package bytes, seam kind, signed preimage and tag. `differential_dump.rs`
+turns it into `formal/rocq/update-core/proofs-coq/Update_Differential.v`
+(two vectors per class and status) and checks that the device status agrees
+with the crate's verdict on the same bytes; `vm_compute` then checks the
+extracted term. The Rust dumper accepts the device key only as a dummy; the
+table seam looks up by preimage.

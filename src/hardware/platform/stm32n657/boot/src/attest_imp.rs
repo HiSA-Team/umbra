@@ -413,7 +413,21 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
     // Authenticate: nonce binding + pkg_tag (over the Secure copy).
     let (author_id, version, blob_len) = match parse_and_verify(pkg, &expected, hw_hmac_single, &key)
     {
-        Ok(v) => (v.author_id, v.version, v.blob.len()),
+        Ok(v) => {
+            // Exact-length rule (2026-09-04): the region past 48 + code_size (the
+            // relocation table) is read by no N657 code and covered by neither
+            // authenticator, so reject unless it is empty: reloc_count == 0 and
+            // blob_len == 48 + code_size. Both fields sit inside the tag-covered
+            // 48-byte header the parser just authenticated. A transcription outside
+            // the verified crate; the ports (L552, RISC-V) fold the table instead.
+            let b = v.blob;
+            let code_size = u32::from_le_bytes([b[10], b[11], b[12], b[13]]) as usize;
+            let reloc_count = u16::from_le_bytes([b[14], b[15]]);
+            if reloc_count != 0 || 48usize.checked_add(code_size) != Some(b.len()) {
+                return ERR_ARG;
+            }
+            (v.author_id, v.version, b.len())
+        }
         Err(UpdateError::NonceMismatch) => return ERR_NONCE,
         Err(UpdateError::TagInvalid) => return ERR_AUTH,
         Err(_) => return ERR_ARG,
@@ -473,7 +487,6 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
         Err(_) => return ERR_FLASH,
     };
     let written = crate::api_impl::authenticated_version_at(base);
-    let _ = version; // declared version is advisory; the authenticated one is authoritative
     let t_verify = cyccnt();
 
     // Bench telemetry: per-phase cycle deltas (8-digit uppercase hex, 800 MHz CPU).
@@ -495,6 +508,16 @@ pub extern "C" fn umbra_enclave_update_imp(pkg_ptr: u32, pkg_len: u32) -> u32 {
         (None, _) => {
             // Bad write / measurement mismatch: invalidate the slot's first sector so a
             // later create(0) never selects a corrupt image.
+            let zero = [0u8; 4096];
+            let _ = drivers::state_flash::write_enclave_slot(target_slot, &zero);
+            ERR_VERIFY
+        }
+        // Declared-vs-derived binding (2026-09-05): the tag-covered `version`
+        // field must equal the version the image's measurement chain yields.
+        // Fail-closed like a bad measurement; without it a package could declare
+        // one version and activate as another (found by a mis-invoked downgrade
+        // attempt: declared v2, image v40, installed as v40).
+        (Some(w), _) if w != version => {
             let zero = [0u8; 4096];
             let _ = drivers::state_flash::write_enclave_slot(target_slot, &zero);
             ERR_VERIFY

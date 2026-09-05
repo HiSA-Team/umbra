@@ -20,6 +20,28 @@ python3 tools/test_attestation_guard.py
 echo ">> Rust host suites"
 cargo test -p kernel -p umbra-update-core -p umbra-chain-core --locked
 
+echo ">> differential corpus is current (Rust dumper vs checked-in Update_Differential.v)"
+# The Rust test dumps the (bytes, verdict) corpus the Rocq differential
+# theorems re-check by vm_compute. A stale checked-in file would let the
+# two sides drift silently, so regenerate to a temp file and diff.
+DIFF_TMP="$(mktemp -t Update_Differential.XXXXXX)"
+trap 'rm -f "$DIFF_TMP"' EXIT
+# Device-side packages (tools/attest_update.py --dump during the campaign) join
+# the corpus when the checked-in dump exists; the Rust side re-judges them and
+# checks its verdict class against the device's status word.
+DEVICE_CORPUS="$(pwd)/tools/eval-data/n657_differential_corpus.txt"   # absolute: cargo test runs in the crate dir
+UMBRA_DUMP_DIFFERENTIAL="$DIFF_TMP" \
+UMBRA_DIFFERENTIAL_DEVICE="$([ -f "$DEVICE_CORPUS" ] && echo "$DEVICE_CORPUS")" \
+  cargo test -p umbra-update-core --locked --quiet dump_differential_corpus >/dev/null
+diff -u formal/rocq/update-core/proofs-coq/Update_Differential.v "$DIFF_TMP"
+
+echo ">> mutated differential corpus is current (1,000 fixed-seed vectors, Update_DifferentialFuzz.v)"
+FUZZ_TMP="$(mktemp -t Update_DifferentialFuzz.XXXXXX)"
+trap 'rm -f "$DIFF_TMP" "$FUZZ_TMP"' EXIT
+UMBRA_DUMP_DIFFERENTIAL_FUZZ="$FUZZ_TMP" \
+  cargo test -p umbra-update-core --locked --quiet dump_fuzz_corpus >/dev/null
+diff -u formal/rocq/update-core/proofs-coq/Update_DifferentialFuzz.v "$FUZZ_TMP"
+
 echo ">> N657 target check"
 cargo check -p umbra-n657-boot --target thumbv8m.main-none-eabi --locked
 

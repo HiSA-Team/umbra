@@ -77,7 +77,7 @@ none):
 | # | Fix | Cost |
 |---|---|---|
 | a | Derived `Clone` instances emit a partial record (missing `clone_from`) | +1 line per derived type |
-| b | Index-counter `while` loops emit a `control_flow` / `loop` combinator that the **Coq `Primitives.v` does not define at all** (Lean's stdlib does) | one ~30-line shim, `AeneasLoopShim.v`, per project |
+| b | Index-counter `while` loops emit a `control_flow` / `loop` combinator that the **Coq `Primitives.v` does not define at all** (Lean's stdlib does) | one 17-line shim, `AeneasLoopShim.v`, per project |
 | c | Coq 8.18 rejects Aeneas's `fun '(tuple) : T =>` binder | one mechanical destructure per multi-var loop |
 
 Structural recursion over recursive datatypes compiles clean in Coq; **array
@@ -287,7 +287,7 @@ Until that passes, treat 3b as host-validated only.
 > - Pipeline works end-to-end; **both Coq and Lean** generated; output is
 >   exceptionally readable (1:1 with source, line-cited).
 > - **Lean compiles clean.** **Coq needs 3 one-time manual patches** (missing
->   `clone_from`, a ~30-line `control_flow`/`loop` shim the Coq stdlib lacks, one
+>   `clone_from`, a 17-line `control_flow`/`loop` shim the Coq stdlib lacks, one
 >   binder-syntax rewrite). Structural recursion is clean in Coq; array
 >   index-scans (which dominate ESS) need the shim.
 > - **Key caveat: typecheck ≠ proof.** We proved one real loop-step lemma, but
@@ -1068,6 +1068,15 @@ Stated as a list, so nothing here is quotable as more than it is:
    application of an inconsistent axiom with a total definition — a strictly
    better model of the Rust literal, but the two are **not provably equal**, so
    the rewrite is part of the trusted base, not a verified step.
+   Measured on the current tree, for update-core: Aeneas emits 406 lines of
+   `Update_Funs.v`; the three perl patches change 9 lines at 8 sites of that
+   file; the `Update_FunsExternal.v` fill adds 63 lines (67 new lines replacing
+   a 4-line axiom template). The compiled model is 485 lines, of which 392 are
+   verbatim Aeneas output and 93 are hand-authored (the paper's 392/93 split).
+   For chain-core: 345 lines emitted, 6 patched lines, and a 37-line alias
+   file. The fuel constant `1000000` is defined once, in the 17-line
+   `AeneasLoopShim.v`; `parse_and_verify_total` (P3 here, P1 in the paper) is
+   proved at that constant.
 6. **The quarantine is 20 axioms.** `Update_Model.v` shows they are
    consistent and that the intended Rust semantics satisfies them; it cannot
    show that *upstream's* opaque constants do, because there is nothing to prove

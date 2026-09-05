@@ -24,8 +24,9 @@ PY=/opt/miniconda3/bin/python
 CLI="$ROOT/tools/attest_update.py"
 FAIL=0
 
-run() {  # run <attack> [extra CLI args...]
-    if "$PY" "$CLI" --port "$PORT" --attack "$1" --count "$K" "${@:2}"; then :; else FAIL=1; fi
+run() {  # run <attack> [extra CLI args...]; UMBRA_DUMP=<file> records every package sent
+    if "$PY" "$CLI" --port "$PORT" --attack "$1" --count "$K" "${@:2}" \
+        ${UMBRA_DUMP:+--dump "$UMBRA_DUMP"}; then :; else FAIL=1; fi
 }
 
 echo "== Adversarial harness: port=$PORT K=$K"

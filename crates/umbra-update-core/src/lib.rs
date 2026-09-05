@@ -87,6 +87,10 @@ pub fn compute_pkg_tag<H: PkgHmac>(
 }
 
 /// Parse and authenticate a package against the currently armed `expected_nonce`.
+// Inlining barrier for the deployed-binary symbol check (O3): keeps this
+// monomorphization a named symbol at every optimization level. Invisible to
+// extraction, which runs Charon under `--cfg charon`.
+#[cfg_attr(not(charon), inline(never))]
 pub fn parse_and_verify<'a, H: PkgHmac>(
     pkg: &'a [u8],
     expected_nonce: &[u8; 16],

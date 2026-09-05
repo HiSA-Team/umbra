@@ -2,6 +2,10 @@ extern crate std;
 use super::*;
 use std::vec::Vec;
 
+// Rust-vs-vm_compute differential corpus dumper (gated by UMBRA_DUMP_DIFFERENTIAL).
+#[path = "differential_dump.rs"]
+mod differential_dump;
+
 // Mock HMAC: deterministic fold over key+preimage. Not cryptographic — just a
 // stable function so parse/round-trip tests are meaningful.
 struct MockHmac;
