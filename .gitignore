@@ -49,7 +49,9 @@ tools/last_uart_fault.log
 # repo. The user-facing documentation surface is the mdBook under
 # `book/` (sources tracked, build output gitignored).
 docs/
-.claude/
+.claude/*
+# Exception: project skills are meant to be shared, unlike the rest of .claude/.
+!.claude/skills/
 
 # === Build artefacts (host applications) ===
 
@@ -88,3 +90,20 @@ host/riscv32/bare_metal/target/
 
 # N657 W3 throwaway FSBL signing keys (regenerated every build, never committed)
 tools/.n657_signing_keys/
+
+# === Formal-verification working artefacts ===
+
+# Lake build output for the Lean developments under formal/lean/.
+formal/lean/**/.lake/
+
+# coq_makefile output, if a Rocq development is ever built in a checkout of
+# this branch (the branch itself carries none).
+formal/**/.lia.cache
+formal/**/.Makefile.d
+formal/**/CoqMakefile.conf
+formal/**/Makefile.conf
+formal/**/proofs-coq/Makefile
+
+# Paper draft. Kept local: it is an anonymous submission, and a repository is
+# not the place to publish it.
+umbra-pil.pdf
