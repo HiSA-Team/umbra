@@ -13,3 +13,17 @@
 [submodule "tools/qemu-spmp/qemu"]
 	path = tools/qemu-spmp/qemu
 	url = https://gitlab.com/qemu-project/qemu.git
+[submodule "formal/toolchain/aeneas"]
+	path = formal/toolchain/aeneas
+	url = https://github.com/AeneasVerif/aeneas.git
+	# pinned to tag nightly-2026.09.09 (commit 505b6ca), bumped for issue #58's
+	# Rocq -> Lean migration: this pin's Lean backend targets Lean v4.31.0 and
+	# carries the step/dspec/WP proof-automation additions merged since the
+	# nightly-2026.06.16 pin used by the Rocq-only branch. Build artifacts are
+	# untracked so ignore a dirty working tree in the parent's status.
+	ignore = dirty
+[submodule "formal/toolchain/charon"]
+	path = formal/toolchain/charon
+	url = https://github.com/AeneasVerif/charon.git
+	# pinned to b104e24 = the commit aeneas 505b6ca records in its charon-pin.
+	ignore = dirty
