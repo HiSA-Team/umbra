@@ -180,7 +180,7 @@ Proof.
               macf mb0 j Hbs Hmiss) as [mb [Hmb Hdiff]].
   (* a slice u8 to instantiate the key at: the empty one *)
   assert (Hk : Z.of_nat (length (@nil u8)) <= usize_max).
-  { cbn. pose proof usize_max_bound as Hu. unfold u32_max in Hu. lia. }
+  { cbn. pose proof usize_max_bound as Hu. unfold u32_max in *. lia. }
   exact (Hdiff (exist _ (@nil u8) Hk)
            (Hpin macf mb mb0 Hmb Hbs (exist _ (@nil u8) Hk) j)).
 Qed.

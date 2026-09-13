@@ -4,10 +4,11 @@
 #   ./build.sh          build; assumes ../update-core/proofs-coq is already built
 #   ./build.sh --deps   build ../update-core/proofs-coq first, then this
 #
-# This project does NOT keep its own Primitives.v or AeneasLoopShim.v: both are
-# loaded out of ../update-core/proofs-coq (see proofs-coq/_CoqProject), because
-# Chain_Compose.v Requires Update_Crypto and two files of one logical name in a
-# single load path clash. So update-core must be built first, always.
+# This project does NOT keep its own Primitives.v or AeneasLoopShim.v: both, and
+# the generic backend laws (Aeneas_Laws.v), come from the shared library ../../lib
+# (logical root AeneasLib; see proofs-coq/_CoqProject), because Chain_Compose.v
+# Requires update-core's Update_Crypto and two files of one logical name in a
+# single load path clash. So the library and update-core must be built first.
 #
 # The build EMITS THE ASSUMPTION AUDIT: `Print Assumptions` on the two headline
 # theorems, so every run prints the sets rather than asserting them.
@@ -17,6 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 HERE="$PWD"
 UP="$HERE/../update-core/proofs-coq"
+LIB="$HERE/../lib"
 PROOFS="$HERE/proofs-coq"
 
 COQC="${COQC:-coqc}"
@@ -25,12 +27,17 @@ command -v "$COQC" >/dev/null || {
   exit 1; }
 
 if [ "${1:-}" = "--deps" ]; then
-  echo ">> building update-core first"
+  echo ">> building the shared library and update-core first"
+  ( cd "$LIB" && coq_makefile -f _CoqProject -o Makefile >/dev/null && make -j4 >/dev/null )
   ( cd "$UP" && coq_makefile -f _CoqProject -o Makefile >/dev/null && make -j4 >/dev/null )
 fi
 
-for f in Primitives AeneasLoopShim Update_Types Update_FunsExternal Update_Funs \
-         Update_Safety Update_Crypto; do
+for f in Primitives AeneasLoopShim AeneasLoopBounds Aeneas_Laws; do
+  [ -f "$LIB/$f.vo" ] || {
+    echo "error: $LIB/$f.vo missing — build the shared library first (./build.sh --deps)" >&2
+    exit 1; }
+done
+for f in Update_Types Update_FunsExternal Update_Funs Update_Safety Update_Crypto; do
   [ -f "$UP/$f.vo" ] || {
     echo "error: $UP/$f.vo missing — build update-core first (./build.sh --deps)" >&2
     exit 1; }
@@ -57,7 +64,7 @@ Print Assumptions verdict_ignores_the_unauthenticated_header_bytes.
 (* non-vacuity: the accept branch is reachable *)
 Print Assumptions chain_gate_accepts_a_matching_measurement.
 EOF
-( cd "$PROOFS" && "$COQC" -R . Lib -R "$UP" Lib Chain_Audit.v )
+( cd "$PROOFS" && "$COQC" -R . Lib -R "$UP" Lib -R "$LIB" AeneasLib Chain_Audit.v )
 rm -f "$PROOFS"/Chain_Audit.v "$PROOFS"/Chain_Audit.vo* "$PROOFS"/Chain_Audit.glob
 
 echo "OK: $(ls "$PROOFS"/*.vo | wc -l | tr -d ' ') file(s)"

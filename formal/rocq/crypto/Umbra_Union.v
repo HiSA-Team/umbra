@@ -110,20 +110,23 @@
     `q`.
 
     ------------------------------------------------------------------------
-    THIS FILE IS NOT MATHCOMP-FREE. THE UNION THEOREM, MEASURED, STILL IS
-    CLASSICAL-AXIOM-FREE — and that was not expected.
+    THIS FILE IS NOT MATHCOMP-FREE. THE UNION THEOREM, MEASURED, IS CLOSED
+    UNDER THE GLOBAL CONTEXT — and that was not expected.
 
-    `Print Assumptions accepted_body_is_the_signed_body_or_a_forgery` lists 41
-    constants: 40 Aeneas/Primitives quarantine axioms plus
-    `Chain_Value.array_u8_ext` (Q21). NO `boolp.*`, no `realsum`, no `classic`.
-    The reason is that the union is a case split on a BOOLEAN — membership in
+    `Print Assumptions accepted_body_is_the_signed_body_or_a_forgery` reports
+    `Closed under the global context`: no `boolp.*`, no `realsum`, no
+    `classic`, and no Aeneas constant either. Two separate reasons. It is
+    CONSTRUCTIVE because the union is a case split on a BOOLEAN — membership in
     `domm S` — composed with the deterministic tier, and neither step touches
-    mathcomp-analysis's measure theory. Its deterministic half
-    (`Umbra_UnionCore.accepted_equal_cores_pin_the_blob_body`) carries 40 of
-    those 41.
+    mathcomp-analysis's measure theory. It carries NO AENEAS ENTRY because
+    `Primitives.v` defines the backend operations rather than declaring them
+    and `Update_Safety`'s laws — `array_u8_ext` (Q21) included — are lemmas;
+    the 41 constants an earlier revision of this header quoted belong to the
+    era when they were axioms. Its deterministic half
+    (`Umbra_UnionCore.accepted_equal_cores_pin_the_blob_body`) is closed too.
 
     THE CLASSICAL AXIOMS ARRIVE ONE THEOREM LATER, at
-    `forgery_disjunct_is_bounded_by_eufcma` — 50 constants, of which
+    `forgery_disjunct_is_bounded_by_eufcma` — 7 constants, of which
     `boolp.constructive_indefinite_description`,
     `boolp.functional_extensionality_dep`, `boolp.propositional_extensionality`
     and `realsum.__admitted__interchange_psum` are inherited verbatim from
@@ -395,11 +398,11 @@ End Union.
 (* MECHANISED ASSUMPTION AUDIT. Compiling this file emits the full axiom   *)
 (* budget of the union theorem. The `boolp.*` constants are mathcomp-      *)
 (* analysis's classical axioms, inherited through SSProve; they are NOT    *)
-(* in the deterministic half's budget (`Umbra_UnionCore.v`, 40 axioms, no  *)
-(* classical logic) -- and, measured, they are NOT in the union theorem's  *)
-(* budget either (41, still no classical axiom). They appear only in       *)
-(* `forgery_disjunct_is_bounded_by_eufcma`, which inherits them from Tier  *)
-(* G. Both listings are emitted below so the split is checkable.           *)
+(* in the deterministic half's budget (`Umbra_UnionCore.v`, closed under   *)
+(* the global context) -- and, measured, they are NOT in the union         *)
+(* theorem's budget either, which is closed too. They appear only in       *)
+(* `forgery_disjunct_is_bounded_by_eufcma` (7 constants), inherited from   *)
+(* Tier G. Both listings are emitted below so the split is checkable.      *)
 (* ===================================================================== *)
 Print Assumptions accepted_body_is_the_signed_body_or_a_forgery.
 Print Assumptions forgery_disjunct_is_bounded_by_eufcma.

@@ -1,0 +1,15 @@
+# proof-engineer extraction record v1 — regenerate with the crate's extract script
+date 2026-09-12T15:55:17Z
+crate crates/umbra-update-core
+charon 6f058254
+aeneas 8dd8bfb3
+usize_bits 32
+script 58623de73f0866d1d0d186b1a4e7cc8c78546aea89fc8e6b8fd23b5f324b3667 formal/rocq/update-core/extract.sh
+input 37edbcc6984ae5d9172a3a1e50adbbdd5a76f2e6666308df5334db4b4f6dcd23 crates/umbra-update-core/Cargo.toml
+input a9f2581a9195f1b1b4a9bb7605e5b68fd3b6acba49764b3b7b0f5412a3a3813b crates/umbra-update-core/src/differential_dump.rs
+input 52e46096acba5c171864527edb950f36d627a4fc68ce32b607328e970b1345f4 crates/umbra-update-core/src/lib.rs
+input 98cf828e285ea7773db9e7774952140264f1801f0e84629a7c69567142e36819 crates/umbra-update-core/src/lib_tests.rs
+output 51194c3b59678bbd873553299061807c2bf7f97efe8e85729480b2cf32ce955e formal/rocq/update-core/proofs-coq/Update_Types.v
+output e8b805d0d63145ef08fedbef08cd805accb26acf2b42c193e56957a7e94d7a3a formal/rocq/update-core/proofs-coq/Update_Funs.v
+output c82502d51a514fce5b31993a750cb50167b36ae6623483dd0a55f4f31b48d3ab formal/rocq/update-core/proofs-coq/Update_FunsExternal.v
+output 19c3096442aa16a561a82b08916d2369b7171b06cbd4e7eb9df4687fe81480f5 formal/rocq/update-core/update.llbc

@@ -27,6 +27,8 @@ Require Import Coq.Logic.Eqdep_dec.
     Do not overwrite with the toolchain file: ../extract.sh checks that the
     vendored backend file is the one this variant was derived from. *)
 
+Require Import AeneasTarget.
+
 Module Primitives.
 
   (* TODO: use more *)
@@ -88,7 +90,11 @@ Definition str := string.
 Definition char := Coq.Strings.Ascii.ascii.
 Definition char_of_byte := Coq.Strings.Ascii.ascii_of_byte.
 
-Definition core_mem_replace {a : Type} (x : a) (y : a) : a * a := (x, x) .
+(* Rust `mem::replace(dest, src)` returns the old value and stores `src` in `dest`;
+   Aeneas's convention is `(old, new_dest)`. The upstream Coq backend defines this
+   as `(x, x)`, discarding the replacement (its own hashmap test writes the second
+   component back); corrected here to `(x, y)`. *)
+Definition core_mem_replace {a : Type} (x : a) (y : a) : a * a := (x, y) .
 
 Record mut_raw_ptr (T : Type) := { mut_raw_ptr_v : T }.
 Record const_raw_ptr (T : Type) := { const_raw_ptr_v : T }.
@@ -118,20 +124,20 @@ Definition u128_max : Z := 340282366920938463463374607431768211455%Z.
 
 (** The bounds of [isize] and [usize] are those of the 32-bit targets this
     development runs on (ARMv8-M, RV32). Definitions, not axioms. *)
-Definition isize_min : Z := i32_min.
-Definition isize_max : Z := i32_max.
+Definition isize_min : Z := if Nat.eqb AeneasTarget.usize_bits 64 then i64_min else i32_min.
+Definition isize_max : Z := if Nat.eqb AeneasTarget.usize_bits 64 then i64_max else i32_max.
 Definition usize_min : Z := 0%Z.
-Definition usize_max : Z := u32_max.
+Definition usize_max : Z := if Nat.eqb AeneasTarget.usize_bits 64 then u64_max else u32_max.
 
 Open Scope Z_scope.
 
 (** The bound lemmas upstream postulates; here they are proved. *)
 Lemma isize_min_bound : isize_min <= i32_min.
-Proof. unfold isize_min. lia. Qed.
+Proof. unfold isize_min; destruct (Nat.eqb AeneasTarget.usize_bits 64); unfold i64_min, i32_min; lia. Qed.
 Lemma isize_max_bound : i32_max <= isize_max.
-Proof. unfold isize_max. lia. Qed.
+Proof. unfold isize_max; destruct (Nat.eqb AeneasTarget.usize_bits 64); unfold i64_max, i32_max; lia. Qed.
 Lemma usize_max_bound : u32_max <= usize_max.
-Proof. unfold usize_max. lia. Qed.
+Proof. unfold usize_max; destruct (Nat.eqb AeneasTarget.usize_bits 64); unfold u64_max, u32_max; lia. Qed.
 
 Inductive scalar_ty :=
   | Isize
@@ -303,12 +309,41 @@ Definition scalar_sub {ty} (x y: scalar ty) : result (scalar ty) := mk_scalar ty
 
 Definition scalar_mul {ty} (x y: scalar ty) : result (scalar ty) := mk_scalar ty (to_Z x * to_Z y).
 
+(** Width and signedness of a scalar type, from the type itself; the
+    pointer-sized types take their width from [AeneasTarget.usize_bits]. *)
+Definition scalar_bits (ty: scalar_ty) : Z :=
+  match ty with
+  | Isize | Usize => Z.of_nat AeneasTarget.usize_bits
+  | I8 | U8 => 8
+  | I16 | U16 => 16
+  | I32 | U32 => 32
+  | I64 | U64 => 64
+  | I128 | U128 => 128
+  end.
+
+Definition scalar_signed (ty: scalar_ty) : bool :=
+  match ty with Isize | I8 | I16 | I32 | I64 | I128 => true | _ => false end.
+
+(* Rust `/` on integers rounds toward zero (Rust Reference, "Arithmetic and
+   Logical Binary Operators": "Integer division rounds towards zero"), so the
+   truncating [Z.quot], not the flooring [Z.div]: `-3 / 2 = -1`, `7 / -2 = -3`.
+   Division by zero panics. Signed `MIN / -1` panics as well (Rust Reference,
+   "Overflow": that check is made even with overflow checks disabled); its
+   quotient `-MIN = MAX + 1` is out of range, so the range check in [mk_scalar]
+   rejects it. *)
 Definition scalar_div {ty} (x y: scalar ty) : result (scalar ty) :=
   if to_Z y =? 0 then Fail_ Failure else
-  mk_scalar ty (to_Z x / to_Z y).
+  mk_scalar ty (Z.quot (to_Z x) (to_Z y)).
 
-Definition scalar_rem {ty} (x y: scalar ty) : result (scalar ty) := mk_scalar ty (Z.rem (to_Z x) (to_Z y)).
-  
+(* Rust `%` is the remainder of the truncating division: it takes the sign of
+   the dividend (Rust Reference, "Arithmetic and Logical Binary Operators"),
+   which is [Z.rem]: `-3 % 2 = -1`. `x % 0` panics, and so does signed
+   `MIN % -1` (Rust Reference, "Overflow"); [Z.rem] would return 0 for the
+   latter, so it is rejected explicitly (unsigned types never have `y = -1`). *)
+Definition scalar_rem {ty} (x y: scalar ty) : result (scalar ty) :=
+  if (to_Z y =? 0) || ((to_Z x =? scalar_min ty) && (to_Z y =? -1)) then Fail_ Failure else
+  mk_scalar ty (Z.rem (to_Z x) (to_Z y)).
+
 Definition scalar_neg {ty} (x: scalar ty) : result (scalar ty) := mk_scalar ty (-(to_Z x)).
 
 (** Bitwise operators: the [Z] bitwise operator on the values. For every
@@ -324,20 +359,101 @@ Definition scalar_or {ty} (x y: scalar ty) : scalar ty :=
   scalar_or_default (mk_scalar ty (Z.lor (to_Z x) (to_Z y))) x.
 Definition scalar_and {ty} (x y: scalar ty) : scalar ty :=
   scalar_or_default (mk_scalar ty (Z.land (to_Z x) (to_Z y))) x.
+
+(* Shifts (Rust Reference, "Arithmetic and Logical Binary Operators" and
+   "Overflow"). A shift amount `n` with `n >= bits(x)` (or negative) is an
+   overflow and panics in debug builds. Otherwise `x << n` keeps the low
+   `bits(x)` bits of `x * 2^n`: for an unsigned type that is `mod 2^w`, for a
+   signed type the two's-complement reinterpretation of it ([scalar_wrap]); so
+   `128u8 << 1 = 0`, `1u8 << 7 = 128`, `1i8 << 7 = -128`, no failure.
+   `x >> n` is a logical shift on unsigned and an arithmetic shift on signed
+   types; both are the flooring division by `2^n`: `-1i8 >> 1 = -1`. *)
+Definition scalar_wrap (ty: scalar_ty) (z: Z) : Z :=
+  let w := scalar_bits ty in
+  let m := z mod 2 ^ w in
+  if scalar_signed ty && (2 ^ (w - 1) <=? m) then m - 2 ^ w else m.
+Definition scalar_shift_amount_ok (ty: scalar_ty) (n: Z) : bool :=
+  (0 <=? n) && (n <? scalar_bits ty).
 Definition scalar_shl {ty0 ty1} (x: scalar ty0) (y: scalar ty1) : result (scalar ty0) :=
-  mk_scalar ty0 (Z.shiftl (to_Z x) (to_Z y)).
+  if scalar_shift_amount_ok ty0 (to_Z y)
+  then mk_scalar ty0 (scalar_wrap ty0 (to_Z x * 2 ^ to_Z y))
+  else Fail_ Failure.
 Definition scalar_shr {ty0 ty1} (x: scalar ty0) (y: scalar ty1) : result (scalar ty0) :=
-  mk_scalar ty0 (Z.shiftr (to_Z x) (to_Z y)).
-Definition scalar_signed (ty: scalar_ty) : bool :=
-  match ty with Isize | I8 | I16 | I32 | I64 | I128 => true | _ => false end.
+  if scalar_shift_amount_ok ty0 (to_Z y)
+  then mk_scalar ty0 (Z.div (to_Z x) (2 ^ to_Z y))
+  else Fail_ Failure.
 Definition scalar_not {ty} (x: scalar ty) : scalar ty :=
   scalar_or_default
     (mk_scalar ty (if scalar_signed ty then Z.lnot (to_Z x) else scalar_max ty - to_Z x)) x.
 
-(** Cast an integer from a [src_ty] to a [tgt_ty] *)
-(* TODO: check the semantics of casts in Rust *)
+(** The bounds of every type, expressed through its width and signedness:
+    [scalar_min ty = -2^(w-1)] or [0], [scalar_max ty = 2^(w-1)-1] or [2^w-1].
+    Closed computations, so they hold at whichever [AeneasTarget.usize_bits]
+    the profile fixes (32 or 64). *)
+Lemma scalar_bits_pos : forall ty, 0 < scalar_bits ty.
+Proof. destruct ty; vm_compute; reflexivity. Qed.
+
+Lemma scalar_min_bits : forall ty,
+  scalar_min ty = if scalar_signed ty then - 2 ^ (scalar_bits ty - 1) else 0.
+Proof. destruct ty; vm_compute; reflexivity. Qed.
+
+Lemma scalar_max_bits : forall ty,
+  scalar_max ty = if scalar_signed ty then 2 ^ (scalar_bits ty - 1) - 1 else 2 ^ scalar_bits ty - 1.
+Proof. destruct ty; vm_compute; reflexivity. Qed.
+
+Lemma scalar_pow_split : forall ty, 2 ^ scalar_bits ty = 2 * 2 ^ (scalar_bits ty - 1).
+Proof.
+  intro ty. pose proof (scalar_bits_pos ty).
+  replace (scalar_bits ty) with (Z.succ (scalar_bits ty - 1)) at 1 by lia.
+  rewrite Z.pow_succ_r by lia. reflexivity.
+Qed.
+
+(** [scalar_wrap ty z] always lands in the range of [ty]. *)
+Lemma scalar_wrap_in_bounds : forall ty z, scalar_min ty <= scalar_wrap ty z <= scalar_max ty.
+Proof.
+  intros ty z. rewrite scalar_min_bits, scalar_max_bits. unfold scalar_wrap; cbv zeta.
+  pose proof (scalar_bits_pos ty) as Hw. pose proof (scalar_pow_split ty) as Hpow.
+  assert (Hhalf : 0 < 2 ^ (scalar_bits ty - 1)) by (apply Z.pow_pos_nonneg; lia).
+  pose proof (Z.mod_pos_bound z (2 ^ scalar_bits ty) ltac:(lia)) as Hm.
+  destruct (scalar_signed ty); cbn [andb].
+  - destruct (2 ^ (scalar_bits ty - 1) <=? z mod 2 ^ scalar_bits ty) eqn:E;
+      [ apply Z.leb_le in E | apply Z.leb_gt in E ]; lia.
+  - lia.
+Qed.
+
+(** [scalar_wrap] is the identity on a value already in range. *)
+Lemma scalar_wrap_id : forall ty z, scalar_min ty <= z <= scalar_max ty -> scalar_wrap ty z = z.
+Proof.
+  intros ty z Hz. rewrite scalar_min_bits, scalar_max_bits in Hz. unfold scalar_wrap; cbv zeta.
+  pose proof (scalar_bits_pos ty) as Hw. pose proof (scalar_pow_split ty) as Hpow.
+  assert (Hhalf : 0 < 2 ^ (scalar_bits ty - 1)) by (apply Z.pow_pos_nonneg; lia).
+  destruct (scalar_signed ty); cbn [andb].
+  - destruct (Z_lt_le_dec z 0) as [Hneg|Hnn].
+    + assert (Hm : z mod 2 ^ scalar_bits ty = z + 2 ^ scalar_bits ty).
+      { replace z with ((z + 2 ^ scalar_bits ty) + (-1) * 2 ^ scalar_bits ty) at 1 by lia.
+        rewrite Z_mod_plus_full. apply Z.mod_small. lia. }
+      rewrite Hm.
+      destruct (2 ^ (scalar_bits ty - 1) <=? z + 2 ^ scalar_bits ty) eqn:E;
+        [ lia | apply Z.leb_gt in E; lia ].
+    + rewrite Z.mod_small by lia.
+      destruct (2 ^ (scalar_bits ty - 1) <=? z) eqn:E; [ apply Z.leb_le in E; lia | reflexivity ].
+  - apply Z.mod_small. lia.
+Qed.
+
+(* Rust `as` between integer types never fails (Rust Reference, "Numeric
+   cast"): the value is truncated to the target width and the bit pattern
+   reinterpreted in the target's signedness. Sign-extension to a wider type is
+   the identity on the mathematical integer, so [scalar_wrap tgt] (mod 2^w with
+   two's-complement reinterpretation) covers every case: `256u16 as u8 = 0`,
+   `-1i8 as u8 = 255`, `-1i8 as i32 = -1`. The [result] wrapper is kept only
+   because the translation expects it; the value is always [Ok]. *)
 Definition scalar_cast (src_ty tgt_ty : scalar_ty) (x : scalar src_ty) : result (scalar tgt_ty) :=
-  mk_scalar tgt_ty (to_Z x).
+  Ok (mk_scalar_of_bounds tgt_ty (scalar_wrap tgt_ty (to_Z x))
+        (scalar_wrap_in_bounds tgt_ty (to_Z x))).
+
+Lemma scalar_cast_to_Z : forall src tgt (x : scalar src) (y : scalar tgt),
+  scalar_cast src tgt x = Ok y -> to_Z y = scalar_wrap tgt (to_Z x).
+Proof. intros src tgt x y H. injection H as <-. reflexivity. Qed.
 
 (* This can't fail, but for now we make all casts faillible (easier for the translation) *)
 Definition scalar_cast_bool (tgt_ty : scalar_ty) (x : bool) : result (scalar tgt_ty) :=
@@ -562,32 +678,51 @@ Notation "x s< y" := (scalar_ltb x y)  (at level 80) : Primitives_scope.
 Notation "x s>= y" := (scalar_geb x y)  (at level 80) : Primitives_scope.
 Notation "x s> y" := (scalar_gtb x y)  (at level 80) : Primitives_scope.
 
-(** Constants *)
-Definition core_num_U8_MIN    := u8_min %u32.
-Definition core_num_U16_MIN   := u16_min %u32.
-Definition core_num_U32_MIN   := u32_min %u32.
-Definition core_num_U64_MIN   := u64_min %u64.
-Definition core_num_U128_MIN  := u64_min %u128.
-Definition core_num_Usize_MIN : usize := usize_min %usize.
-Definition core_num_I8_MIN    := i8_min %i32.
-Definition core_num_I16_MIN   := i16_min %i32.
-Definition core_num_I32_MIN   := i32_min %i32.
-Definition core_num_I64_MIN   := i64_min %i64.
-Definition core_num_I128_MIN  := i128_min %i128.
-Definition core_num_Isize_MIN : isize := isize_min %isize.
+(** Constants: `<int>::MIN` / `<int>::MAX`. Each is built AT ITS OWN TYPE from
+    its own bound (upstream built the u8/u16/i8/i16 ones at u32/i32 and
+    `U128_MAX` from `u64_max`). The bound proof is the generic
+    [scalar_min_le_max]; [scalar_min ty] / [scalar_max ty] unfold to the
+    named bound of each type, so the proof types line up by conversion. *)
+Lemma scalar_min_le_max : forall ty, scalar_min ty <= scalar_max ty.
+Proof.
+  intro ty; pose proof (scalar_min_cons_valid ty); pose proof (scalar_max_cons_valid ty).
+  destruct ty; unfold scalar_min_cons, scalar_max_cons, scalar_min, scalar_max in *;
+    unfold i8_min, i8_max, i16_min, i16_max, i32_min, i32_max, i64_min, i64_max,
+           i128_min, i128_max, u8_min, u8_max, u16_min, u16_max, u32_min, u32_max,
+           u64_min, u64_max, u128_min, u128_max in *; lia.
+Qed.
 
-Definition core_num_U8_MAX    := u8_max %u32.
-Definition core_num_U16_MAX   := u16_max %u32.
-Definition core_num_U32_MAX   := u32_max %u32.
-Definition core_num_U64_MAX   := u64_max %u64.
-Definition core_num_U128_MAX  := u64_max %u128.
-Definition core_num_Usize_MAX : usize := usize_max %usize.
-Definition core_num_I8_MAX    := i8_max %i32.
-Definition core_num_I16_MAX   := i16_max %i32.
-Definition core_num_I32_MAX   := i32_max %i32.
-Definition core_num_I64_MAX   := i64_max %i64.
-Definition core_num_I128_MAX  := i128_max %i128.
-Definition core_num_Isize_MAX : isize := isize_max %isize.
+Lemma scalar_min_in_bounds : forall ty, scalar_min ty <= scalar_min ty <= scalar_max ty.
+Proof. intro ty; split; [ apply Z.le_refl | apply scalar_min_le_max ]. Qed.
+
+Lemma scalar_max_in_bounds : forall ty, scalar_min ty <= scalar_max ty <= scalar_max ty.
+Proof. intro ty; split; [ apply scalar_min_le_max | apply Z.le_refl ]. Qed.
+
+Definition core_num_U8_MIN    : u8    := mk_scalar_of_bounds U8    u8_min    (scalar_min_in_bounds U8).
+Definition core_num_U16_MIN   : u16   := mk_scalar_of_bounds U16   u16_min   (scalar_min_in_bounds U16).
+Definition core_num_U32_MIN   : u32   := mk_scalar_of_bounds U32   u32_min   (scalar_min_in_bounds U32).
+Definition core_num_U64_MIN   : u64   := mk_scalar_of_bounds U64   u64_min   (scalar_min_in_bounds U64).
+Definition core_num_U128_MIN  : u128  := mk_scalar_of_bounds U128  u128_min  (scalar_min_in_bounds U128).
+Definition core_num_Usize_MIN : usize := mk_scalar_of_bounds Usize usize_min (scalar_min_in_bounds Usize).
+Definition core_num_I8_MIN    : i8    := mk_scalar_of_bounds I8    i8_min    (scalar_min_in_bounds I8).
+Definition core_num_I16_MIN   : i16   := mk_scalar_of_bounds I16   i16_min   (scalar_min_in_bounds I16).
+Definition core_num_I32_MIN   : i32   := mk_scalar_of_bounds I32   i32_min   (scalar_min_in_bounds I32).
+Definition core_num_I64_MIN   : i64   := mk_scalar_of_bounds I64   i64_min   (scalar_min_in_bounds I64).
+Definition core_num_I128_MIN  : i128  := mk_scalar_of_bounds I128  i128_min  (scalar_min_in_bounds I128).
+Definition core_num_Isize_MIN : isize := mk_scalar_of_bounds Isize isize_min (scalar_min_in_bounds Isize).
+
+Definition core_num_U8_MAX    : u8    := mk_scalar_of_bounds U8    u8_max    (scalar_max_in_bounds U8).
+Definition core_num_U16_MAX   : u16   := mk_scalar_of_bounds U16   u16_max   (scalar_max_in_bounds U16).
+Definition core_num_U32_MAX   : u32   := mk_scalar_of_bounds U32   u32_max   (scalar_max_in_bounds U32).
+Definition core_num_U64_MAX   : u64   := mk_scalar_of_bounds U64   u64_max   (scalar_max_in_bounds U64).
+Definition core_num_U128_MAX  : u128  := mk_scalar_of_bounds U128  u128_max  (scalar_max_in_bounds U128).
+Definition core_num_Usize_MAX : usize := mk_scalar_of_bounds Usize usize_max (scalar_max_in_bounds Usize).
+Definition core_num_I8_MAX    : i8    := mk_scalar_of_bounds I8    i8_max    (scalar_max_in_bounds I8).
+Definition core_num_I16_MAX   : i16   := mk_scalar_of_bounds I16   i16_max   (scalar_max_in_bounds I16).
+Definition core_num_I32_MAX   : i32   := mk_scalar_of_bounds I32   i32_max   (scalar_max_in_bounds I32).
+Definition core_num_I64_MAX   : i64   := mk_scalar_of_bounds I64   i64_max   (scalar_max_in_bounds I64).
+Definition core_num_I128_MAX  : i128  := mk_scalar_of_bounds I128  i128_max  (scalar_max_in_bounds I128).
+Definition core_num_Isize_MAX : isize := mk_scalar_of_bounds Isize isize_max (scalar_max_in_bounds Isize).
 
 (*** core *)
 
@@ -1081,10 +1216,15 @@ Definition alloc_vec_Vec_bind {A B} (v: alloc_vec_Vec A) (f: list A -> result (l
 Definition alloc_vec_Vec_push {T: Type} (v: alloc_vec_Vec T) (x: T) : result (alloc_vec_Vec T) :=
   alloc_vec_Vec_bind v (fun l => Ok (l ++ [x])).
 
+(* Rust `Vec::insert(i, x)` inserts `x` at index `i` (0 <= i <= len) and shifts the
+   tail right; it panics when `i > len`. The upstream Coq backend defines this as
+   `list_update` (a replacement at `i < len`), which discards no element but writes
+   the wrong vector; corrected here. The capacity bound is re-checked by
+   `alloc_vec_Vec_bind`. *)
 Definition alloc_vec_Vec_insert {T: Type} (v: alloc_vec_Vec T) (i: usize) (x: T) : result (alloc_vec_Vec T) :=
   alloc_vec_Vec_bind v (fun l =>
-    if to_Z i <? Z.of_nat (length l)
-    then Ok (list_update l (usize_to_nat i) x)
+    if to_Z i <=? Z.of_nat (length l)
+    then Ok (firstn (usize_to_nat i) l ++ x :: skipn (usize_to_nat i) l)
     else Fail_ Failure).
 
 (* `alloc_vec_Vec T` and `slice T` are the same sigma type, so the vector

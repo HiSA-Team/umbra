@@ -23,7 +23,7 @@ command -v "$COQC" >/dev/null || {
 }
 
 INCLUDES=(-R . UmbraCrypto -R ../update-core/proofs-coq Lib
-          -R ../chain-core/proofs-coq Lib)
+          -R ../chain-core/proofs-coq Lib -R ../lib AeneasLib)
 
 DET_FILES=(Update_Forgery.v Update_Encoding.v Umbra_Canonical.v
            Umbra_ByteSpace.v Umbra_ArrayVectors.v Umbra_DeviceLink.v
@@ -38,8 +38,13 @@ if [ "${1:-}" != "--det-only" ]; then
   done
 fi
 
-# The update-core chain must already be built; it is a separate, dependency-free
-# project and is never rebuilt from here.
+# The shared library (Primitives, loop shim, backend laws) and the update-core
+# chain must already be built; both are separate projects and are never rebuilt
+# from here.
+if [ ! -f ../lib/Aeneas_Laws.vo ]; then
+  echo "error: ../lib (the shared library) is not built — build it first" >&2
+  exit 1
+fi
 if [ ! -f ../update-core/proofs-coq/Update_Crypto.vo ]; then
   echo "error: ../update-core/proofs-coq is not built — build it first" >&2
   exit 1

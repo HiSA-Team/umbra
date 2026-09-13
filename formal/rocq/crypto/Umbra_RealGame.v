@@ -32,12 +32,17 @@
     the device's verdict: the oracle body is `ret (accepts ...)`, and
     `accepts` is the Aeneas-extracted `parse_and_verify` (Umbra_Wire.v). This
     file does NOT compile if `parse_and_verify` is removed, and
-    `Print Assumptions device_forgery_le_eufcma` lists 50 axioms: 43 Aeneas —
-    20 bare uninterpreted backend declarations carrying no proposition, 3
-    `usize`/`isize` bound propositions, and all 20 of `Update_Safety`'s
-    quarantine laws, every one discharged against the concrete list model in
-    `Update_Model.v` — alongside SSProve's own 7-axiom base. (An earlier
-    revision of this header said 42/22; both figures were wrong. Re-measured.)
+    `Print Assumptions device_forgery_le_eufcma` lists 7 constants, every one
+    of them SSProve's own base: `boolp.propositional_extensionality`,
+    `boolp.functional_extensionality_dep`, its stdlib twin
+    `FunctionalExtensionality.functional_extensionality_dep`,
+    `boolp.constructive_indefinite_description`, `SPropBase.ax_proof_irrel`,
+    `realsum.__admitted__interchange_psum` and `Axioms.R`. NOT ONE Aeneas
+    constant. Earlier revisions of this header said 42/22 and then 50/43; both
+    described the era when `Primitives.v` DECLARED the backend operations. It
+    now DEFINES them, and `Update_Safety`'s laws are lemmas, so the 43 Aeneas
+    entries are gone. The obligation did not vanish with them: it moved out of
+    Rocq's axiom budget and into the adequacy of those definitions.
 
     ------------------------------------------------------------------------
     (a) WHAT SSPROVE REQUIRES OF AN ORACLE, AND WHAT IT DOES NOT.
@@ -51,7 +56,7 @@
     computing the result be a morphism of choice structures, be computable, or
     even reduce: `ret` takes any inhabitant of `chElement B`. An oracle may
     therefore apply an arbitrary total Coq function to its argument — including
-    one whose definition unfolds to `Primitives`' AXIOMS.
+    one whose definition unfolds to `Primitives`' BACKEND OPERATIONS.
 
     That is the whole trick, and it is why the type obstruction everyone
     (including `Umbra_Reduction.v`'s own header) expected is not there. An
@@ -218,7 +223,7 @@
 
     ------------------------------------------------------------------------
     (e) SCOPE LIMITS THIS FILE INHERITS AND DOES NOT RESTATE ELSEWHERE.
-      * `AeneasLoopShim.loop = loop_fuel 1000000`. The Coq backend omits
+      * `AeneasLoopShim.loop = loop_fuel (10^6)`. The Coq backend omits
         Aeneas's loop combinator, so the shim supplies a FUEL-BOUNDED one.
         Every "total" statement about the extracted code therefore means
         "terminates within 10^6 iterations". The parser's loops are 16- and

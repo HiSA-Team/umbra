@@ -5,19 +5,27 @@
 #   export PATH="$PWD/formal/toolchain/aeneas/bin:$PWD/formal/toolchain/charon/bin:$PATH"
 #
 # Mirrors ../update-core/extract.sh. The one structural difference: this model
-# SHARES update-core's `Primitives.v` and `AeneasLoopShim.v` rather than keeping
-# its own copies, because the composed theorem (Chain_Compose.v) Requires
-# update-core's `Update_Crypto`, and two files of the same logical name in the
-# same load path would clash. `_CoqProject` therefore adds
-# `-R ../../update-core/proofs-coq Lib` and this script deletes the copies Aeneas
-# drops here.
+# keeps NO `Primitives.v` / `AeneasLoopShim.v` of its own: both, and the generic
+# backend laws (`Aeneas_Laws.v`), come from the shared library formal/rocq/lib
+# (logical root AeneasLib), because the composed theorem (Chain_Compose.v)
+# Requires update-core's `Update_Crypto`, and two files of the same logical name
+# in the same load path would clash. `_CoqProject` therefore adds
+# `-R ../../update-core/proofs-coq Lib` and `-R ../../lib AeneasLib`, and this
+# script deletes the copies Aeneas drops here.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"       # repo root
 HERE="$ROOT/formal/rocq/chain-core"
 PROOFS="$HERE/proofs-coq"
 CRATE="$ROOT/crates/umbra-chain-core"
-UPSTREAM="$ROOT/formal/rocq/update-core/proofs-coq"
+# The proof-engineer plugin: PROOF_ENGINEER_ROOT, then CLAUDE_PLUGIN_ROOT (set when
+# the agent runs this), then the newest installed copy.
+PLUGIN="${PROOF_ENGINEER_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+[ -n "$PLUGIN" ] || PLUGIN=$(ls -d "$HOME"/.claude/plugins/cache/proof-engineer/proof-engineer/*/ 2>/dev/null | sort -V | tail -1)
+PLUGIN=${PLUGIN%/}
+[ -x "$PLUGIN/scripts/write-extraction-record.sh" ] || { echo "error: proof-engineer plugin not found; set PROOF_ENGINEER_ROOT" >&2; exit 1; }
+. "$PLUGIN/scripts/lib.sh"
+PIN_CHARON=$(pe_profile "$ROOT" '.pins.charon'); PIN_AENEAS=$(pe_profile "$ROOT" '.pins.aeneas'); USIZE_BITS=$(pe_profile "$ROOT" '.target.usize_bits // 32')
 
 mkdir -p "$PROOFS"
 
@@ -32,26 +40,31 @@ rm -f "$HERE/chain.llbc"
 echo ">> [2/5] aeneas: LLBC -> Coq"
 aeneas -backend coq "$HERE/chain.llbc" -dest "$PROOFS" -split-files
 
-echo ">> [3/5] drop the shared support files (they live in update-core/proofs-coq)"
-rm -f "$PROOFS/Primitives.v"
-[ -f "$UPSTREAM/Primitives.v" ] || { echo "error: shared Primitives.v missing" >&2; exit 1; }
-[ -f "$UPSTREAM/AeneasLoopShim.v" ] || { echo "error: shared AeneasLoopShim.v missing" >&2; exit 1; }
+echo ">> [3/5] drop the shared support files (they live in the library, formal/rocq/lib)"
+rm -f "$PROOFS/Primitives.v" "$PROOFS/AeneasLoopShim.v"
+"$PLUGIN/scripts/materialize-lib.sh" --check || {
+  echo "error: formal/rocq/lib does not match its manifest (re-run materialize-lib.sh)" >&2
+  exit 1; }
+[ -f "$ROOT/formal/rocq/lib/Primitives.v" ] || { echo "error: library Primitives.v missing" >&2; exit 1; }
+[ -f "$ROOT/formal/rocq/lib/AeneasLoopShim.v" ] || { echo "error: library AeneasLoopShim.v missing" >&2; exit 1; }
+[ -f "$ROOT/formal/rocq/lib/Aeneas_Laws.v" ] || { echo "error: library Aeneas_Laws.v missing" >&2; exit 1; }
 
-echo ">> [4/5] fill the external template — by ALIASING update-core's seams"
+echo ">> [4/5] fill the external template — by ALIASING the library's seams"
 if [ -f "$PROOFS/Chain_TypesExternal_Template.v" ]; then
   sed 's/Chain_TypesExternal_Template/Chain_TypesExternal/g' \
       "$PROOFS/Chain_TypesExternal_Template.v" > "$PROOFS/Chain_TypesExternal.v"
 fi
 # THE POINT OF THIS STEP. Aeneas emits ONE `Axiom` per crate per opaque core
 # operation, so a naive fill would give this model its OWN
-# `core_slice_Slice_copy_from_slice` — a constant DISTINCT from update-core's,
-# about which `Update_Safety`'s 20-axiom quarantine says nothing. That would
-# force a second, parallel seam block, and nothing in `Update_Safety.v` would
-# discharge it. Instead every opaque seam here is a transparent ALIAS of
-# update-core's constant, so the existing quarantine applies verbatim and
-# `Print Assumptions` on the theorems below lists those same axioms and no new
-# one. `mk_array4` is likewise update-core's TOTAL definition (never the
-# backend's inconsistent `Primitives.mk_array`; see ../AENEAS_COQ_MKARRAY_BUG.md).
+# `core_slice_Slice_copy_from_slice` — a constant DISTINCT from the one the
+# library's laws (Aeneas_Laws, formerly Update_Safety's quarantine) are about.
+# That would force a second, parallel seam block that nothing discharges.
+# Instead every opaque seam here is a transparent ALIAS of the library's
+# constant (the same constant update-core's FunsExternal binds by Notation), so
+# the existing laws apply verbatim and `Print Assumptions` on the theorems
+# below lists no new name. `mk_array4` is likewise the library's TOTAL
+# definition (never the backend's inconsistent `Primitives.mk_array`; see
+# ../AENEAS_COQ_MKARRAY_BUG.md).
 #
 # Drift guard: the template must still declare exactly the one axiom we alias.
 tmpl_axioms=$(grep -c '^Axiom ' "$PROOFS/Chain_FunsExternal_Template.v" || true)
@@ -63,11 +76,12 @@ grep -q '^Axiom core_slice_Slice_copy_from_slice :' "$PROOFS/Chain_FunsExternal_
 cat > "$PROOFS/Chain_FunsExternal.v" <<'EOF'
 (** Filled from the Aeneas template by ../extract.sh. NOT auto-generated
     verbatim: every opaque seam is an ALIAS of the constant of the same name in
-    `Update_FunsExternal` (all DEFINITIONS there), so that `Update_Safety`'s
-    laws about them apply to this model too, and no second, parallel block of
-    seams is opened.
+    the shared library `Aeneas_Laws` (all DEFINITIONS there; update-core's
+    FunsExternal binds the very same constants by Notation), so that the
+    library's laws about them apply to this model too, and no second, parallel
+    block of seams is opened.
 
-    `mk_array4` is update-core's TOTAL definition, never the Coq backend's
+    `mk_array4` is the library's TOTAL definition, never the Coq backend's
     `Primitives.mk_array`, which is an inconsistent axiom (it proves `False`;
     ../../AENEAS_COQ_MKARRAY_BUG.md). *)
 Require Import Primitives.
@@ -78,25 +92,25 @@ Import ListNotations.
 Local Open Scope Primitives_scope.
 Require Import Chain_Types.
 Include Chain_Types.
-Require Import Update_FunsExternal.
+Require Import Aeneas_Laws.
 Module Chain_FunsExternal.
 
-(** [core::slice::{[T]}::copy_from_slice] — update-core's seam, aliased. *)
+(** [core::slice::{[T]}::copy_from_slice] — the library's seam, aliased. *)
 Definition core_slice_Slice_copy_from_slice
   {T : Type} (markerCopyInst : core_marker_Copy T)
   : slice T -> slice T -> result (slice T)
-  := Update_FunsExternal.core_slice_Slice_copy_from_slice markerCopyInst.
+  := Aeneas_Laws.core_slice_Slice_copy_from_slice markerCopyInst.
 
 (** The byte<->u32 codecs the Coq backend has no theory for. Aliased for the
-    same reason; `Update_Safety`'s Q18/Q19 are laws about exactly these. *)
+    same reason; the library's Q18/Q19 are laws about exactly these. *)
 Definition core_num_U32_from_le_bytes : array u8 4%usize -> u32
-  := Update_FunsExternal.core_num_U32_from_le_bytes.
+  := Aeneas_Laws.core_num_U32_from_le_bytes.
 Definition core_num_U32_to_le_bytes : u32 -> array u8 4%usize
-  := Update_FunsExternal.core_num_U32_to_le_bytes.
+  := Aeneas_Laws.core_num_U32_to_le_bytes.
 
 (** The four-element array literal the extracted decoder builds. Total. *)
 Definition mk_array4 : u8 -> u8 -> u8 -> u8 -> array u8 4%usize
-  := Update_FunsExternal.mk_array4.
+  := Aeneas_Laws.mk_array4.
 End Chain_FunsExternal.
 EOF
 
@@ -114,8 +128,18 @@ perl -0pi -e 's/mk_array\s+(\d+)%usize\s*\[\s*(.*?)\s*\]/"mk_array$1 " . join(" 
 if grep -q 'Primitives.mk_array\|mk_array [0-9]' "$PROOFS/Chain_Funs.v"; then
   echo "error: an un-rewritten mk_array literal survived" >&2; exit 1; fi
 for a in $(grep -oE 'mk_array[0-9]+' "$PROOFS/Chain_Funs.v" | sort -u); do
-  grep -qE "Definition $a([[:space:]]|\$)" "$PROOFS/Chain_FunsExternal.v" || {
+  grep -qE "(Definition|Notation) $a([[:space:]]|\$)" "$PROOFS/Chain_FunsExternal.v" || {
     echo "error: extracted code needs $a, which has no total constructor" >&2; exit 1; }
 done
+
+echo ">> extraction record (inputs: sources + script + pins; outputs: generated model + llbc)"
+( cd "$ROOT" && "$PLUGIN/scripts/write-extraction-record.sh" \
+    crates/umbra-chain-core formal/rocq/chain-core formal/rocq/chain-core/extract.sh \
+    "$PIN_CHARON" "$PIN_AENEAS" "$USIZE_BITS" \
+    formal/rocq/chain-core/proofs-coq/Chain_Types.v \
+    formal/rocq/chain-core/proofs-coq/Chain_Funs.v \
+    formal/rocq/chain-core/proofs-coq/Chain_FunsExternal.v \
+    $( [ -f "$PROOFS/Chain_TypesExternal.v" ] && echo formal/rocq/chain-core/proofs-coq/Chain_TypesExternal.v ) \
+    formal/rocq/chain-core/chain.llbc )
 
 echo ">> done. Build:  cd $PROOFS && coq_makefile -f _CoqProject -o Makefile && make"

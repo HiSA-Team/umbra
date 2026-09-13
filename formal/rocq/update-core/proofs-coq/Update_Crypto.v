@@ -848,8 +848,9 @@ Proof.
   unfold usize_add, scalar_add in Hi26.  apply mk_scalar_to_Z in Hi26.
   rewrite tz32 in Htoff, Hi26.
   (* blob_len reaches the seam as u32 -> usize -> u32; only the VALUE survives *)
-  unfold scalar_cast in Hcst1, Hcst2.
-  apply mk_scalar_to_Z in Hcst1. apply mk_scalar_to_Z in Hcst2.
+  apply cast_u32_usize_val in Hcst1.
+  apply cast_usize_u32_val in Hcst2;
+    [| rewrite Hcst1; exact (proj2 (to_Z_u32_bounds _)) ].
   assert (Hblv : to_Z blu32 = to_Z (dec32 c28 c29 c30 c31))
     by (rewrite Hcst2; exact Hcst1).
   (* the two scratch windows have the lengths their write-backs need *)

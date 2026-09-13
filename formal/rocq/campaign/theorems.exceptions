@@ -1,0 +1,21 @@
+# Departures from the baseline theorem inventory (theorems.baseline, taken at 940ac00)
+# that the fast gate may accept. Tab-separated line forms:
+#   <name>\t<reason>                                        the theorem may be absent or changed
+#   move\t<project>:<module>\t<project>:<module>\t<reason>      a whole module relocated: every name of it
+#   lift\t<project>:<module>\t<project>:<module>\t<reason>      single theorems relocated: only the theorems the
+#                                                          inventory shows moved, same type and assumptions
+#   rename\t<Full.old.name>\t<Full.new.name>\t<reason>          one definition relocated (its canonical path)
+# A move or lift rewrites names only in projects that load the source project.
+# Every line names the campaign entry that made the change.
+move	formal/rocq/update-core/proofs-coq:Primitives	formal/rocq/lib:Primitives	entry 0001: the crate-local backend file replaced by the library's copy
+move	formal/rocq/update-core/proofs-coq:AeneasLoopShim	formal/rocq/lib:AeneasLoopShim	entry 0001: the crate-local loop shim replaced by the library's copy
+lift	formal/rocq/update-core/proofs-coq:Update_Safety	formal/rocq/lib:Aeneas_Laws	entry 0001: the 94 generic backend laws lifted verbatim from Update_Safety.v into the shared library
+lift	formal/rocq/update-core/proofs-coq:Update_FunsExternal	formal/rocq/lib:Aeneas_Laws	entry 0001: the 3 codec bound lemmas lifted with the seams they are about
+rename	Lib.Update_Funs.core_num_U32_to_le_bytes	AeneasLib.Aeneas_Laws.core_num_U32_to_le_bytes	entry 0001: backend seam now bound by Notation to the library's definition
+rename	Lib.Update_Funs.core_num_U32_from_le_bytes	AeneasLib.Aeneas_Laws.core_num_U32_from_le_bytes	entry 0001: backend seam now bound by Notation to the library's definition
+rename	Lib.Update_Funs.core_slice_Slice_copy_from_slice	AeneasLib.Aeneas_Laws.core_slice_Slice_copy_from_slice	entry 0001: backend seam now bound by Notation to the library's definition
+rename	Lib.Update_Funs.mk_array4	AeneasLib.Aeneas_Laws.mk_array4	entry 0001: total array constructor now bound by Notation to the library's definition
+rename	Lib.Update_FunsExternal.Update_FunsExternal.mk_array4	AeneasLib.Aeneas_Laws.mk_array4	entry 0001: same constructor, referenced through the external module's inner path
+rename	Lib.Update_FunsExternal.Update_FunsExternal.byte_at	AeneasLib.Aeneas_Laws.byte_at	entry 0001: codec helper lifted with the seams
+ct_eq16_loop_fueled	entry 0001: fuel-specific helper of Update_Safety.v replaced by ct_eqN_loop_bounded, stated once for both widths over the library's AeneasLoopBounds (loop_fuel_bound); the corollaries it served (ct_eq16_ok, ct_eq32_ok) are unchanged in statement and assumptions
+ct_eq32_loop_fueled	entry 0001: same replacement as ct_eq16_loop_fueled

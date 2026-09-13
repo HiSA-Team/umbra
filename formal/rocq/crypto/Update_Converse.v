@@ -168,7 +168,7 @@ Proof.
   ac_bind Hacc i23 H23.
   ac_guard Hacc GOff.
   (* --- the guards, converted from `usize` comparisons to plain values --- *)
-  unfold scalar_cast in HCa. apply mk_scalar_to_Z in HCa.
+  apply cast_u32_usize_val in HCa.
   unfold usize_sub, scalar_sub in HT.  apply mk_scalar_to_Z in HT.
   unfold usize_sub, scalar_sub in H23. apply mk_scalar_to_Z in H23.
   rewrite tz32 in HT. rewrite tz_fixed in H23.

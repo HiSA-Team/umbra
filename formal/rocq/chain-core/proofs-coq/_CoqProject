@@ -1,11 +1,13 @@
 -R . Lib
 -R ../../update-core/proofs-coq Lib
+-R ../../lib AeneasLib
 
 # umbra-chain-core — the blob-body half of the verifiable secure enclave update
 # (issue #58). `Primitives.v` and `AeneasLoopShim.v` are NOT duplicated here:
-# they are loaded out of update-core/proofs-coq (second -R above), because
-# Chain_Compose.v Requires update-core's `Update_Crypto` and two files of the
-# same logical name in one load path would clash. Build update-core FIRST.
+# they come from the shared library ../../lib (third -R above, logical root
+# AeneasLib), together with the generic backend laws `Aeneas_Laws.v`; the
+# update-core proofs (second -R) supply `Update_Safety`/`Update_Crypto`.
+# Build the library FIRST, then update-core, then this.
 #
 # Regenerate the extracted files with ../extract.sh (re-applies the manual
 # patches: loop-shim import + Coq-8.18 binder rewrite + opaque u32 codecs +
@@ -35,3 +37,7 @@ Chain_Residual.v
 # measurement IS accepted, so the target theorem's hypothesis is met by every
 # honestly-signed blob.
 Chain_Reachable.v
+# Adequacy of the fuel shim for `ct_eq32_at_loop` and `chain_root_loop` (the
+# latter under an explicit no-OutOfFuel hypothesis on the HMAC seam and the
+# gate's block cap). Requires ITree; a leaf — nothing in crypto requires it.
+Chain_Loops.v

@@ -1,0 +1,14 @@
+# proof-engineer extraction record v1 — regenerate with the crate's extract script
+date 2026-09-12T15:55:23Z
+crate crates/umbra-chain-core
+charon 6f058254
+aeneas 8dd8bfb3
+usize_bits 32
+script 42c1b290b584a11365898679ad615f45f6ad0c44e9530af3a233cabc31f1b7aa formal/rocq/chain-core/extract.sh
+input 6e424077793d594e4a0da826435b0cbade7af34a145b10e6e537271fb0792573 crates/umbra-chain-core/Cargo.toml
+input db053e317868b2858e80ce5a40520ad76573b486a78de9e0c70d017829e15789 crates/umbra-chain-core/src/lib.rs
+input 7f4c60e68a5812d2c063557f0245b1cb46fc0a051d170cbba38b4aef814ca37c crates/umbra-chain-core/src/lib_tests.rs
+output e0457a8bfef3b36170b6a28f31fcfbedd3ed4dd8fcd4b9c1d89c0e491234bd7c formal/rocq/chain-core/proofs-coq/Chain_Types.v
+output 62f49c78e25ee1a3e2bc14109fc23e9605682e023ea211eba8bd3cf6333e516e formal/rocq/chain-core/proofs-coq/Chain_Funs.v
+output f01103bef83a0a3838636ddacebceb06889a77784fedd95794d7eecf139bbfd7 formal/rocq/chain-core/proofs-coq/Chain_FunsExternal.v
+output 31170b882f8105bc5ed3984b4f4d036dd617acc89e96693cccf23a10818abb1f formal/rocq/chain-core/chain.llbc

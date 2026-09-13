@@ -127,7 +127,7 @@ Definition compute_pkg_tag
 .
 
 (** [umbra_update_core::ct_eq32]: loop body 0:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 162:4-165:5 *)
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 166:4-169:5 *)
 Definition ct_eq32_loop_body
   (a : array u8 32%usize) (b : slice u8) (d : u8) (i : usize) :
   result (control_flow (u8 * usize) u8)
@@ -144,7 +144,7 @@ Definition ct_eq32_loop_body
 .
 
 (** [umbra_update_core::ct_eq32]: loop 0:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 162:4-165:5 *)
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 166:4-169:5 *)
 Definition ct_eq32_loop
   (a : array u8 32%usize) (b : slice u8) (d : u8) (i : usize) : result u8 :=
   loop
@@ -153,7 +153,7 @@ Definition ct_eq32_loop
 .
 
 (** [umbra_update_core::ct_eq32]:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 156:0-167:1 *)
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 160:0-171:1 *)
 Definition ct_eq32 (a : array u8 32%usize) (b : slice u8) : result bool :=
   let i := slice_len b in
   if i s<> 32%usize
@@ -162,7 +162,7 @@ Definition ct_eq32 (a : array u8 32%usize) (b : slice u8) : result bool :=
 .
 
 (** [umbra_update_core::ct_eq16]: loop body 0:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 150:4-153:5 *)
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 154:4-157:5 *)
 Definition ct_eq16_loop_body
   (a : array u8 16%usize) (b : array u8 16%usize) (d : u8) (i : usize) :
   result (control_flow (u8 * usize) u8)
@@ -179,7 +179,7 @@ Definition ct_eq16_loop_body
 .
 
 (** [umbra_update_core::ct_eq16]: loop 0:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 150:4-153:5 *)
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 154:4-157:5 *)
 Definition ct_eq16_loop
   (a : array u8 16%usize) (b : array u8 16%usize) (d : u8) (i : usize) :
   result u8
@@ -190,14 +190,14 @@ Definition ct_eq16_loop
 .
 
 (** [umbra_update_core::ct_eq16]:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 147:0-155:1 *)
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 151:0-159:1 *)
 Definition ct_eq16
   (a : array u8 16%usize) (b : array u8 16%usize) : result bool :=
   d <- ct_eq16_loop a b 0%u8 0%usize; Ok (d s= 0%u8)
 .
 
 (** [umbra_update_core::parse_and_verify]:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 90:0-134:1
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 94:0-138:1
     Visibility: public *)
 Definition parse_and_verify
   {H : Type} (pkgHmacInst : PkgHmac_t H) (pkg : slice u8)
@@ -309,7 +309,7 @@ Definition parse_and_verify
 .
 
 (** [umbra_update_core::select_active_slot]:
-    Source: 'crates/umbra-update-core/src/lib.rs', lines 138:0-145:1
+    Source: 'crates/umbra-update-core/src/lib.rs', lines 142:0-149:1
     Visibility: public *)
 Definition select_active_slot
   (ver_a : option u32) (ver_b : option u32) : result (option usize) :=

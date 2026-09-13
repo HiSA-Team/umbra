@@ -260,21 +260,22 @@ Proof.
   intros a blob1 blob2 off Hlen Hag. unfold ct_eq32_at.
   (* every failure branch closes with `cbn [bind]` FIRST. A bare `reflexivity`
      on `bind (Fail_ e) f1 = bind (Fail_ e) f2` invites conversion to unfold
-     `ct_eq32_at_loop -> loop -> loop_fuel 1000000` inside f1/f2, and normalising
-     a 10^6 `nat` literal to unary does not come back. *)
+     `ct_eq32_at_loop -> loop -> loop_fuel <the shim's fuel>` inside f1/f2, and
+     normalising a 10^6 `nat` literal to unary does not come back. *)
   destruct (usize_add off 32%usize) as [e|]; cbn [bind]; [| reflexivity ].
   assert (Hc : (slice_len blob1 s< e) = (slice_len blob2 s< e))
     by (unfold scalar_ltb; rewrite Hlen; reflexivity).
   rewrite Hc. destruct (slice_len blob2 s< e); [ reflexivity |].
   (* Prove the loop equality FIRST and rewrite with it. Unfolding `loop` in the
-     main goal instead leaves two `loop_fuel 1000000` terms for `reflexivity` to
-     convert, and converting a 10^6 `nat` literal to unary does not terminate in
-     any useful time. Inside the `assert` the literal is only ever unified, never
-     evaluated. *)
+     main goal instead leaves two shim-fuel `loop_fuel` terms for `reflexivity`
+     to convert, and converting a 10^6 `nat` literal to unary does not terminate
+     in any useful time. `ct_eq32_at_loop_bounded` (Chain_Value) trades the
+     shim's fuel for `S (32 - 0)`, so the literal is never named here. *)
   assert (E : ct_eq32_at_loop a blob1 off 0%u8 0%usize
               = ct_eq32_at_loop a blob2 off 0%u8 0%usize).
-  { unfold ct_eq32_at_loop, loop.
-    apply (ct_eq32_at_loop_cong 1000000 a blob1 blob2 off 0%u8 0%usize);
+  { rewrite !ct_eq32_at_loop_bounded.
+    apply (ct_eq32_at_loop_cong (Datatypes.S (Z.to_nat (32 - to_Z 0%usize)))
+             a blob1 blob2 off 0%u8 0%usize);
       [ exact Hlen | exact Hag | rewrite ctz0; lia ]. }
   rewrite E. reflexivity.
 Qed.

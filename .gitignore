@@ -49,7 +49,9 @@ tools/last_uart_fault.log
 # repo. The user-facing documentation surface is the mdBook under
 # `book/` (sources tracked, build output gitignored).
 docs/
-.claude/
+.claude/*
+# Exception: agent definitions are meant to be shared, unlike the rest of .claude/.
+!.claude/agents/
 
 # === Build artefacts (host applications) ===
 

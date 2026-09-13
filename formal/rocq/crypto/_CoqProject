@@ -1,6 +1,7 @@
 -R . UmbraCrypto
 -R ../update-core/proofs-coq Lib
 -R ../chain-core/proofs-coq Lib
+-R ../lib AeneasLib
 
 # umbra-update-core — the CRYPTOGRAPHIC layer (issue #58).
 #

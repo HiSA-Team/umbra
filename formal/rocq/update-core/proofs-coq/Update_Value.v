@@ -193,10 +193,12 @@ Theorem ct_eq16_complete : forall (a b : array u8 16%usize),
        to_Z x = to_Z y) ->
   ct_eq16 a b = Ok true.
 Proof.
-  intros a b Heq. unfold ct_eq16, ct_eq16_loop, loop.
-  destruct (ct_eq16_loop_complete 1000000 a b 0%u8 0%usize) as [dfin [Hl Hz]].
+  intros a b Heq. unfold ct_eq16. rewrite ct_eq16_loop_bounded.
+  (* fuel `S (16 - 0)`: the bound Update_Safety derives, no literal needed *)
+  destruct (ct_eq16_loop_complete (Datatypes.S (Z.to_nat (16 - to_Z 0%usize)))
+              a b 0%u8 0%usize) as [dfin [Hl Hz]].
   - rewrite tz0. lia.
-  - rewrite tz0. apply Nat.ltb_lt. vm_compute. reflexivity.
+  - lia.
   - exact tz0u8.
   - intros k Hk. apply Heq. rewrite tz0 in Hk. lia.
   - rewrite Hl. cbn [bind]. rewrite (u8_eqb_zero_intro dfin Hz). reflexivity.
@@ -318,11 +320,13 @@ Proof.
   assert (Hc : (slice_len b s<> 32%usize) = false).
   { unfold scalar_neqb, scalar_eqb. apply negb_false_iff. apply Z.eqb_eq.
     rewrite tz32. exact Hlen. }
-  rewrite Hc. unfold ct_eq32_loop, loop.
-  destruct (ct_eq32_loop_complete 1000000 a b 0%u8 0%usize Hlen)
+  rewrite Hc. rewrite ct_eq32_loop_bounded.
+  (* fuel `S (32 - 0)`: the bound Update_Safety derives, no literal needed *)
+  destruct (ct_eq32_loop_complete (Datatypes.S (Z.to_nat (32 - to_Z 0%usize)))
+              a b 0%u8 0%usize Hlen)
     as [dfin [Hl Hz]].
   - rewrite tz0. lia.
-  - rewrite tz0. apply Nat.ltb_lt. vm_compute. reflexivity.
+  - lia.
   - exact tz0u8.
   - intros k Hk. apply Heq. rewrite tz0 in Hk. lia.
   - rewrite Hl. cbn [bind]. rewrite (u8_eqb_zero_intro dfin Hz). reflexivity.

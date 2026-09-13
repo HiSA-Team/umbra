@@ -308,7 +308,7 @@ Proof.
   cbv zeta in Ht. cstep Ht i3 Hi3.
   destruct (slice_len blob s< i3) eqn:Hlen; [ discriminate |].
   apply sltb_false in Hlen.
-  unfold scalar_cast in Hic. apply mk_scalar_to_Z in Hic.
+  apply cast_u32_usize_val in Hic.
   unfold usize_mul, scalar_mul in Hi1. apply mk_scalar_to_Z in Hi1.
   unfold usize_add, scalar_add in Hbase. apply mk_scalar_to_Z in Hbase.
   unfold usize_add, scalar_add in Hi3. apply mk_scalar_to_Z in Hi3.
@@ -436,6 +436,57 @@ Proof.
   rewrite u8_xor_to_Z in Hxor0.
   apply (proj1 (Z.lxor_eq_0_iff _ _)) in Hxor0.
   split; [ exact Hd0 | exact Hxor0 ].
+Qed.
+
+(** The compare-loop body never exhausts fuel on its own (its only failure
+    channel is `Failure`, from a bounds check) and strictly decreases the index
+    measure `32 - i` on every `Cont` step, so the shim's `loop` on it IS the run
+    with fuel `S (32 - i)` (AeneasLoopBounds, via Update_Safety). The shim's
+    fuel constant is therefore never named in this development. *)
+Lemma ct_eq32_at_body_no_oof :
+  forall (a : array u8 32%usize) (blob : slice u8) (off : usize) (s : u8 * usize),
+    (fun '(d1, i1) => ct_eq32_at_loop_body a blob off d1 i1) s <> Fail_ OutOfFuel.
+Proof.
+  intros a blob off [d i]. cbn beta iota. unfold ct_eq32_at_loop_body.
+  destruct (i s< 32%usize); [| discriminate ].
+  apply bind_not_oof; [ apply array_index_usize_not_oof | intro x1 ].
+  apply bind_not_oof; [ apply usize_add_not_oof | intro q0 ].
+  apply bind_not_oof; [ apply slice_index_usize_not_oof | intro y1 ].
+  cbv zeta. apply bind_not_oof; [ apply usize_add_not_oof | intro i2; discriminate ].
+Qed.
+
+Lemma ct_eq32_at_body_dec :
+  forall (a : array u8 32%usize) (blob : slice u8) (off : usize) (s s' : u8 * usize),
+    (fun '(d1, i1) => ct_eq32_at_loop_body a blob off d1 i1) s = Ok (Cont s') ->
+    (Z.to_nat (32 - to_Z (snd s')) < Z.to_nat (32 - to_Z (snd s)))%nat.
+Proof.
+  intros a blob off [d i] [d' i'] H. cbn beta iota in H.
+  unfold ct_eq32_at_loop_body in H.
+  destruct (i s< 32%usize) eqn:Hlt; [| discriminate ].
+  apply sltb_true in Hlt. rewrite ctz32 in Hlt.
+  destruct (array_index_usize a i) as [x1|]; cbn [bind] in H; [| discriminate ].
+  destruct (usize_add off i) as [q0|]; cbn [bind] in H; [| discriminate ].
+  destruct (slice_index_usize blob q0) as [y1|]; cbn [bind] in H; [| discriminate ].
+  destruct (usize_add i 1%usize) as [i2|] eqn:Ei; cbn [bind] in H; [| discriminate ].
+  injection H as _ <-.
+  unfold usize_add, scalar_add in Ei. apply mk_scalar_to_Z in Ei. rewrite tz1 in Ei.
+  cbn [snd]. pose proof (usize_nonneg i). lia.
+Qed.
+
+Lemma ct_eq32_at_loop_bounded :
+  forall (a : array u8 32%usize) (blob : slice u8) (off : usize) (d : u8) (i : usize),
+    ct_eq32_at_loop a blob off d i
+    = loop_fuel (Datatypes.S (Z.to_nat (32 - to_Z i)))
+        (fun '(d1, i1) => ct_eq32_at_loop_body a blob off d1 i1) (d, i).
+Proof.
+  intros a blob off d i. unfold ct_eq32_at_loop, loop.
+  apply loop_fuel_stable with (n := Datatypes.S (Z.to_nat (32 - to_Z i))).
+  - reflexivity.
+  - exact (loop_fuel_bound_S _ (fun s : u8 * usize => Z.to_nat (32 - to_Z (snd s))) (d, i)
+            (ct_eq32_at_body_no_oof a blob off) (ct_eq32_at_body_dec a blob off)).
+  - pose proof (usize_nonneg i).
+    apply Nat.le_trans with (m := 33%nat);
+      [ lia | apply Nat.leb_le; vm_compute; reflexivity ].
 Qed.
 
 (** The 32-iteration compare loop, run backwards: a zero accumulator at the end

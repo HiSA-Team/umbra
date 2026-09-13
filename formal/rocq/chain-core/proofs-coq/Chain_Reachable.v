@@ -121,11 +121,13 @@ Proof.
   destruct (usize_add_ok off 32%usize) as [e [He Hev]]; [ rewrite ctz32; lia |].
   rewrite He. cbn [bind]. rewrite ctz32 in Hev.
   assert (Hc : (slice_len blob s< e) = false) by (apply Z.ltb_ge; lia).
-  rewrite Hc. unfold ct_eq32_at_loop, loop.
-  destruct (ct_eq32_at_loop_complete 1000000 a blob off 0%u8 0%usize Hlen Hoff)
+  rewrite Hc. rewrite ct_eq32_at_loop_bounded.
+  (* fuel `S (32 - 0)`: the bound Chain_Value derives, no literal needed *)
+  destruct (ct_eq32_at_loop_complete (Datatypes.S (Z.to_nat (32 - to_Z 0%usize)))
+              a blob off 0%u8 0%usize Hlen Hoff)
     as [dfin [Hl Hz]].
   - rewrite ctz0. lia.
-  - rewrite ctz0. apply Nat.ltb_lt. vm_compute. reflexivity.
+  - lia.
   - exact ctz0u8.
   - intros p q Hp Hq. apply Heq. rewrite ctz0 in Hp. lia. exact Hq.
   - rewrite Hl. cbn [bind]. rewrite (cu8_eqb_zero_intro dfin Hz). reflexivity.

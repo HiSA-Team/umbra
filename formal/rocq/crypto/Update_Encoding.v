@@ -47,13 +47,16 @@
     implementable: a reduction holding no key can compute the message and tag it
     must forward to its EUF-CMA challenger, from the submitted package only.
 
-    NO NEW AXIOMS. `Print Assumptions accept_encodes` lists exactly the 38
-    quarantined Primitives/Update_Safety axioms the existing chain already has;
-    the injectivity theorems below need strict subsets of those, and
-    `enc_from_inj` is closed under the global context. THAT COUNT IS A TIER-D
-    STATEMENT ONLY: Tier G (Umbra_EUFCMA.v, Umbra_Reduction.v) carries SSProve's
-    own 7-axiom base, which is DISJOINT from these 38 and includes an admitted
-    lemma. See README.md, "Axiom budget". *)
+    NO NEW AXIOMS. `Print Assumptions accept_encodes` reports `Closed under the
+    global context`, and so do the injectivity theorems below and
+    `enc_from_inj`. The 38 quarantined Primitives/Update_Safety entries this
+    header used to quote are gone: `Primitives.v` defines the backend
+    operations rather than declaring them, and `Update_Safety`'s laws are
+    lemmas. THAT IS A TIER-D STATEMENT ONLY: Tier G (Umbra_EUFCMA.v,
+    Umbra_Reduction.v) carries SSProve's own 7-axiom base, which includes an
+    admitted lemma and is the only axiom budget the development still has.
+    The seven are listed in `crypto/headline-assumptions.txt`; see also the
+    revision note at the top of `../README.md`. *)
 
 Require Import Primitives.
 Import Primitives.

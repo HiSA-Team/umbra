@@ -1,0 +1,100 @@
+# proof-engineer repo profile for umbra. See the plugin's skill reference for every field.
+
+name = "umbra"
+
+[target]
+usize_bits = 32
+
+[opam]
+switch = "default"
+export = "formal/rocq/switch.export"
+
+[opam.allow_list]
+coq = "8.18.0"
+coq-ssprove = "0.2.4"
+coq-mathcomp-ssreflect = "2.2.0"
+coq-mathcomp-algebra = "2.2.0"
+coq-mathcomp-fingroup = "2.2.0"
+coq-mathcomp-solvable = "2.2.0"
+coq-mathcomp-field = "2.2.0"
+coq-mathcomp-analysis = "1.3.1"
+coq-mathcomp-classical = "1.3.1"
+coq-mathcomp-finmap = "2.1.0"
+coq-mathcomp-word = "3.2"
+coq-mathcomp-bigenough = "1.0.4"
+coq-extructures = "0.5.0"
+coq-deriving = "0.2.3"
+coq-equations = "1.3+8.18"
+coq-elpi = "2.0.0.1"
+coq-hierarchy-builder = "1.8.1"
+coq-itree = "5.2.1"
+coq-paco = "4.2.3"
+coq-ext-lib = "0.13.1"
+
+[threat_model]
+document = "book/src/decisions/000-threat-model.md"
+attacker_classes = [
+  { id = "A1", description = "remote Non-Secure attacker: controls the Non-Secure host application, calls any NSC veneer with any arguments" },
+  { id = "A2", description = "A1 with a debugger attached to the Non-Secure side" },
+  { id = "A3", description = "A2 with physical access: single voltage or clock glitches, and with it the power to interrupt supply" },
+]
+crown_jewels = [
+  { id = "CJ1", sentence = "the master key never leaves Secure storage" },
+  { id = "CJ2", sentence = "the chained measurement is unbroken" },
+  { id = "CJ3", sentence = "enclave code stays confidential and isolated" },
+  { id = "CJ4", sentence = "the NSC veneers are the only Non-Secure to Secure entry" },
+]
+
+[[crates]]
+path = "crates/umbra-update-core"
+rocq_dir = "formal/rocq/update-core"
+extract_script = "formal/rocq/update-core/extract.sh"
+seam_entry = "parse_and_verify"
+barrier_symbol = "umbra_update_core::parse_and_verify"
+
+[[crates]]
+path = "crates/umbra-chain-core"
+rocq_dir = "formal/rocq/chain-core"
+extract_script = "formal/rocq/chain-core/extract.sh"
+seam_entry = "chain_root"
+barrier_symbol = "umbra_chain_core::chain_root"
+
+[pins]
+charon = "6f058254"
+aeneas = "8dd8bfb3"
+
+[library]
+manifest = "formal/rocq/lib/manifest.sha256"
+plugin_version = "0.1.0"
+
+[gate]
+full = "tools/artifact_preflight.sh"
+fast = ""
+projects = [
+  "formal/rocq/lib",
+  "formal/rocq/update-core/proofs-coq",
+  "formal/rocq/chain-core/proofs-coq",
+  "formal/rocq/crypto",
+  "formal/rocq/ess-core/proofs-coq",
+]
+headline_assumptions = "formal/rocq/crypto/headline-assumptions.txt"
+headline_theorems = [ "UmbraCrypto.Umbra_RealGame.device_forgery_le_eufcma_at_the_real_seam" ]
+crypto_dir = "formal/rocq/crypto"
+baseline_manifest = "formal/rocq/campaign/baseline.sha256"
+baseline_commit = "940ac00"
+
+[witnesses]
+caller_checks = [
+  { file = "src/hardware/platform/stm32n657/boot/src/attest_imp.rs", line = 417, establishes = "exact length: reloc_count == 0 and blob_len == 48 + code_size, no unauthenticated tail", persistent_state = "none" },
+  { file = "src/hardware/platform/stm32n657/boot/src/attest_imp.rs", line = 477, establishes = "the inactive slot is written to flash before any re-verification", persistent_state = "enclave slot in flash" },
+  { file = "src/hardware/platform/stm32n657/boot/src/attest_imp.rs", line = 508, establishes = "invalidation arms: a slot whose measurement fails or whose declared version differs from the derived one has its first sector zeroed", persistent_state = "enclave slot in flash" },
+  { file = "src/hardware/platform/stm32n657/boot/src/attest_imp.rs", line = 520, establishes = "declared version equals the measurement-derived version, else ERR_VERIFY", persistent_state = "enclave slot in flash (zeroed on mismatch)" },
+  { file = "src/hardware/platform/stm32n657/boot/src/api_impl.rs", line = 306, establishes = "boot slot selection by the authenticated, measured version of each slot, with the boot-fail counter as a mask", persistent_state = "active slot choice; TAMP boot-fail counters" },
+]
+
+[log]
+path = "formal/rocq/campaign"
+banned_terms_file = ".git/info/banned-terms"
+
+[guards]
+rust_edit_guard = true

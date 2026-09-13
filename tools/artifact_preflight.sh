@@ -51,6 +51,10 @@ if [ "$WITH_EXTRACTION" -eq 1 ]; then
   formal/rocq/chain-core/extract.sh
 fi
 
+echo ">> Rocq shared library (Primitives, loop shim, backend laws)"
+( cd formal/rocq/lib && opam exec --switch=default -- coq_makefile -f _CoqProject -o Makefile >/dev/null )
+opam exec --switch=default -- make -C formal/rocq/lib -j4
+
 echo ">> Rocq update-core"
 opam exec --switch=default -- make -C formal/rocq/update-core/proofs-coq -j4
 
@@ -60,6 +64,19 @@ opam exec --switch=default -- bash formal/rocq/chain-core/build.sh
 echo ">> Rocq crypto and union"
 opam exec --switch=default -- bash formal/rocq/crypto/build.sh
 
+echo ">> remaining Rocq projects of the profile (every gate.projects entry is built before the structural gate)"
+# The explicit steps above build the library, update-core, chain-core and crypto;
+# any other project the profile lists (ess-core today) is built here, so the
+# structural gate below never inventories a stale object. make is incremental,
+# so the projects already built cost nothing.
+while IFS= read -r pr; do
+  [ -n "$pr" ] || continue
+  [ -f "$pr/build.sh" ] && continue          # built above by its own script
+  [ -f "$pr/_CoqProject" ] || { echo "error: profile project $pr has no _CoqProject" >&2; exit 1; }
+  ( cd "$pr" && opam exec --switch=default -- coq_makefile -f _CoqProject -o Makefile >/dev/null )
+  opam exec --switch=default -- make -C "$pr" -j4
+done < <(/opt/miniconda3/bin/python -c 'import tomllib,sys; [print(p) for p in tomllib.load(open("formal/proof-engineer.toml","rb"))["gate"]["projects"]]')
+
 echo ">> independent kernel check"
 (
   cd formal/rocq/crypto
@@ -67,6 +84,7 @@ echo ">> independent kernel check"
     -R . UmbraCrypto \
     -R ../update-core/proofs-coq Lib \
     -R ../chain-core/proofs-coq Lib \
+    -R ../lib AeneasLib \
     UmbraCrypto.Umbra_Union
 )
 
@@ -80,7 +98,8 @@ ASSUMPTION_ACTUAL="$(
     opam exec --switch=default -- coqtop -quiet \
       -R . UmbraCrypto \
       -R ../update-core/proofs-coq Lib \
-      -R ../chain-core/proofs-coq Lib 2>/dev/null |
+      -R ../chain-core/proofs-coq Lib \
+      -R ../lib AeneasLib 2>/dev/null |
     awk '
       /^Axioms:$/ { inside=1; next }
       inside && /^Coq </ { exit }
@@ -117,6 +136,17 @@ echo ">> local admit audit"
 # glob is needed; the vendored toolchain lives in formal/toolchain/.
 if grep -rnE 'Admitted\.|\badmit\b' formal/rocq --include='*.v'; then
   echo "error: local Rocq admit found" >&2
+  exit 1
+fi
+
+echo ">> proof-engineer structural gate (extraction records, headline set, library manifest)"
+# The projects above are already built, so only the structural lines run here.
+PLUGIN="${PROOF_ENGINEER_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+[ -n "$PLUGIN" ] || PLUGIN=$(ls -d "$HOME"/.claude/plugins/cache/proof-engineer/proof-engineer/*/ 2>/dev/null | sort -V | tail -1)
+PLUGIN=${PLUGIN%/}
+[ -x "$PLUGIN/scripts/fast-gate.sh" ] || { echo "error: proof-engineer plugin not found; set PROOF_ENGINEER_ROOT" >&2; exit 1; }
+if ! CLAUDE_PLUGIN_ROOT="$PLUGIN" "$PLUGIN/scripts/fast-gate.sh" --structural-only; then
+  echo "error: proof-engineer structural gate failed" >&2
   exit 1
 fi
 

@@ -65,11 +65,14 @@
 
     MEASURED AXIOM BUDGET (entries listed by `Print Assumptions`, one per line
     at column 0 of the `Axioms:` block):
-      `accepted_equal_cores_pin_the_blob_body`            40
-      `wire_accepted_equal_indices_pin_the_blob_body`     41
-      `accepted_equal_indices_pin_the_blob_body`          41
-    All Aeneas/Primitives quarantine laws plus `Chain_Value.array_u8_ext`
-    (Q21). ZERO classical axioms: no `boolp.*`, no `realsum`, no `classic`. *)
+      `accepted_equal_cores_pin_the_blob_body`            0
+      `wire_accepted_equal_indices_pin_the_blob_body`     0
+      `accepted_equal_indices_pin_the_blob_body`          0
+    All three report `Closed under the global context`. The Aeneas/Primitives
+    laws this header used to count — 40/41/41, plus `Chain_Value.array_u8_ext`
+    (Q21) — are definitions and lemmas now, not declarations, so nothing of
+    theirs reaches the budget. ZERO classical axioms either: no `boolp.*`, no
+    `realsum`, no `classic`. *)
 
 Require Import Primitives.
 Import Primitives.

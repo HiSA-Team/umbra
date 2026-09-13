@@ -1,0 +1,11 @@
+# proof-engineer library manifest: plugin 0.1.0, usize_bits 32 (authoritative source: the plugin's lib/rocq/manifest.sha256)
+e22333fd4825233779a06a4c60a343af4434d1296d6e1675af311a1d9aba3d54  formal/rocq/lib/AeneasLoopBounds.v
+c6d255dbeff313f640288cd37d7e8b70cbe08d09ed155d112b667d240ff22f3c  formal/rocq/lib/AeneasLoopModel.v
+ebab80e5e389595f8828cafa39360d1fa2e7b894df68392adeb2c9d8811bd267  formal/rocq/lib/AeneasLoopShim.v
+5db21ddadccb40ba915a8389283dc18d2be524f36eea980bd9f92fc6e2bb4ee1  formal/rocq/lib/Aeneas_Laws.v
+4e22cef668d734506c015f15b1df3cc41dadc5005230835244167d0066f7af5f  formal/rocq/lib/Primitives.v
+c877e59b90c0cd9be38823628fe79a010a479f78a7392d51500ecf826cef321f  formal/rocq/lib/Primitives_Check.v
+597857fea4b6d77c332082c40a1c26910b02a683dc962ebeb3ea6073f265c290  formal/rocq/lib/crypto/EUFCMA_Game.v
+84d84b5e4289ce6d7f05e863a8ab2a28bd13cb9d595e7252842d13198b1c23fc  formal/rocq/lib/crypto/_CoqProject
+2d49cf49b1b463092caffdf815c1e2dd228098bef3bb8ef3e995a22eba2103c6  formal/rocq/lib/AeneasTarget.v
+d52c85a51a41686db3c00d5205f5abfbbc8d7f100b4408a111a86c1d109edc4b  formal/rocq/lib/_CoqProject

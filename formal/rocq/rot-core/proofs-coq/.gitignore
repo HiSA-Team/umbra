@@ -4,3 +4,7 @@
 *.glob
 *.aux
 .lia.cache
+.nia.cache
+Makefile
+Makefile.conf
+.Makefile.d

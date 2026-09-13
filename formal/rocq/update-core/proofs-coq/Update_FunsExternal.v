@@ -6,7 +6,7 @@ Import Primitives.
 Require Import Coq.ZArith.ZArith.
 Require Import List.
 Import ListNotations.
-Require Import Lia.
+Require Import Aeneas_Laws.
 Local Open Scope Primitives_scope.
 Require Import Update_Types.
 Include Update_Types.
@@ -16,68 +16,28 @@ Module Update_FunsExternal.
     Source: '/rustc/library/core/src/slice/mod.rs', lines 4321:4-4323:16
     Name pattern: [core::slice::{[@T]}::copy_from_slice]
     Visibility: public *)
-(* Filled by ../extract.sh (the template leaves it as an Axiom): Rust panics
-   unless the lengths match, and on success dst holds src's elements. *)
-Definition core_slice_Slice_copy_from_slice
-  {T : Type} (markerCopyInst : core_marker_Copy T) (dst src : slice T)
-  : result (slice T) :=
-  if Z.eqb (to_Z (slice_len dst)) (to_Z (slice_len src)) then Ok src else Fail_ Failure.
+(* Filled by ../extract.sh (the template leaves it as an Axiom): bound to the
+   shared library's definition (Rust panics unless the lengths match, and on
+   success dst holds src's elements), so the library's laws apply verbatim. *)
+Notation core_slice_Slice_copy_from_slice := Aeneas_Laws.core_slice_Slice_copy_from_slice.
 
 
 (* --- the byte<->u32 codecs (NOT axioms) --------------------------------- *)
 (* `u32::to_le_bytes` is the base-256 digit decomposition and
-   `u32::from_le_bytes` its recomposition. Added by ../extract.sh. *)
-Local Open Scope Z_scope.
-
-Lemma to_Z_u8_range : forall x : u8, 0 <= to_Z x < 256.
-Proof. intro x. pose proof (to_Z_bounds x) as H. unfold scalar_min, scalar_max, u8_min, u8_max in H. lia. Qed.
-
-Lemma byte_digit_bnd : forall z k : Z,
-  scalar_min U8 <= (z / 256 ^ k) mod 256 <= scalar_max U8.
-Proof.
-  intros z k. unfold scalar_min, scalar_max, u8_min, u8_max.
-  pose proof (Z.mod_pos_bound (z / 256 ^ k) 256 ltac:(lia)). lia.
-Qed.
-
-Definition byte_digit (z k : Z) : u8 :=
-  mk_scalar_of_bounds U8 ((z / 256 ^ k) mod 256) (byte_digit_bnd z k).
-
-Definition core_num_U32_to_le_bytes (x : u32) : array u8 4%usize :=
-  exist _ [ byte_digit (to_Z x) 0; byte_digit (to_Z x) 1;
-            byte_digit (to_Z x) 2; byte_digit (to_Z x) 3 ] eq_refl.
-
-Definition byte_at (a : array u8 4%usize) (k : nat) : Z :=
-  match nth_error (proj1_sig a) k with Some b => to_Z b | None => 0 end.
-
-Lemma byte_at_bnd : forall a k, 0 <= byte_at a k < 256.
-Proof.
-  intros a k. unfold byte_at.
-  destruct (nth_error (proj1_sig a) k) as [b|]; [ apply to_Z_u8_range | lia ].
-Qed.
-
-Lemma from_le_bnd : forall a : array u8 4%usize,
-  scalar_min U32
-  <= byte_at a 0 + 256 * byte_at a 1 + 65536 * byte_at a 2 + 16777216 * byte_at a 3
-  <= scalar_max U32.
-Proof.
-  intros a. unfold scalar_min, scalar_max, u32_min, u32_max.
-  pose proof (byte_at_bnd a 0). pose proof (byte_at_bnd a 1).
-  pose proof (byte_at_bnd a 2). pose proof (byte_at_bnd a 3). lia.
-Qed.
-
-Definition core_num_U32_from_le_bytes (a : array u8 4%usize) : u32 :=
-  mk_scalar_of_bounds U32
-    (byte_at a 0 + 256 * byte_at a 1 + 65536 * byte_at a 2 + 16777216 * byte_at a 3)
-    (from_le_bnd a).
+   `u32::from_le_bytes` its recomposition: the shared library's definitions,
+   bound here by name so the extracted body and the library's laws (Q18/Q19)
+   talk about one constant. Added by ../extract.sh. *)
+Notation core_num_U32_to_le_bytes := Aeneas_Laws.core_num_U32_to_le_bytes.
+Notation core_num_U32_from_le_bytes := Aeneas_Laws.core_num_U32_from_le_bytes.
 
 (* --- TOTAL array-literal constructors (NOT axioms) ---------------------- *)
 (* Replacements for the Aeneas Coq backend's `mk_array`, which is an
-   inconsistent `Axiom` (see ../../AENEAS_COQ_MKARRAY_BUG.md) and which our
-   Primitives.v therefore no longer declares. `extract.sh` rewrites every
-   `mk_array N%usize [ … ]` literal in generated Update_Funs.v into an
-   application of one of these. Each carries its own length proof. *)
-Definition mk_array4 (b0 b1 b2 b3 : u8) : array u8 4%usize :=
-  exist _ [b0; b1; b2; b3] eq_refl.
+   inconsistent `Axiom` (see ../../AENEAS_COQ_MKARRAY_BUG.md) and which the
+   library's Primitives.v therefore no longer declares. `extract.sh` rewrites
+   every `mk_array N%usize [ … ]` literal in generated Update_Funs.v into an
+   application of one of these. Each carries its own length proof. The 4-byte
+   one is the library's (Q20 is about it); the 15-byte one is crate-specific. *)
+Notation mk_array4 := Aeneas_Laws.mk_array4.
 
 Definition mk_array15
   (b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 : u8) : array u8 15%usize :=
