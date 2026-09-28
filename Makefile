@@ -115,6 +115,11 @@ UMBRA_LIB_PATH = ${ROOT_DIR}/target/${TARGET_ARCH}/${UMBRA_COMPILE_MODE}
 
 umbra_build:
 	@${CARGO} ${CARGO_PATH_OPT} ${KERNEL_DIR} rustc ${UMBRA_LIB_MODE} --crate-type=staticlib
+	@# lib/ holds build output only, so git does not carry it: a fresh clone has
+	@# no lib/ and the cp below would fail on its destination. `umbra_clean`
+	@# does `rm -f lib/*`, which keeps the directory, so the miss only ever
+	@# shows on a first build in a new checkout.
+	@mkdir -p ${LIB_DIR}
 	@cp ${UMBRA_LIB_PATH}/libkernel.a ${LIB_DIR}/libumbra.a
 
 umbra_clean:

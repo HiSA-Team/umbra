@@ -58,9 +58,18 @@ cd "${ROOT_DIR}"
 # `-nostdlib` rejects).
 #
 # Gated on L552/L562 because taclebench targets that architecture only.
+#
+# The guard tests the benchmark sources, not the taclebench directory: that
+# directory is tracked content and so always present, while its `lib/tacle-bench`
+# submodule is empty until initialised. A non-recursive clone would otherwise
+# reach `make all` and die on a missing bench .c file. Nothing needs re-signing
+# in that case anyway — a fresh checkout carries no stale app/*.bin.
 if [ "${MCU_VARIANT}" = "stm32l552" ]; then
-    if [ -d "${ROOT_DIR}/host/stm32l552/taclebench" ]; then
+    if [ -d "${ROOT_DIR}/host/stm32l552/taclebench/lib/tacle-bench/bench" ]; then
         echo -e "${BOLD}Re-signing TACLeBench enclave blobs${VANILLA:-}"
         make -C "${ROOT_DIR}/host/stm32l552/taclebench" clean all
+    else
+        echo "Skipping TACLeBench re-sign: lib/tacle-bench submodule not initialised."
+        echo "  git submodule update --init host/stm32l552/taclebench/lib/tacle-bench"
     fi
 fi
