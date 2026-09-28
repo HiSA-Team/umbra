@@ -95,6 +95,15 @@
         sg
         bxns lr
 
+    // Slots 7..11 are the attestation / secure-update / Secure-UART bridge.
+    // Their `_imp` bodies live in the N657 boot crate (attest_imp.rs) only, so
+    // the veneers are emitted solely when the platform build.rs passes
+    // `--defsym UMBRA_ATTEST_API=1`. On a platform without them the `bl
+    // ..._imp` here is an unresolvable strong reference (the section is kept
+    // alive by the linker script, so --gc-sections cannot drop it).
+    // Slots 0..6 are unaffected: these sit at the end of the section.
+    .ifdef UMBRA_ATTEST_API
+
     // Remote attestation: r0 = NS ptr to 16-byte nonce, r1 = NS ptr to a
     // 115-byte quote buffer. Returns 0 on success, 0xFFFF_FFF* on error.
     // `.align 4` forces slot 7 (NSC_BASE + 0x70): the preceding `umbra_null_call`
@@ -167,6 +176,8 @@
         bl umbra_system_reset_imp
         pop {r4, lr}
         bxns lr
+
+    .endif // UMBRA_ATTEST_API
 
     // API implementation section — implementations live in the boot crate
     .section .umbra_api_implementation, "a"
