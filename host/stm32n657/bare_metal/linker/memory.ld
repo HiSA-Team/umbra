@@ -30,7 +30,7 @@ _signing_header_size = 0x400;
 MEMORY
 {
     AXISRAM1_S     (RWX)  : ORIGIN = 0x34000000, LENGTH = 1M
-    AXISRAM2_S     (RXAL) : ORIGIN = 0x34180000 + 0x400, LENGTH = 512K - 0x400
+    AXISRAM2_S     (RX)   : ORIGIN = 0x34180000 + 0x400, LENGTH = 512K - 0x400
     /* Host runs from AXISRAM1 NS alias (0x24000000) — AXISRAM3 (0x24200000)
      * is power-gated and RAMCFG is RIFSC-blocked from FSBL, so we use AXISRAM1
      * which is always powered by Boot ROM (RCC_MEMENR.AXISRAM1EN=1 default).
@@ -77,9 +77,9 @@ _host_entry_point = 0x24000100;
 
 MEMORY
 {
-    _SECURE_BOOT_TEXT_MEMORY_     (RXAL) : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 105K
-    _SECURE_KERNEL_TEXT_MEMORY_   (RXAL) : ORIGIN = 0x3419A800,                   LENGTH = 67K
-    _NSC_TEXT_MEMORY_             (RXAL) : ORIGIN = 0x341AB400,                   LENGTH = 4K
+    _SECURE_BOOT_TEXT_MEMORY_     (RX)   : ORIGIN = ORIGIN(AXISRAM2_S),           LENGTH = 105K
+    _SECURE_KERNEL_TEXT_MEMORY_   (RX)   : ORIGIN = 0x3419A800,                   LENGTH = 67K
+    _NSC_TEXT_MEMORY_             (RX)   : ORIGIN = 0x341AB400,                   LENGTH = 4K
     _SECURE_KERNEL_DATA_MEMORY_  (RWX)  : ORIGIN = 0x341AC400,                   LENGTH = 128K
     _NSC_DATA_MEMORY_            (RWX)  : ORIGIN = 0x341CC400,                   LENGTH = 8K
 }

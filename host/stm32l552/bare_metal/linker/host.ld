@@ -23,12 +23,13 @@ _host_app_address = ORIGIN(FLASH_BANK_1) + LENGTH(FLASH_BANK_1) - 0x8000;
 /* Sections */
 SECTIONS
 {
-    ._host_vector_table : 
+    ._host_vector_table :
     {
-        . += 0x20;
+        _host_vector_base = .;
         KEEP(*(._host_vectors))
 
     } > FLASH_BANK_1
+    ASSERT(_host_vector_base % 0x200 == 0, "VTOR base must be 512-byte aligned")
 
     ._host_handlers _host_entry_point :
     {

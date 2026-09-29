@@ -40,7 +40,20 @@
     // Define Handlers for exceptions
     .thumb
     .syntax unified
-    .section ._host_handlers, "a"
+    .section ._host_handlers, "ax"
+    // Mark handlers as Thumb functions: sets bit 0 in vector table entries
+    // (required on Cortex-M) and lets newer GNU ld resolve the branches.
+    .type _host_Reset_Handler,      %function
+    .type _host_Default_Handler,    %function
+    .type _host_HardFault_Handler,  %function
+    .type _host_MemManage_Handler,  %function
+    .type _host_BusFault_Handler,   %function
+    .type _host_UsageFault_Handler, %function
+    .type _host_NMI_Handler,        %function
+    .type _host_SVC_Handler,        %function
+    .type _host_DebugMon_Handler,   %function
+    .type _host_PendSV_Handler,     %function
+    .type _host_SysTick_Handler,    %function
         _host_Reset_Handler:
             ldr sp, =_host_estack       // Load the stack pointer with the address of the top of the stack
 
@@ -71,7 +84,13 @@
             cmp r0, r1
             bcc 3b
 
-            /* Here we need to setup the vector table base address */
+            // Point VTOR (NS view) at our vector table
+            ldr r0, =0xE000ED08
+            ldr r1, =_host_vector_base
+            str r1, [r0]
+            dsb
+            isb
+
             bl main                     // Call main
         
         _host_Default_Handler:
