@@ -10,3 +10,15 @@
 /// lies in Secure-only memory; `panic_policy::handle_fault` then resets
 /// (or halts with `--features debug-halt`).
 pub const MAX_PRINT_LEN: usize = 256;
+
+/// NS host SRAM window (SAU/MPCBB NS, see syscall_dispatch.rs).
+const NS_RAM_LO: u32 = 0x2000_0000;
+const NS_RAM_HI: u32 = 0x2002_0000;
+
+/// True iff `[ptr, ptr+len)` is entirely inside NS host SRAM (overflow-safe).
+pub(crate) fn ns_range_ok(ptr: u32, len: u32) -> bool {
+    match ptr.checked_add(len) {
+        Some(end) => ptr >= NS_RAM_LO && end <= NS_RAM_HI,
+        None => false,
+    }
+}

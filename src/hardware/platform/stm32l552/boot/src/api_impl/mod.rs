@@ -26,6 +26,7 @@ pub mod enclave_create;
 pub mod enclave_enter;
 pub mod enclave_exit;
 pub mod enclave_status;
+pub mod uart_read;
 
 pub use debug_print::*;
 

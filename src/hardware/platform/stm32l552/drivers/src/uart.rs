@@ -79,6 +79,7 @@ impl Uart<RealMmio> {
             usart.set_baud(1667);
 
             usart.enable_transmit();
+            usart.enable_receive();
             usart.enable();
 
             usart
@@ -113,6 +114,7 @@ impl Uart<RealMmio> {
 
             lpuart.set_baud(0x369); // 9600 with 32768Hz LSE
             lpuart.enable_transmit();
+            lpuart.enable_receive();
             lpuart.enable();
 
             lpuart
@@ -163,6 +165,10 @@ impl<M: MmioAccess> Uart<M> {
 
     pub fn enable_transmit(&self) {
         self.mmio.set_bit(UART_CR1_BASE_OFFSET, 3);
+    }
+
+    pub fn enable_receive(&self) {
+        self.mmio.set_bit(UART_CR1_BASE_OFFSET, 2);
     }
 
     pub fn set_baud(&self, baud: u16) {

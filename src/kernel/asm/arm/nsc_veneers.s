@@ -177,6 +177,23 @@
         pop {r4, lr}
         bxns lr
 
+    .else
+    // L5 (L552/L562): only the UART RX bridge, at the SAME slot 9 as on N657
+    // so NS hosts share one ABI. `.org` pads slots 7..8 with zeros (not SG,
+    // so a NS branch there SecureFaults). The `_imp` lives in
+    // stm32l552/boot/src/api_impl/uart_read.rs.
+    .org 0x90
+    .global umbra_uart_read
+    .extern umbra_uart_read_imp
+
+    .thumb_func
+    umbra_uart_read:
+        sg
+        push {r4, lr}
+        bl umbra_uart_read_imp
+        pop {r4, lr}
+        bxns lr
+
     .endif // UMBRA_ATTEST_API
 
     // API implementation section — implementations live in the boot crate

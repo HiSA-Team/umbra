@@ -46,6 +46,7 @@ PROVIDE(umbra_enclave_exit   = 0x0803c031);
 PROVIDE(umbra_enclave_status = 0x0803c041);
 PROVIDE(umbra_bench_dump     = 0x0803c051);
 PROVIDE(umbra_null_call      = 0x0803c061);
+PROVIDE(umbra_uart_read      = 0x0803c091); /* slot 9, same ABI as N657 */
 
 /* Tock's reset path: initialize_ram_jump_to_main reads ENTRY from the vector
  * table's reset slot. */

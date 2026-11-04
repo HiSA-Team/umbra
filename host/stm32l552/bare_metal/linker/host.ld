@@ -94,3 +94,4 @@ PROVIDE(umbra_debug_print = 0x0803c011);    /* Thumb mode address of umbra_debug
 PROVIDE(umbra_enclave_enter = 0x0803c021);  /* Thumb mode address of umbra_enclave_enter veneer */
 PROVIDE(umbra_enclave_exit = 0x0803c031);   /* Thumb mode address of umbra_enclave_exit veneer */
 PROVIDE(umbra_enclave_status = 0x0803c041); /* Thumb mode address of umbra_enclave_status veneer */
+PROVIDE(umbra_uart_read = 0x0803c091);      /* slot 9: (ptr, len) -> bytes read, per-byte timeout */
