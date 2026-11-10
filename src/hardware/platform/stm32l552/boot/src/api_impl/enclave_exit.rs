@@ -45,6 +45,7 @@ pub extern "C" fn umbra_enclave_exit_imp(enclave_id: u32) -> u32 {
     match ctx.status {
         EnclaveState::Suspended => {
             ctx.status = EnclaveState::Terminated;
+            super::uart_read::console_owner_gone(enclave_id);
             ((enclave_id & 0xFFFF) << 16) | ((EnclaveState::Terminated as u32 & 0xFF) << 8)
         }
         EnclaveState::Terminated | EnclaveState::Faulted => {

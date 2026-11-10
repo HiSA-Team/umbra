@@ -48,6 +48,7 @@
 - [ADR 011 — Enclave Eviction Feasibility](decisions/011-enclave-eviction-feasibility.md)
 - [ADR 012 — Remote Attestation](decisions/012-remote-attestation.md)
 - [ADR 013 — Secure Enclave Update (A/B slots)](decisions/013-ab-enclave-update.md)
+- [ADR 014 — Console UART for Enclaves](decisions/014-enclave-console-uart.md)
 
 # Supported Hardware
 

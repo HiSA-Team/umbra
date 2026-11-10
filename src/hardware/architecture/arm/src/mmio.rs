@@ -33,6 +33,7 @@ pub const SYST_CVR: *mut u32 = 0xE000_E018 as *mut u32;
 // ─── NVIC: Nested Vectored Interrupt Controller (0xE000_E100 …) ─────────────
 pub const NVIC_ISER0: *mut u32 = 0xE000_E100 as *mut u32;
 pub const NVIC_ISER1: *mut u32 = 0xE000_E104 as *mut u32;
+pub const NVIC_ISER2: *mut u32 = 0xE000_E108 as *mut u32;
 /// Interrupt Target Non-Secure register N (Armv8-M Security Extension).
 /// Each register covers 32 IRQs; bit i selects NS-target for IRQ (32·N + i).
 pub const NVIC_ITNS0: *mut u32 = 0xE000_E380 as *mut u32;

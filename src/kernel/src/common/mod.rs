@@ -3,3 +3,4 @@ pub mod ess;
 pub mod memory_layout;
 pub mod overlay_chain_logic;
 pub mod panic_policy;
+pub mod uart_rx;

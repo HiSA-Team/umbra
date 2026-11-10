@@ -473,6 +473,9 @@ unsafe fn usage_fault_terminate(psp: u32, state: kernel::common::enclave::Enclav
         None => return 0xFF,
     };
     kernel.disable_systick();
+    if let Some(id) = kernel.current_enclave_id {
+        crate::api_impl::uart_read::console_owner_gone(id);
+    }
     let enclave_id = kernel.current_enclave_id.unwrap_or(0);
 
     ((enclave_id & 0xFFFF) << 16) | ((state as u32 & 0xFF) << 8) | (result & 0xFF)

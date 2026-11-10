@@ -1,12 +1,12 @@
 # NSC API Reference
 
-Umbra exposes seven Non-Secure Callable (NSC) functions. These are the **only** way the host application can interact with the Secure World. Five are the functional enclave-lifecycle entry points; two are baseline / instrumentation veneers used to measure or exercise the round-trip path.
+Umbra exposes eight Non-Secure Callable (NSC) functions on STM32L552/L562. These are the **only** way the host application can interact with the Secure World. Five are the functional enclave-lifecycle entry points, one reads the console UART, and two are baseline / instrumentation veneers used to measure or exercise the round-trip path.
 
 Each function is implemented as an assembly veneer containing a `SG` (Secure Gateway) instruction, followed by a branch to the Rust implementation. The veneers are placed in the `.umbra_nsc_api` section at fixed addresses starting at `0x0803C000`.
 
 ## Functional veneers
 
-`umbra_enclave_create`, `umbra_debug_print`, `umbra_enclave_enter`, `umbra_enclave_exit`, `umbra_enclave_status` — documented in the sections below.
+`umbra_enclave_create`, `umbra_debug_print`, `umbra_enclave_enter`, `umbra_enclave_exit`, `umbra_enclave_status`, `umbra_uart_read` — documented in the sections below.
 
 ## Instrumentation veneers
 
@@ -71,6 +71,18 @@ void umbra_debug_print(const char* str_ptr);
 ```
 
 Prints a null-terminated string from Non-Secure memory to the Secure UART. Useful for host-side debug logging via the Secure World UART driver.
+
+## umbra_uart_read
+
+```c
+uint32_t umbra_uart_read(uint32_t buf, uint32_t len);
+```
+
+Reads up to `len` bytes received on the console UART into the Non-Secure buffer `buf`. Reception is interrupt-driven into a Secure buffer, so bytes that arrive between calls are kept (up to 256). Slot 9 (`0x0803C091`), the same slot and ABI as the N657 UART relay.
+
+- Waits for each byte with a timeout of about 250 ms; a short count means the input stopped.
+- **Returns**: the number of bytes read. 0 if `[buf, buf+len)` is not inside NS SRAM (`0x20000000`–`0x20020000`), and 0 at once while an enclave owns the UART.
+- Enclaves do not use this veneer. They include `host/common/inc/umbra_uart.h` (`umbra_uart_claim`, `umbra_uart_getc`, `umbra_uart_putc`, ...), which goes through `svc #3`. See [ADR 014](../decisions/014-enclave-console-uart.md) for the ownership rules.
 
 ## umbra_bench_dump
 

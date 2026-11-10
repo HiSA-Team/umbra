@@ -35,6 +35,8 @@
     .extern DMA1_Channel7_Handler
     .extern DMA1_Channel8_Handler
     .extern umbra_yield_handler
+    .extern umbra_svc_uart
+    .extern Console_UART_Handler
 
     // Vector Table - must be at the beginning of the Flash
     // The reason for it is that ARM first initialized its stack and then jumps
@@ -102,6 +104,16 @@
         .word DMA1_Channel6_Handler     // IRQ34: DMA1_Channel6
         .word DMA1_Channel7_Handler     // IRQ35: DMA1_Channel7
         .word DMA1_Channel8_Handler     // IRQ36: DMA1_Channel8
+        // IRQ37..60 unused
+        .rept 24
+        .word _umb_Default_Handler
+        .endr
+        .word Console_UART_Handler      // IRQ61: USART1 (L562 console)
+        // IRQ62..65 unused
+        .rept 4
+        .word _umb_Default_Handler
+        .endr
+        .word Console_UART_Handler      // IRQ66: LPUART1 (L552 console)
 
     // Define Handlers for exceptions
     .section ._umb_handlers, "a"
@@ -261,6 +273,8 @@
         ldrb r1, [r1, #-2]
         cmp r1, #1
         beq _svc_yield
+        cmp r1, #3
+        beq _svc_uart
 
     // svc #0: enclave enter (existing logic)
     _svc_enter:
@@ -295,6 +309,14 @@
         msr control, r1
         isb
         ldr lr, =0xFFFFFFF9
+        bx lr
+
+    // svc #3: enclave console UART op. r0 = caller's frame (stacked r0 =
+    // opcode, r1 = argument); umbra_svc_uart writes the result to stacked r0.
+    _svc_uart:
+        push {r0, lr}
+        bl umbra_svc_uart
+        pop {r0, lr}
         bx lr
 
     .thumb_func

@@ -53,7 +53,8 @@ type GtzcRegisters = u32;
 // TrustZone Security Controller //
 ///////////////////////////////////
 
-// TBD
+const GTZC_TZSC_SECCFGR1_REG: u32 = 0x010;
+const GTZC_TZSC_SECCFGR2_REG: u32 = 0x014;
 
 //////////////////////////////////////////////
 // Block-based Memory Protection Controller //
@@ -192,6 +193,19 @@ impl<M: MmioAccess> GtzcDriver<M> {
 /// MmioAccess migration intentionally does NOT move this path through
 /// the generic — it would force every fault handler to thread a
 /// `GtzcDriver` reference through the dispatch table.
+/// Make the console UART Secure-only (RM0438 §5.5): USART1SEC =
+/// SECCFGR2[1] on L562, LPUART1SEC = SECCFGR1[21] on L552. NS writes are then
+/// dropped (illegal-access event, masked), so every Secure access must use
+/// the Secure alias. TZSC_CR.LCK stays clear.
+pub unsafe fn tzsc_secure_console_uart() {
+    #[cfg(feature = "stm32l562")]
+    let (reg, bit) = (GTZC_TZSC_SECCFGR2_REG, 1);
+    #[cfg(not(feature = "stm32l562"))]
+    let (reg, bit) = (GTZC_TZSC_SECCFGR1_REG, 21);
+    let p = (GTZC1_SEC_BASE_ADDR + reg) as *mut u32;
+    p.write_volatile(p.read_volatile() | 1 << bit);
+}
+
 pub unsafe fn mpcbb_set_slot_secure(addr: u32, secure: bool) {
     let normalized = addr & 0xEFFF_FFFF;
     let upper = (normalized >> 13) & 0x1f;

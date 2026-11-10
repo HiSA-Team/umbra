@@ -5,15 +5,16 @@
 //! 2. Acquire the Secure-side state needed (CryptoEngine handle, Platform
 //! handle, DMA reservation).
 //! 3. Perform the operation.
-//! 4. Return a `u32` status code — the 6-veneer surface is FROZEN per the
+//! 4. Return a `u32` status code — the veneer surface is closed per the
 //! NSC ABI spec, no `extern "C"` arg shape changes allowed.
 //! # NSC ABI invariants (CJ4 of the threat model)
 //! - Every `*_imp` symbol is `pub extern "C"` (the SG instruction expects
 //! this calling convention).
 //! - Every `*_imp` symbol has `#[link_section = ".umbra_api_implementation"]`
 //! so the linker places it in the NSC-callable section.
-//! - The 6-veneer surface is FROZEN. Adding a 7th requires an ADR plus a
-//! threat-model update — see `the audit report
+//! - The veneer surface is closed (8 veneers, threat model §5). Adding one
+//! requires an ADR plus a threat-model update, as ADR 014 did for
+//! `umbra_uart_read` — see `the audit report
 //! # umbra_debug_print_imp F1 fix ()
 //! Pointer range + 256-byte length bound are MANDATORY. See the NSC
 //! veneer audit doc for the original finding. Do NOT revert to an

@@ -6,6 +6,8 @@
 //! mirrored by a linker ASSERT in the Tock board crate — see the
 //! table comment below.
 
+#[cfg(not(feature = "stm32l562"))]
+use arm::mmio::NVIC_ISER2;
 use arm::mmio::{NVIC_ISER0, NVIC_ISER1, SCB_SHCSR, SYST_CSR};
 
 // ─── Static NS-MPU layout (Tock host port) ──────────────────────────────
@@ -264,6 +266,17 @@ impl Stm32l5Platform {
             *nvic_iser0 |= (1 << 29) | (1 << 30) | (1 << 31);
             // IRQ 32 in ISER1 (Bit 0)
             *nvic_iser1 |= 1 << 0;
+
+            // Console UART: Secure-only, RX IRQ to Secure (ITNS never written).
+            drivers::gtzc::tzsc_secure_console_uart();
+            #[cfg(feature = "stm32l562")]
+            {
+                *nvic_iser1 |= 1 << 29; // USART1 = IRQ 61
+            }
+            #[cfg(not(feature = "stm32l562"))]
+            {
+                *NVIC_ISER2 |= 1 << 2; // LPUART1 = IRQ 66
+            }
 
             cortex_m::interrupt::enable();
         }

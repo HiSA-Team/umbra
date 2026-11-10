@@ -19,7 +19,7 @@ use crate::rcc::Rcc;
 use peripheral_regs::{MmioAccess, RealMmio};
 
 const LPUART1_BASE_ADDR: u32 = 0x50008000; // Secure
-const USART1_BASE_ADDR: u32 = 0x40013800; // APB2
+const USART1_BASE_ADDR: u32 = 0x50013800; // APB2, Secure (TZSC USART1SEC)
 
 // Registers
 const UART_CR1_BASE_OFFSET: u32 = 0x00;
@@ -80,7 +80,9 @@ impl Uart<RealMmio> {
 
             usart.enable_transmit();
             usart.enable_receive();
+            usart.enable_fifo();
             usart.enable();
+            usart.enable_rx_interrupt();
 
             usart
         }
@@ -115,7 +117,9 @@ impl Uart<RealMmio> {
             lpuart.set_baud(0x369); // 9600 with 32768Hz LSE
             lpuart.enable_transmit();
             lpuart.enable_receive();
+            lpuart.enable_fifo();
             lpuart.enable();
+            lpuart.enable_rx_interrupt();
 
             lpuart
         }
@@ -169,6 +173,18 @@ impl<M: MmioAccess> Uart<M> {
 
     pub fn enable_receive(&self) {
         self.mmio.set_bit(UART_CR1_BASE_OFFSET, 2);
+    }
+
+    /// CR1.FIFOEN (8-byte RX/TX FIFO). Only writable while UE=0, so call
+    /// before `enable()`. Keeps RX bytes that land while an enclave is
+    /// preempted between two `svc #3` reads.
+    pub fn enable_fifo(&self) {
+        self.mmio.set_bit(UART_CR1_BASE_OFFSET, 29);
+    }
+
+    /// CR1.RXFNEIE: IRQ while the RX FIFO is not empty. Writable with UE=1.
+    pub fn enable_rx_interrupt(&self) {
+        self.mmio.set_bit(UART_CR1_BASE_OFFSET, 5);
     }
 
     pub fn set_baud(&self, baud: u16) {

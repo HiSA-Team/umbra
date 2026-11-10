@@ -80,7 +80,8 @@ CFLAGS = -O0 -g -march=armv8-m.main -mthumb \
          -ffunction-sections -fdata-sections \
          -fpic -fvisibility=hidden -mpic-data-is-text-relative \
          -fno-builtin -nostdinc -nostdlib \
-         -Wno-builtin-declaration-mismatch
+         -Wno-builtin-declaration-mismatch \
+         -I../../common/inc
 
 # --emit-relocs: keep `.rel.*` sections in the linked ELF so
 # protect_enclave.py can extract R_ARM_ABS32 entries (the static-PIE

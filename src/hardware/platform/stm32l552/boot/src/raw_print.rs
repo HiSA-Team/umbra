@@ -5,7 +5,7 @@
 
 /// UART base address — USART1 on L562, LPUART1 on L552.
 #[cfg(feature = "stm32l562")]
-const UART_BASE: u32 = 0x40013800;
+const UART_BASE: u32 = 0x50013800;
 #[cfg(not(feature = "stm32l562"))]
 const UART_BASE: u32 = 0x50008000;
 

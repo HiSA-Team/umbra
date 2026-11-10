@@ -73,9 +73,10 @@ references the Crown Jewel it defends.
 ## 5. NSC veneer surface
 
 The NSC veneer surface is **closed** — adding a new veneer requires
-landing a new ADR. The published count is seven veneers: five
-functional enclave-lifecycle entry points and two instrumentation
-veneers used to measure the round-trip cost.
+landing a new ADR. The published count on L552/L562 is eight veneers:
+five functional enclave-lifecycle entry points, the console UART read
+added by [ADR 014](014-enclave-console-uart.md), and two
+instrumentation veneers used to measure the round-trip cost.
 
 | Veneer | Signature | NS-controlled args | Validation requirement |
 |---|---|---|---|
@@ -86,6 +87,11 @@ veneers used to measure the round-trip cost.
 | `umbra_enclave_status` | `fn(enclave_id: u32) -> u32` | `enclave_id` | `enclave_id < MAX_EFBS` |
 | `umbra_bench_dump` | `fn()` | (none) | No args to validate |
 | `umbra_null_call` | `fn()` | (none) | Baseline veneer; no args to validate |
+| `umbra_uart_read` | `fn(ptr: u32, len: u32) -> u32` | `ptr`, `len` | `[ptr, ptr+len)` inside NS SRAM `0x2000_0000..0x2002_0000`, overflow-checked, else return 0; return 0 while an enclave owns the UART |
+
+Enclaves reach the console UART through `svc #3` (ADR 014), not through
+a veneer. It takes an opcode and at most one byte, never a pointer, and
+the caller identity is the enclave the kernel is running.
 
 The single arg-validation gate that enforces these requirements is
 `arg_validation::ns_slice` plus the bounds checks at the head of each
